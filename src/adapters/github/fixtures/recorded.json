@@ -1,0 +1,30 @@
+[
+  {
+    "path": "/pulls?state=open&per_page=100",
+    "status": 200,
+    "headers": {
+      "etag": "\"4027abe1b5b05f3a06a2b967c91c5db80b5a585dd8c3fa3e0cc0e1e1b3927129\""
+    },
+    "body": []
+  },
+  {
+    "path": "/issues/comments?since=2026-01-01T00%3A00%3A00Z&sort=updated&direction=asc&per_page=100",
+    "status": 200,
+    "headers": {
+      "etag": "W/\"00868c4e0c27b3f16feac9918f4360305ecf1672d27ee122f9a04fa2d529f37c\""
+    },
+    "body": [
+      {
+        "id": 6704379443,
+        "user": {
+          "login": "fixture-user"
+        },
+        "body": "[redacted fixture body]",
+        "created_at": "2026-11-07T08:16:11Z",
+        "updated_at": "2026-11-07T08:16:18Z",
+        "issue_url": "https://api.github.com/repos/alexei-led/crew-net-sandbox/issues/1",
+        "html_url": "https://github.com/alexei-led/crew-net-sandbox/issues/1#issuecomment-6704379443"
+      }
+    ]
+  }
+]

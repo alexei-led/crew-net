@@ -1,0 +1,13 @@
+[
+  {
+    "id": 42,
+    "user": {
+      "login": "alexei-led"
+    },
+    "body": "crew → maria/orion\nSandbox question",
+    "created_at": "2026-11-06T12:00:00Z",
+    "updated_at": "2026-11-07T12:00:00Z",
+    "issue_url": "https://api.github.com/repos/alexei-led/crew-net-sandbox/issues/7",
+    "html_url": "https://github.com/alexei-led/crew-net-sandbox/issues/7#issuecomment-42"
+  }
+]

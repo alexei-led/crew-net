@@ -1,19 +1,47 @@
+import type { ItemEvent } from "../protocol/index";
+
+/** Plain GitHub facts, independent of the coordination core. */
+export interface PullRequest {
+  number: number;
+  nodeId: string;
+  title: string;
+  author: string;
+  headRef: string;
+  headSha: string;
+  baseRef: string;
+  draft: boolean;
+  body: string;
+  updatedAt: string;
+  autoMerge: boolean;
+  merged: boolean;
+}
+
+export interface IssueComment {
+  id: number;
+  issueNumber: number;
+  author: string;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+  url: string;
+}
+
+export interface RequestStats {
+  requests: number;
+  notModified: number;
+  writes: number;
+  rateLimitRemaining: number | null;
+}
+
 /** GitHub operations used by the application. */
 export interface GitHubPort {
-  /** List open pull requests. */
-  listOpenPulls(): Promise<unknown[]>;
-  /** List comments since a cursor. */
-  listCommentsSince(cursor: string): Promise<unknown[]>;
-  /** Get one pull request. */
-  getPull(number: number): Promise<unknown>;
-  /** Post a comment on a pull request. */
+  listOpenPulls(): Promise<PullRequest[]>;
+  listCommentsSince(cursor: string): Promise<IssueComment[]>;
+  getPull(number: number): Promise<PullRequest>;
   postComment(number: number, body: string): Promise<void>;
-  /** Update a pull request body. */
   updatePullBody(number: number, body: string): Promise<void>;
-  /** Disable automatic merge on a pull request. */
   disableAutoMerge(number: number): Promise<void>;
-  /** Get request and rate-limit statistics. */
-  requestStats(): unknown;
+  requestStats(): RequestStats;
 }
 
 /** Result of inspecting a prospective merge. */
@@ -34,44 +62,52 @@ export interface GitPort {
   changedPaths(a: string, base: string): Promise<string[]>;
 }
 
+/** An addressed request awaiting a reply or explicit acknowledgement. */
+export interface OutboundRequest {
+  id: string;
+  issueNumber: number;
+  to: string;
+  body: string;
+  createdAt: string;
+}
+
 /** Durable local coordination state. */
 export interface StorePort {
-  /** Read and update the polling cursor. */
   cursor: {
     get(): Promise<string | undefined>;
     set(value: string): Promise<void>;
   };
-  /** Persist, enumerate and acknowledge inbound items. */
   inbox: {
-    put(id: string, item: unknown): Promise<void>;
-    list(): Promise<unknown[]>;
+    put(id: string, item: ItemEvent): Promise<void>;
+    list(): Promise<ItemEvent[]>;
     ack(id: string): Promise<void>;
   };
-  /** List open outbound requests. */
-  outbox: { open(): Promise<unknown[]> };
-  /** Coordinate session ownership. */
-  leases: {
-    claim(name: string): Promise<boolean>;
-    renew(name: string): Promise<boolean>;
-    release(name: string): Promise<void>;
-    holder(name: string): Promise<string | undefined>;
+  outbox: {
+    put(id: string, request: OutboundRequest): Promise<void>;
+    open(): Promise<OutboundRequest[]>;
+    ack(id: string): Promise<void>;
   };
-  /** Track items already processed. */
+  leases: {
+    claim(name: string, holder: string, nowMs: number): Promise<boolean>;
+    renew(name: string, holder: string, nowMs: number): Promise<boolean>;
+    release(name: string, holder: string): Promise<void>;
+    holder(name: string, nowMs: number): Promise<string | undefined>;
+  };
   seen: { has(id: string): Promise<boolean>; add(id: string): Promise<void> };
 }
 
-/** Source of current time for application use cases. */
 export interface ClockPort {
-  /** Return the current time in milliseconds since the Unix epoch. */
   now(): number;
 }
 
+export type ManagedHooksPolicy =
+  | { status: "known"; enabled: boolean }
+  | { status: "unknown"; reason: string };
+
 /** Machine facts needed by the application. */
 export interface EnvPort {
-  /** Read the GitHub authentication token. */
   githubToken(): Promise<string>;
-  /** Read the repository identity. */
+  /** owner/repo, parsed from the origin remote. */
   repoIdentity(): Promise<string>;
-  /** Check whether managed policy restricts hooks. */
-  managedHooksOnly(): Promise<boolean>;
+  managedHooksOnly(): Promise<ManagedHooksPolicy>;
 }
