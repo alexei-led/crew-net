@@ -312,9 +312,10 @@ for repos whose org rules require review: `review:agent` lets an agent approve
 if the developer opted in; `review:human`, CODEOWNERS or contract paths force a
 human.
 
-Token scope: v1 uses the `gh` token and documents its breadth. A fine-grained
-PAT (contents read, pull requests and issues read/write, reflex only) is the
-offered alternative, if the org allows PATs.
+Token scope: v1 uses `gh auth token` only and documents its breadth.
+Fine-grained PATs are out of v1. A PAT would need pull requests read/write,
+issues read/write, contents read, checks read and metadata read, limited to
+reflex. An org may block fine-grained PATs.
 
 ## Failure modes
 
@@ -337,7 +338,8 @@ offered alternative, if the org allows PATs.
    - leave `pr-body-keywords.yml` ungated: one small job, worth running on
      drafts
 2. Aikido Security runs on drafts as an external app and cannot be gated from
-   a workflow. Whether its config can skip drafts is unverified.
+   a workflow. Whether it posts a check on a draft is a spike item. If it does
+   and it is required, it stays ungated, like `pr-body-keywords`.
 3. `AGENTS.md`, "Making a change", step 1 ("Check ownership first…") is replaced
    by: "Read the crew-net digest. With no crew-net session, run
    `crew-net digest`." The rule "one branch = one worktree = one agent" stays.
@@ -366,11 +368,11 @@ A throwaway mod and script, run before the build, to settle:
 - [ ] A `304` reply to an ETag request does not count against the primary limit.
 - [ ] `$.store` survives `/clear` and resume; a name lease survives a hot reload.
 - [ ] The mod can read the Claude process pid for the lease holder id.
+- [ ] Aikido Security posts a check on a new draft PR in reflex, and whether
+      that check is required.
 - [ ] The mod loads on a new developer's managed laptop (`claude --debug` shows
       no "Skipping plugin hooks").
 
 ## Open questions
 
-- Aikido's behaviour on draft PRs (needs its config).
-- Whether the org allows fine-grained PATs.
 - N (idle minutes) and the poll intervals, after the live run.
