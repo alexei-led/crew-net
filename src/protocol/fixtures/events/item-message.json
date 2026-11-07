@@ -1,0 +1,9 @@
+{
+  "v": 1,
+  "type": "item",
+  "id": "comment-4811",
+  "kind": "message",
+  "text": "Does #2310 need the new column before your migration merges?",
+  "addressed": true,
+  "from": "maria"
+}

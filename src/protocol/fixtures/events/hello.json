@@ -1,0 +1,8 @@
+{
+  "v": 1,
+  "type": "hello",
+  "lead": "atlas",
+  "claudePid": 4242,
+  "cwd": "/Users/alexei/Workspace/reflex",
+  "settings": { "autoWake": false }
+}
