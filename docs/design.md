@@ -87,9 +87,19 @@ keys its bridge on `AGTERM_SESSION_ID`; crew-net keys on the lead name instead
   `atlas`. A message to a name nobody holds stays in GitHub and is delivered to
   the next session that claims it.
 - A message addressed to a developer without a name (`crew → maria`) goes to
-  every lead of that developer that holds a lease, and to the next one started
-  if none does. A plain GitHub `@maria` mention from a person is not a crew
-  message: the digest lists it under mentions, and it never wakes a session.
+  exactly one lead, never to all of them. The first match wins:
+  1. The comment is on one of maria's PRs: the lead named in that PR's state
+     block.
+  2. The lead whose open PR or worktree branch overlaps the message's PR, as the
+     radar sees it.
+  3. Her most recently active lead with a lease.
+  4. Otherwise the message waits for her next lead.
+
+  The receiving lead may hand it to a sibling lead on the same laptop through
+  pi-intercom, never by posting again.
+
+- A plain GitHub `@maria` mention from a person is not a crew message: the
+  digest lists it under mentions, and it never wakes a session.
 - Sender identity is the comment author's GitHub login from the API, never text
   in the comment body.
 
