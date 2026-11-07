@@ -16,6 +16,12 @@ export interface GitHubPort {
   requestStats(): unknown;
 }
 
+/** Result of inspecting a prospective merge. */
+export interface MergeTreeResult {
+  clean: boolean;
+  conflictedPaths: string[];
+}
+
 /** Git operations used by the application. */
 export interface GitPort {
   /** Fetch remote refs. */
@@ -23,7 +29,7 @@ export interface GitPort {
   /** List branches checked out in worktrees. */
   worktreeBranches(): Promise<string[]>;
   /** Inspect the merge of two refs. */
-  mergeTree(a: string, b: string): Promise<unknown>;
+  mergeTree(a: string, b: string): Promise<MergeTreeResult>;
   /** List paths changed from base to a. */
   changedPaths(a: string, base: string): Promise<string[]>;
 }
