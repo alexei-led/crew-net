@@ -1,0 +1,19 @@
+{
+  "name": "crew-net",
+  "version": "0.1.0-dev",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "crew-net": "dist/crew-net.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.6.6",
+    "@types/bun": "1.2.22",
+    "@types/node": "^22",
+    "dependency-cruiser": "^18.7.2",
+    "typescript": "~5.9.3"
+  }
+}
