@@ -8,8 +8,8 @@ order. Merge to `main` is the deploy, so merge order is deploy order.
 Transport is GitHub itself: draft PRs, PR comments and `git fetch`. There is no
 shared server, no VPN and no machine-wide daemon.
 
-Status: design, not implemented. Items marked **(spike)** are unverified and are
-tested first (see [Spike](#spike)).
+Status: design, not implemented. Behaviour spec; modules and contracts are in
+[architecture.md](architecture.md). Spike results are in [Spike](#spike).
 
 ## Scope
 
@@ -51,16 +51,12 @@ Checked on 2026-11-06 against reflex and this laptop:
 
 ## Components
 
-| Component                  | Runs where                                | Job                                                                                                                     |
-| -------------------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| Mod (`hooks/register.tsx`) | Inside each Claude Code session           | Starts the helper, shows the band and status line, attaches context to prompts, submits wake turns, gates `gh pr merge` |
-| Helper (`crew-net helper`) | Child process of the mod, one per session | Polls GitHub, runs `git fetch` and the radar, writes the inbox                                                          |
-| CLI (`crew-net`)           | Any shell                                 | `digest`, `inbox`, `post`, `state`, `radar`, `doctor`; all take `--json`                                                |
-| Lead skill                 | Loaded by the model in each session       | How a lead reads the digest, addresses messages, declares `depends-on`, and the no-closing-keyword rule                 |
-| Library                    | Shared by helper and CLI                  | GitHub REST/GraphQL over built-in `fetch`, `git` binary calls, state block parse and render                             |
-
-Language: TypeScript. No Octokit. The GitHub token comes from `gh auth token`,
-read once per process start, never written to disk by crew-net.
+A Claude Code mod with a helper process per session, a `crew-net` CLI, and a
+lead skill, all in TypeScript with no runtime dependencies beyond Node 22,
+`git` and `gh`. Modules, contracts and dependency rules are in
+[architecture.md](architecture.md). The GitHub token comes from
+`gh auth token`, read at process start and after a `401`, never written to disk
+by crew-net.
 
 The wake and delivery layer is copied from pi-crew and adapted, not shared:
 `deliver`, the bridge supervisor and the `seen` dedupe in pi-crew
@@ -81,8 +77,9 @@ keys its bridge on `AGTERM_SESSION_ID`; crew-net keys on the lead name instead
   `<state dir>/leads.json` (name → holder id, expiry). The mod renews the lease
   every minute; a lease expires after 3 minutes without renewal. The helper's
   pid is not the holder id, because it changes on every hot reload. The holder
-  id is the Claude process pid if the mod can read it **(spike)**, otherwise a
-  random id kept in `$.state`, which survives hot reloads.
+  id is the Claude process pid, read by the mod as the parent pid of a
+  `$.process.run` child. It is stable across hot reloads and `/clear`, and new
+  after resume.
 - A message to `alexei/atlas` is delivered only to the session that holds
   `atlas`. A message to a name nobody holds stays in GitHub and is delivered to
   the next session that claims it.
@@ -175,8 +172,9 @@ The helper polls, per repo, with `If-None-Match` (ETag):
   without notice.
 - Several helpers on one laptop poll independently in v1. ETag keeps repeat
   polls cheap.
-- Whether a `304` reply is free of the primary rate limit is **(spike)**.
-- Whether `since=` returns edited comments is **(spike)**.
+- A `304` reply does not count against the primary rate limit (spike).
+- `since=` returns a comment after it is edited, even if it was created
+  before the cursor (spike).
 - Bots are excluded from the digest and radar by default: `renovate`,
   `dependabot`, `github-actions`.
 
@@ -227,13 +225,14 @@ Visibility:
   developer.
 - Context attached to a prompt (`prompt.submit` `context`) carries the same
   text, labelled untrusted. The developer always sees what their agent was told.
-- A wake turn from `$.prompt.submit` waits until the session is idle; per the
-  engine types, only peer messages and task notifications land inside a running
-  turn. Observed behaviour is **(spike)**. The idle rule above still applies:
-  idle for the engine is not the same as the developer being away.
+- `$.prompt.submit` during a running turn is queued until that turn ends, and
+  its promise resolves only then (spike: 40 s). The mod never awaits it on the
+  delivery path.
+- `$.prompt.submit` starts a turn even when the box holds a draft, and keeps the
+  draft (spike). The engine does not treat a draft as busy, so the mod checks
+  the draft itself before a wake.
 - `$.session.append` (a hidden user row) is not used for delivery until the
   spike shows what the model does with it.
-- Whether `$.prompt.submit` keeps an unsent draft is **(spike)**.
 
 Durability:
 
@@ -296,6 +295,9 @@ inbound message may cause only:
 It never causes a command, merge, approval or file edit on that text alone. A
 wake turn never merges, even where the developer lets the lead merge its own
 PRs.
+The mod enforces this during a wake turn: its tool gate denies merges, file
+edits and shell commands outside an allowlist (`crew-net post`, read-only
+`gh` and `git`).
 
 Actions by the lead:
 
@@ -359,19 +361,29 @@ reflex. An org may block fine-grained PATs.
 
 ## Spike
 
-A throwaway mod and script, run before the build, to settle:
+Run on 2026-11-07 with a throwaway mod in a separate agterm session (Claude
+Code 2.1.318) and a private sandbox repo.
 
-- [ ] `$.prompt.submit` with an unsent draft in the box: is the draft kept?
-- [ ] A plugin prompt submitted during a running turn waits for idle, as the types say.
-- [ ] `prompt.edit` fires per key burst and can be observed through `next(e)`.
-- [ ] `issues/comments?since=` returns a comment after it is edited.
-- [ ] A `304` reply to an ETag request does not count against the primary limit.
-- [ ] `$.store` survives `/clear` and resume; a name lease survives a hot reload.
-- [ ] The mod can read the Claude process pid for the lease holder id.
-- [ ] Aikido Security posts a check on a new draft PR in reflex, and whether
-      that check is required.
-- [ ] The mod loads on a new developer's managed laptop (`claude --debug` shows
-      no "Skipping plugin hooks").
+| Question | Result |
+| --- | --- |
+| `$.prompt.submit` with a draft in the box | Turn starts at once; draft kept |
+| `$.prompt.submit` during a running turn | Queued until the turn ends; the call resolves then |
+| `prompt.edit` | Fires per keystroke for typing, one event per paste; observable with `next(e)` |
+| `/clear` | `session.end` reason `clear`, new session id, no `session.start` |
+| Resume (`--continue`) | `session.start` fires, same session id, new process |
+| `$.store` | Survives hot reload, `/clear` and resume |
+| `$.state` | Survives hot reload; empty after `/clear` and resume |
+| Claude pid from the mod | Readable as the parent pid of `$.process.run`; stable across reload and `/clear` |
+| Hot reload | Runs `session.start` again; module variables reset |
+| `issues/comments?since=` | Returns comments edited after the cursor |
+| ETag `304` | Not counted against the primary rate limit |
+| Mod on this managed laptop | Loads; plugin hooks run |
+
+Not yet verified:
+
+- [ ] Aikido Security on a draft PR in reflex: checked with the reflex
+      draft-gate PR, not in the sandbox.
+- [ ] The mod loads on a new developer's managed laptop.
 
 ## Open questions
 
