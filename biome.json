@@ -1,0 +1,36 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.6.6/schema.json",
+  "files": {
+    "includes": ["**", "!!node_modules", "!!dist", "!!.pi", "!!docs"]
+  },
+  "formatter": {
+    "indentStyle": "space"
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended"
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["src/protocol/**/*.ts", "src/core/**/*.ts", "!**/*.test.ts"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedGlobals": {
+              "level": "error",
+              "options": {
+                "deniedGlobals": {
+                  "Date": "Pass time as a parameter.",
+                  "performance": "Pass time as a parameter.",
+                  "queueMicrotask": "Pure modules do not schedule work."
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}
