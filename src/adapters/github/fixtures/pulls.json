@@ -1,0 +1,22 @@
+[
+  {
+    "number": 7,
+    "node_id": "PR_sandbox7",
+    "title": "Sandbox draft",
+    "user": {
+      "login": "alexei-led"
+    },
+    "head": {
+      "ref": "feat/sandbox",
+      "sha": "0123456789abcdef0123456789abcdef01234567"
+    },
+    "base": {
+      "ref": "main"
+    },
+    "draft": true,
+    "body": "Sandbox body",
+    "updated_at": "2026-11-07T12:00:00Z",
+    "auto_merge": null,
+    "merged": false
+  }
+]

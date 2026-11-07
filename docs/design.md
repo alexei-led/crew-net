@@ -74,7 +74,7 @@ keys its bridge on `AGTERM_SESSION_ID`; crew-net keys on the lead name instead
 - The mod persists the name in `$.store` under the key `lead:<repo>:<cwd>`. It
   does not use `$.session.id()`: that id changes on `/clear` and on resume.
 - Several sessions on one laptop: each claims its name with a lease in
-  `<state dir>/leads.json` (name → holder id, expiry). The mod renews the lease
+  `<state dir>/leases.json` (name → holder id, expiry). The mod renews the lease
   every minute; a lease expires after 3 minutes without renewal. The helper's
   pid is not the holder id, because it changes on every hot reload. The holder
   id is the Claude process pid, read by the mod as the parent pid of a
