@@ -1,6 +1,23 @@
 import { expect, test } from "bun:test";
-import * as module from "./index";
+import {
+  decodeEvent,
+  encodeEvent,
+  findClosingKeywords,
+  parseAddress,
+  parseStateBlock,
+  renderStateBlock,
+  replaceStateBlock,
+} from "./index";
 
-test("module loads", () => {
-  expect(module).toBeDefined();
+test("exports the public interface", () => {
+  const exported = [
+    parseStateBlock,
+    renderStateBlock,
+    replaceStateBlock,
+    findClosingKeywords,
+    parseAddress,
+    encodeEvent,
+    decodeEvent,
+  ];
+  for (const fn of exported) expect(typeof fn).toBe("function");
 });
