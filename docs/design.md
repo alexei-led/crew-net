@@ -283,16 +283,19 @@ inbound message may cause only:
 - a reply, or
 - a proposal to the developer about the lead's own state.
 
-It never causes a command, merge, approval or file edit on that text alone.
+It never causes a command, merge, approval or file edit on that text alone. A
+wake turn never merges, even where the developer lets the lead merge its own
+PRs.
 
 Actions by the lead:
 
-| Action                                                                                         | Default                                       |
-| ---------------------------------------------------------------------------------------------- | --------------------------------------------- |
-| Wait, rebase, read, update its own state block, set its own `depends-on`                       | Acts alone                                    |
-| Reply to an addressed question                                                                 | Auto-sent, under the developer's GitHub login |
-| Commit the team: agree an order, change `depends-on` for another PR, accept a request for work | Drafted and shown to the developer first      |
-| Approve, merge to `main`, drop its own work                                                    | Developer only                                |
+| Action                                                                                         | Default                                                                              |
+| ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| Wait, rebase, read, update its own state block, set its own `depends-on`                       | Acts alone                                                                           |
+| Reply to an addressed question                                                                 | Auto-sent, under the developer's GitHub login                                        |
+| Commit the team: agree an order, change `depends-on` for another PR, accept a request for work | Drafted and shown to the developer first                                             |
+| Merge its own PR to `main` once required checks pass and the client gate allows it             | Per-developer setting; default follows the repo (reflex: agents merge their own PRs) |
+| Approve another developer's PR, drop its own work                                              | Developer only                                                                       |
 
 Reviews: reflex requires 0 approvals, so v1 has no review-label policy. Later,
 for repos whose org rules require review: `review:agent` lets an agent approve
