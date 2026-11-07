@@ -1,0 +1,29 @@
+name: crew-deps
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+permissions:
+  contents: read
+  pull-requests: read
+concurrency:
+  group: crew-deps-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  crew-deps:
+    runs-on: ubuntu-latest
+    steps:
+      # Use the base revision, not code from the PR being checked.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      - name: Check dependencies
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # PR text is untrusted. Pass it through the environment and a file,
+          # never substitute it into shell code or pass it as an argument.
+          printf '%s' "$PR_BODY" > "$RUNNER_TEMP/crew-pr-body.md"
+          node .github/scripts/crew-deps.mjs check "$RUNNER_TEMP/crew-pr-body.md"
