@@ -1,9 +1,11 @@
 import {
   classify,
+  DEFAULT_BOTS,
   type Finding,
   isBot,
   type LandedFacts,
   type MergeFacts,
+  matchGlob,
   stale,
   type WorkFacts,
 } from "../core/radar/index";
@@ -31,11 +33,18 @@ export const BARE_BRANCH_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000;
 export const REPO_CONFIG_PATH = ".github/crew-net.yml";
 const CONFIG_REFS = ["origin/HEAD", "origin/main", "origin/master"];
 
-/** `.github/crew-net.yml` from the default branch; the defaults when absent or unreadable. */
+/**
+ * `.github/crew-net.yml` from the default branch (GitHub's, when known, then
+ * `origin/HEAD`, `main`, `master`); the defaults when absent or unreadable.
+ */
 export async function readRepoConfig(
   git: GitPort,
+  defaultBranch?: string,
 ): Promise<{ config: RepoConfig; problem?: string }> {
-  for (const ref of CONFIG_REFS) {
+  const refs = defaultBranch
+    ? [`origin/${defaultBranch}`, ...CONFIG_REFS]
+    : CONFIG_REFS;
+  for (const ref of refs) {
     const text = await git
       .showFile(ref, REPO_CONFIG_PATH)
       .catch(() => undefined);
@@ -156,7 +165,8 @@ export async function radarJob(
   const me = await cachedViewer(store, active.ref.host);
   if (!snapshot || !me) return;
   const slug = repoSlug(active.ref);
-  const { config, problem } = await readRepoConfig(git);
+  const defaultBase = await defaultBranchOf(ports, active.ref);
+  const { config, problem } = await readRepoConfig(git, defaultBase);
   if (problem) {
     await store.events.append({
       type: "config-error",
@@ -168,11 +178,10 @@ export async function radarJob(
   const remotes = await git.remoteBranches();
   const remoteNames = new Set(remotes.map((r) => r.name));
   const deploy = new Set(config.deployBranches);
-  const defaultBase = await defaultBranchOf(ports, active.ref);
   // Fork PRs have no branch on origin; a same-named origin branch is other work.
   const sameRepoPulls = snapshot.pulls.filter((p) => !p.fork);
   const byHead = new Map(sameRepoPulls.map((p) => [p.headRef, p]));
-  const bots = config.bots;
+  const bots = [...DEFAULT_BOTS, ...config.bots];
 
   const mine: Work[] = [];
   const mineBranches = new Set<string>();
@@ -272,7 +281,14 @@ export async function radarJob(
     });
   }
 
-  const consumers = await consumerWork(ports, active.ref, repos, config, me);
+  const consumers = await consumerWork(
+    ports,
+    active.ref,
+    repos,
+    config,
+    me,
+    mine.flatMap((m) => m.facts.changedPaths),
+  );
 
   const radarConfig = { contracts: { [slug]: config.contracts }, bots };
   const findings = new Map<string, Finding>();
@@ -314,9 +330,11 @@ export async function radarJob(
 
 /**
  * Others' open PRs in the watched repos that this repo's contracts name as
- * consumers (`owner/repo:glob`, design §10.1). There is no clone of those
- * repos here, so their files come from GitHub (ETag-cached). A PR whose
- * files cannot be read is left out this pass.
+ * consumers (`owner/repo:glob`, design §10.1), read only for contracts whose
+ * producer paths I change. There is no clone of those repos here, so their
+ * files come from GitHub; they are kept by head sha in kv
+ * `pull-files:<host/o/r>` (open PRs only), so an unchanged PR is read once.
+ * A PR whose files cannot be read is left out this pass and logged.
  */
 async function consumerWork(
   ports: AppPorts,
@@ -324,24 +342,54 @@ async function consumerWork(
   repos: readonly RepoRef[],
   config: RepoConfig,
   me: string,
+  minePaths: readonly string[],
 ): Promise<WorkFacts[]> {
+  const { store, clock } = ports;
   const named = new Set(
-    config.contracts.flatMap((c) =>
-      c.consumers.flatMap((x) => (x.repo ? [x.repo.toLowerCase()] : [])),
-    ),
+    config.contracts
+      .filter((c) =>
+        minePaths.some((p) => c.producer.some((g) => matchGlob(g, p))),
+      )
+      .flatMap((c) =>
+        c.consumers.flatMap((x) => (x.repo ? [x.repo.toLowerCase()] : [])),
+      ),
   );
+  const bots = [...DEFAULT_BOTS, ...config.bots];
   const work: WorkFacts[] = [];
   for (const ref of repos) {
     const slug = repoSlug(ref);
     if (ref.host !== home.host || slug === repoSlug(home) || !named.has(slug))
       continue;
     const github = ports.github(ref.host);
-    for (const pr of (await readSnapshot(ports.store, ref))?.pulls ?? []) {
-      if (sameLogin(pr.author, me) || isBot(pr.author, config.bots)) continue;
-      const paths = await github
-        .listPullFiles(slug, pr.number)
-        .catch(() => undefined);
-      if (!paths) continue;
+    const key = `pull-files:${repoKey(ref)}`;
+    const before = await store.kv.get(key);
+    const known = isRecord(before) ? before : {};
+    const next: Record<string, { sha: string; paths: string[] }> = {};
+    for (const pr of (await readSnapshot(store, ref))?.pulls ?? []) {
+      if (sameLogin(pr.author, me) || isBot(pr.author, bots)) continue;
+      const seen = known[String(pr.number)];
+      let paths =
+        isRecord(seen) &&
+        seen.sha === pr.headSha &&
+        Array.isArray(seen.paths) &&
+        seen.paths.every((p) => typeof p === "string")
+          ? (seen.paths as string[])
+          : undefined;
+      if (!paths) {
+        try {
+          paths = await github.listPullFiles(slug, pr.number);
+        } catch (error) {
+          await store.events.append({
+            type: "sync-error",
+            job: `radar:${repoKey(home)}`,
+            pr: `${slug}#${pr.number}`,
+            message: error instanceof Error ? error.message : String(error),
+            atMs: clock.now(),
+          });
+          continue;
+        }
+      }
+      next[String(pr.number)] = { sha: pr.headSha, paths };
       work.push({
         repo: slug,
         owner: pr.author,
@@ -351,6 +399,7 @@ async function consumerWork(
         changedPaths: paths,
       });
     }
+    await store.kv.set(key, next);
   }
   return work;
 }

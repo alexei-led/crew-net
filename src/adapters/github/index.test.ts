@@ -425,12 +425,12 @@ describe("pulls, comments and reviews", () => {
     });
   });
 
-  test("pull files read every page with renames' old paths, then revalidate with the ETags", async () => {
+  test("pull files read every page with renames' old paths and keep no cached body", async () => {
     const next = `${REPO_URL}/pulls/7/files?per_page=100&page=2`;
-    const { adapter, calls } = setup([
+    const { adapter, calls, kv } = setup([
       json(
         [
-          { filename: "api/users.yaml", status: "modified" },
+          { filename: "api/users.yaml", status: "modified", patch: "@@" },
           {
             filename: "api/new.yaml",
             previous_filename: "api/old.yaml",
@@ -440,20 +440,18 @@ describe("pulls, comments and reviews", () => {
         { etag: '"f1"', link: `<${next}>; rel="next"` },
       ),
       json([{ filename: "web/a.ts", status: "added" }], { etag: '"f2"' }),
-      new Response(null, { status: 304 }),
-      new Response(null, { status: 304 }),
+      json([{ filename: "web/a.ts", status: "added" }], { etag: '"f3"' }),
     ]);
-    const files = [
+    expect(await adapter.listPullFiles(REPO, 7)).toEqual([
       "api/users.yaml",
       "api/new.yaml",
       "api/old.yaml",
       "web/a.ts",
-    ];
-    expect(await adapter.listPullFiles(REPO, 7)).toEqual(files);
+    ]);
     expect(calls[0]?.url).toBe(`${REPO_URL}/pulls/7/files?per_page=100`);
-    expect(await adapter.listPullFiles(REPO, 7)).toEqual(files);
-    expect(header(calls[2], "if-none-match")).toBe('"f1"');
-    expect(header(calls[3], "if-none-match")).toBe('"f2"');
+    expect([...kv.values.keys()].some((k) => k.includes("/files"))).toBe(false);
+    await adapter.listPullFiles(REPO, 7);
+    expect(header(calls[2], "if-none-match")).toBeNull();
   });
 
   test("the default branch comes from the repo and is revalidated with its ETag", async () => {

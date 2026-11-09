@@ -21,6 +21,13 @@ export async function snapshotJob(
   await closeRequests(ports, ref, new Set(pulls.map((p) => p.number)));
 }
 
+const STOPS = new Set(["RateLimitError", "AuthError", "SsoError"]);
+const WHY = {
+  merged: "merged",
+  closed: "was closed",
+  gone: "is gone",
+} as const;
+
 /**
  * A request is closed when its thread is closed or merged (design §7.3).
  * Only threads that are not open PRs are read. The item that tells me is
@@ -38,18 +45,25 @@ async function closeRequests(
   for (const request of await store.outbox.list()) {
     if (request.repo.toLowerCase() !== key || openPulls.has(request.number))
       continue;
-    let state: ThreadState;
+    let state: ThreadState | "gone";
     try {
       state = await ports.github(ref.host).threadState(slug, request.number);
     } catch (error) {
-      await store.events.append({
-        type: "sync-error",
-        job: `repo:${key}`,
-        request: request.id,
-        message: error instanceof Error ? error.message : String(error),
-        atMs: clock.now(),
-      });
-      continue;
+      const status = (error as { status?: unknown }).status;
+      // Deleted or no longer visible: the request cannot be answered there.
+      if (status === 404 || status === 410) state = "gone";
+      // Rate limit or auth: the job fails with its notice; the rest waits.
+      else if (STOPS.has((error as Error).name)) throw error;
+      else {
+        await store.events.append({
+          type: "sync-error",
+          job: `repo:${key}`,
+          request: request.id,
+          message: error instanceof Error ? error.message : String(error),
+          atMs: clock.now(),
+        });
+        continue;
+      }
     }
     if (state === "open") continue;
     const nowMs = clock.now();
@@ -60,7 +74,7 @@ async function closeRequests(
         type: "item",
         id: `request-closed:${key}${thread}:${request.id}`,
         kind: "message",
-        text: `your ${request.kind} to ${request.to} on ${thread} is closed: ${thread} ${state === "merged" ? "merged" : "was closed"}`,
+        text: `your ${request.kind} to ${request.to} on ${thread} is closed: ${thread} ${WHY[state]}`,
         addressed: false,
         repo: slug,
         thread: request.number,

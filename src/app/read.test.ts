@@ -354,6 +354,13 @@ describe("stats", () => {
         openMs: 1,
         atMs: at,
       },
+      {
+        type: "request",
+        repo: "github.com/o/r",
+        outcome: "thread-merged",
+        openMs: 3 * 86_400_000,
+        atMs: at,
+      },
       { type: "item", repo: "o/r", atMs: at - 7 * 86_400_000 },
       { type: "item", repo: "o/r" },
     ]);
@@ -368,7 +375,7 @@ describe("stats", () => {
         deliveries: 1,
         wakes: 0,
         blockedMerges: 1,
-        requestsClosed: 2,
+        requestsClosed: 3,
         medianAnswerMs: 120_000,
       },
     ]);
@@ -535,6 +542,42 @@ describe("delivery routing", () => {
       (await w.store.events.read()).find((e) => e.type === "delivery"),
     ).toMatchObject({ session: "lead-a", step: "clone" });
   });
+});
+
+test("heartbeats without a clone root stand alone: a worker's branch reaches the lead through the repo step", async () => {
+  const w = world();
+  await writeSnapshot(w.store, REF, {
+    fetchedAtMs: START,
+    pulls: [snapshotPull(pull(7, "me", "feat/w"), "o/r")],
+  });
+  for (const [sessionId, role, worktree, branch] of [
+    ["lead-a", "lead", "/work/a", "main"],
+    ["worker", "worker", "/work/a-w", "feat/w"],
+  ] as const)
+    await w.store.sessions.beat({
+      sessionId,
+      pid: process.pid,
+      harness: "claude-code",
+      role,
+      worktree,
+      repo: "github.com/o/r",
+      branch,
+    });
+  await w.store.inbox.put({
+    type: "item",
+    id: "comment:github.com/o/r#7:1",
+    kind: "message",
+    text: "x",
+    addressed: true,
+    from: "maria",
+    repo: "o/r",
+    thread: 7,
+    event: "ask",
+  });
+  await deliverTo(w.ports, "lead-a", { replayMs: 0 });
+  expect(
+    (await w.store.events.read()).find((e) => e.type === "delivery"),
+  ).toMatchObject({ session: "lead-a", step: "repo" });
 });
 
 describe("settings", () => {

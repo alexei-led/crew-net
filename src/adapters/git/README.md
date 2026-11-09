@@ -18,7 +18,8 @@ Git 2.38 or later is required for `merge-tree --write-tree`.
 
 - `checkout` answers for the adapter's directory: a subdirectory or a
   symlinked path gives the real worktree root. `clone` is the parent of the
-  git common dir, the same for every worktree of a clone. No `branch` on a
+  git common dir (`<clone>/.git`), or the common dir itself for a bare clone;
+  the same for every worktree of a clone. No `branch` on a
   detached HEAD.
 - `remoteBranches` skips the `origin/HEAD` symref. `loginHint` is the login in
   a `[id+]login@users.noreply.<host>` author email, else `null`; it is a hint

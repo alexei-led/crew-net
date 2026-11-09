@@ -438,6 +438,7 @@ var WRAPPERS = {
 var FIND_EXEC = new Set(["-exec", "-execdir", "-ok", "-okdir"]);
 var CHANGES_DIR = new Set(["cd", "pushd", "popd"]);
 var GH_CONTEXT_VAR = /^GH_(REPO|HOST)=/;
+var GH_HOST_VAR = /^GH_HOST=/;
 var SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
 var ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*\+?=/;
 var GH_VALUE_FLAGS = new Set([
@@ -524,14 +525,16 @@ function splitArgs(words) {
   }
   return { flags, positionals };
 }
+var host = (name) => name.toLowerCase().replace(/:\d+$/, "");
 function repoFromFlag(value) {
   const parts = value.replace(/^https?:\/\//, "").split("/").filter(Boolean);
   if (parts.length < 2 || parts.length > 3)
     return;
-  return parts.slice(-2).join("/");
+  const repo = parts.slice(-2).join("/");
+  return parts.length === 3 ? { host: host(parts[0]), repo } : { repo };
 }
 function repoFlag(flags) {
-  let repo;
+  let found;
   for (const f of flags) {
     if (f.name !== "-R" && f.name !== "--repo")
       continue;
@@ -540,9 +543,9 @@ function repoFlag(flags) {
     const parsed = repoFromFlag(f.value.text);
     if (!parsed)
       return { error: `cannot read --repo ${f.value.text}` };
-    repo = parsed;
+    found = parsed;
   }
-  return repo === undefined ? {} : { repo };
+  return found ?? {};
 }
 function prMerge(args) {
   const { flags, positionals } = splitArgs(args);
@@ -564,11 +567,17 @@ function prMerge(args) {
       kind: "merge",
       targets: [{ ...repo, pr: Number(t.replace("#", "")) }]
     };
-  const url = /^https?:\/\/[^/]+\/([^/]+\/[^/]+)\/pull\/(\d{1,9})(?:[/?#].*)?$/.exec(t);
+  const url = /^https?:\/\/([^/]+)\/([^/]+\/[^/]+)\/pull\/(\d{1,9})(?:[/?#].*)?$/.exec(t);
   if (url)
     return {
       kind: "merge",
-      targets: [{ repo: url[1], pr: Number(url[2]) }]
+      targets: [
+        {
+          host: host(url[1]),
+          repo: url[2],
+          pr: Number(url[3])
+        }
+      ]
     };
   if (t.includes("://"))
     return denied(`gh pr merge: cannot read target ${t}`);
@@ -594,6 +603,25 @@ function apiPath(endpoint) {
   return parts.join("/");
 }
 var BODY_FLAGS = new Set(["-f", "--raw-field", "-F", "--field", "--input"]);
+function apiUrlHost(endpoint) {
+  const m = /^[A-Za-z][A-Za-z0-9+.-]*:\/\/([^/?#]*)/.exec(endpoint);
+  if (!m)
+    return;
+  const name = host(m[1].replace(/^[^@]*@/, ""));
+  const api = name.startsWith("api.") ? name.slice(4) : undefined;
+  return api === "github.com" || api?.endsWith(".ghe.com") ? api : name;
+}
+function hostnameFlag(flags) {
+  let found;
+  for (const f of flags) {
+    if (f.name !== "--hostname")
+      continue;
+    if (!f.value || f.value.dynamic || f.value.text === "")
+      return { error: "the --hostname value is not literal" };
+    found = host(f.value.text);
+  }
+  return found === undefined ? {} : { host: found };
+}
 function apiMethod(flags) {
   let method;
   for (const f of flags) {
@@ -642,7 +670,15 @@ function api(args) {
     const repo = pull[1] === "{owner}" && pull[2] === "{repo}" ? {} : { repo: `${pull[1]}/${pull[2]}` };
     if (/[{}]/.test(repo.repo ?? ""))
       return denied(`gh api: cannot read the repo in ${endpoint.text}`);
-    return { kind: "merge", targets: [{ ...repo, pr: Number(pull[3]) }] };
+    const named = hostnameFlag(flags);
+    if ("error" in named)
+      return denied(`gh api: ${named.error}`);
+    const urlHost = apiUrlHost(endpoint.text);
+    const target = urlHost === undefined ? named : { host: urlHost };
+    return {
+      kind: "merge",
+      targets: [{ ...target, ...repo, pr: Number(pull[3]) }]
+    };
   }
   if (/^repos\/[^/]+\/[^/]+\/merges$/.test(path) && !readOnly)
     return denied("gh api: branch merges are not gated; use gh pr merge");
@@ -819,6 +855,8 @@ function detectIn(src, options, depth, where) {
   const result = combine(lexed.commands.map((c) => detectCommand(c, options, depth)));
   if (result.kind === "merge" && result.targets.some((t) => t.repo === undefined) && changesRepoContext(lexed.commands))
     return denied(`${where}: changes directory or GH_REPO before a merge; name the PR with -R owner/repo or a URL`);
+  if (result.kind === "merge" && result.targets.some((t) => t.host === undefined) && lexed.commands.some((words) => words.some((w) => GH_HOST_VAR.test(w.text))))
+    return denied(`${where}: sets GH_HOST before a merge; name the host with -R host/owner/repo or a PR URL`);
   return result;
 }
 function detectMerge(command, options = {}) {
@@ -953,7 +991,8 @@ function sessionFlags(input, deps) {
   return ["--session", session, "--harness", "claude-code", "--role", role];
 }
 function beat(flags, cwd, deps, prompt) {
-  const pid = deps.sessionPid === undefined ? [] : ["--pid", String(deps.sessionPid)];
+  const known = deps.sessionPid?.();
+  const pid = known === undefined ? [] : ["--pid", String(known)];
   deps.cli(["session", "beat", ...flags, ...pid, ...prompt ? ["--prompt"] : []], { cwd, timeoutMs: QUICK_MS });
 }
 var SHELL = /^-?(?:.*\/)?(?:sh|bash|zsh|dash|ksh|fish)$/;
@@ -1138,7 +1177,7 @@ if (!HOOK_EVENTS.some((e) => e === event)) {
   const out = handleSafely(event, parseInput(raw), {
     cli: nodeCli(join(here, "..", "..", "bin", "crew-net")),
     role: process.env.CREW_NET_ROLE,
-    sessionPid: sessionPidFrom(process.ppid, processInfo)
+    sessionPid: () => sessionPidFrom(process.ppid, processInfo)
   });
   if (out !== null)
     process.stdout.write(`${JSON.stringify(out)}

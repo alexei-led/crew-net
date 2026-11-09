@@ -289,7 +289,10 @@ export function stats(events: readonly JsonObject[]): StatsRow[] {
     else if (e.type === "gate" && e.decision === "deny") row.blockedMerges++;
     else if (e.type === "request" && e.outcome !== "accepted") {
       row.requestsClosed++;
-      if (typeof e.openMs === "number") row.answers.push(e.openMs);
+      // A thread that closed (`thread-*`) is not an answer.
+      const answered =
+        typeof e.outcome !== "string" || !e.outcome.startsWith("thread-");
+      if (answered && typeof e.openMs === "number") row.answers.push(e.openMs);
     }
   }
   return [...rows.values()]

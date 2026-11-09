@@ -37,24 +37,26 @@ becomes the notice `crew-net: rate-limited until HH:MM` in `sync:status`.
 - **Messages.** A comment with a crew marker becomes `ask`, `review`, `fix`,
   `bug` or `info`; `addressed` when its first line mentions me. A `reply`
   to one of my outbox requests from its recipient moves the request
-  (`accepted` → in progress, else closed) after the item is stored.
+  (`accepted` → in progress, else closed) after the item is stored. Other
+  comments are `comment`, reviews `pr-review`. Requests carry `msgId`, the
+  marker id `crew-net reply` answers with `re=`. My own comments, GitHub Apps
+  (`*[bot]`) and the built-in bots are skipped.
 - **Request lifecycle (§7.3).** The repo state job reads each of my
   requests whose thread is not an open PR (`GET /issues/{n}`). Closed or
   merged: a `request-closed` item, then the request leaves the outbox. The
   item shows in the digest until a session delivers it. A sender-side close
-  command does not exist yet (design §5.3 has none). Other
-  comments are `comment`, reviews `pr-review`. Requests carry `msgId`, the
-  marker id `crew-net reply` answers with `re=`. My own comments, GitHub Apps
-  (`*[bot]`) and the built-in bots are skipped.
+  command does not exist yet (design §5.3 has none). Only active and
+  watched repos are checked. A thread gone (404, 410) closes the request; a
+  rate limit or auth error fails the job.
 - **Radar.** Mine: the branches of this clone's worktrees (not a deploy
   branch, not someone else's PR) and my open PRs. Theirs: others' open PRs
   on origin and remote branches without a PR pushed within 3 days whose
-  commit email names a login. `merge-tree` runs only for pairs that change
+  own last commit names a login; bots (built-in and configured) are left out. `merge-tree` runs only for pairs that change
   a common file. Fork PRs (head repo ≠ repo) are left out, and a colleague's
   branch I have checked out counts as mine only. `stale` comes from first-parent history since my fork
   point; a commit names its PR by `(#N)` or `Merge pull request #N`. The
-  repo config is `.github/crew-net.yml` on `origin/HEAD` (else `main`,
-  `master`). Bare branches are diffed against the repo's default branch
+  repo config is `.github/crew-net.yml` on the default branch (else
+  `origin/HEAD`, `main`, `master`). Bare branches are diffed against the repo's default branch
   from GitHub (`GET /repos/{o}/{r}`, kv `default-branch:<repo>`, read once a
   day; the last known one when GitHub cannot be read). A bare branch's
   owner is the author of its newest own non-merge commit, so merging main
@@ -62,8 +64,13 @@ becomes the notice `crew-net: rate-limited until HH:MM` in `sync:status`.
 - **Cross-repo contracts (§10.1).** A contract consumer `owner/repo:glob`
   names another repo. When that repo is watched, others' open PRs there
   (from its snapshot) are compared with my work for `order` only, whatever
-  their base; their files come from `GET /pulls/{n}/files` (ETag-cached),
-  as there is no clone here. They are not added to `radar.json` `work`.
+  their base; their files come from `GET /pulls/{n}/files`, as there is no
+  clone here. They are read only when my work changes that
+  contract's producer paths, and kept by head sha in kv
+  `pull-files:<host/o/r>`, so an unchanged PR is read once. They are not
+  added to `radar.json` `work`. Only this repo's contracts are read: a
+  developer in the consumer repo gets no `order` finding from the declaring
+  repo's config (it has no clone there).
 - **Item ids:** `comment:<host>/<o>/<r>#<n>:<id>`, `review:…`,
   `finding:<key>`, `automerge-off:…`, `dep-closed:…`, `unblocked:…`,
   `waits:…`, `request-closed:<host>/<o>/<r>#<n>:<request id>`.

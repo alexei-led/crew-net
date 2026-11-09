@@ -334,6 +334,8 @@ interface Call {
   body?: unknown;
   /** Content-creating write that spends the shared budget. */
   budgeted?: boolean;
+  /** False: no conditional request and no cached body (large bodies the app keeps itself). */
+  cache?: boolean;
 }
 
 /** Fetch-only transport for one GitHub host. Scheduling and sleeps belong to the app. */
@@ -456,10 +458,10 @@ export class GitHubAdapter implements GitHubPort {
       });
       if (wait > 0) throw new BudgetError(wait);
     }
-    const hit =
-      method === "GET"
-        ? cached(await this.options.kv.get(cacheKey(url)))
-        : undefined;
+    const caching = method === "GET" && call.cache !== false;
+    const hit = caching
+      ? cached(await this.options.kv.get(cacheKey(url)))
+      : undefined;
     for (;;) {
       const token = await this.currentToken();
       const used = this.token;
@@ -524,7 +526,7 @@ export class GitHubAdapter implements GitHubPort {
         }
       }
       const next = this.nextLink(response, url);
-      if (method === "GET") {
+      if (caching) {
         const etag = response.headers.get("etag");
         const lastModified = response.headers.get("last-modified");
         if (etag || lastModified)
@@ -549,6 +551,7 @@ export class GitHubAdapter implements GitHubPort {
   private async pages(
     url: string,
     stop: (items: unknown[]) => boolean = () => false,
+    call: Call = {},
   ): Promise<{
     items: unknown[];
     modified: boolean;
@@ -568,7 +571,7 @@ export class GitHubAdapter implements GitHubPort {
         throw new Error("Invalid GitHub pagination URL");
       if (visited.has(next)) throw new Error("GitHub pagination cycle");
       visited.add(next);
-      const page = await this.request(next);
+      const page = await this.request(next, call);
       if (!Array.isArray(page.body)) throw new Error("Invalid GitHub list");
       modified ||= page.modified;
       pollIntervalMs ??= page.pollIntervalMs;
@@ -649,18 +652,20 @@ export class GitHubAdapter implements GitHubPort {
     );
   }
 
+  /** Not cached: pages carry each file's patch; the app keeps the paths by head sha. */
   async listPullFiles(repo: string, number: number): Promise<string[]> {
-    const files = await this.list(
+    const { items } = await this.pages(
       `${this.rest}${repoPath(repo)}/pulls/${integer(number)}/files?per_page=100`,
-      (value) => {
-        const raw = object(value);
-        // A rename lists its old path too, as the radar's git diff does.
-        return raw.previous_filename === undefined
-          ? [string(raw.filename)]
-          : [string(raw.filename), string(raw.previous_filename)];
-      },
+      undefined,
+      { cache: false },
     );
-    return files.flat();
+    return items.flatMap((value) => {
+      const raw = object(value);
+      // A rename lists its old path too, as the radar's git diff does.
+      return raw.previous_filename === undefined
+        ? [string(raw.filename)]
+        : [string(raw.filename), string(raw.previous_filename)];
+    });
   }
 
   async defaultBranch(repo: string): Promise<string> {

@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { dirname } from "node:path";
+import { basename, dirname } from "node:path";
 import type {
   BranchAuthor,
   Checkout,
@@ -152,7 +152,8 @@ export class GitAdapter implements GitPort {
     const ref = head.stdout.trim();
     return {
       root,
-      clone: dirname(common),
+      // `<clone>/.git` names its clone; a bare repo is the clone itself.
+      clone: basename(common) === ".git" ? dirname(common) : common,
       ...(ref.startsWith("refs/heads/")
         ? { branch: ref.slice("refs/heads/".length) }
         : {}),

@@ -136,7 +136,7 @@ export interface MergeTreeResult {
 export interface Checkout {
   /** Root of the worktree. */
   root: string;
-  /** Root of the clone: the parent of the git common dir, shared by all its worktrees. */
+  /** Root of the clone, shared by all its worktrees: the parent of `<clone>/.git`, or a bare repo itself. */
   clone: string;
   /** Branch checked out; absent on a detached HEAD. */
   branch?: string;

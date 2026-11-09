@@ -34,12 +34,17 @@ function fakeCli(
   answers: Record<string, CliResult> = {},
   role?: string,
   sessionPid?: number,
-): HookDeps & { calls: Call[] } {
+): HookDeps & { calls: Call[]; pidAsked: () => number } {
   const calls: Call[] = [];
+  let asked = 0;
   return {
     calls,
     role,
-    sessionPid,
+    pidAsked: () => asked,
+    sessionPid: () => {
+      asked++;
+      return sessionPid;
+    },
     cli: (args, opts) => {
       calls.push({ args, ...opts });
       const key = args[0] === "--format" ? "digest" : (args[0] ?? "");
@@ -290,6 +295,13 @@ describe("heartbeat", () => {
     const prompt = "crew-net wake turn 0123456789abcdef0123456789abcdef.\n";
     handle("prompt-submit", { session_id: "s1", cwd: "/w", prompt }, deps);
     expect(beatArgs(deps)).not.toContain("--prompt");
+  });
+
+  test("a Bash call never looks up the session pid", () => {
+    const deps = fakeCli({}, undefined, 4242);
+    handle("pre-bash", bash("gh pr merge 5"), deps);
+    handle("pre-bash", bash("ls"), deps);
+    expect(deps.pidAsked()).toBe(0);
   });
 
   test("an unknown session pid is left to the CLI", () => {

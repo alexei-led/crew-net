@@ -30,8 +30,8 @@ export interface HookDeps {
   cli: RunCli;
   /** `CREW_NET_ROLE`; `worker` sessions are never routed to. */
   role: string | undefined;
-  /** The Claude Code process; the CLI's own parent is this hook, not the session. */
-  sessionPid?: number | undefined;
+  /** The Claude Code process, asked only for a heartbeat; the CLI's own parent is this hook, not the session. */
+  sessionPid?: () => number | undefined;
 }
 
 /** What the hook writes: JSON on stdout, or nothing. Exit code is always 0. */
@@ -66,8 +66,8 @@ function beat(
   deps: HookDeps,
   prompt: boolean,
 ): void {
-  const pid =
-    deps.sessionPid === undefined ? [] : ["--pid", String(deps.sessionPid)];
+  const known = deps.sessionPid?.();
+  const pid = known === undefined ? [] : ["--pid", String(known)];
   deps.cli(
     ["session", "beat", ...flags, ...pid, ...(prompt ? ["--prompt"] : [])],
     { cwd, timeoutMs: QUICK_MS },

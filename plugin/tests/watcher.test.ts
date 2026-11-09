@@ -143,16 +143,17 @@ test("/clear: the next tick restarts the watcher for the new session id", async 
 test("a moved session root restarts the watcher in the new worktree", async ($, on) => {
   const w = world(on, mock);
   await start($, w);
-  w.root = "/w/reflex-wt";
+  w.root = "/w/omni";
+  w.remote = "git@github.com:doiteng/omni.git";
   await w.exit();
   await w.clock.advance(MINUTE);
   await w.idle(w.spawns.length);
   const last = w.spawns.at(-1);
-  expect(last?.cwd).toBe("/w/reflex-wt");
+  expect(last?.cwd).toBe("/w/omni");
   expect(JSON.parse(last?.input ?? "{}")).toMatchObject({
     session: "session-1",
-    worktree: "/w/reflex-wt",
-    repo: "doiteng/reflex",
+    worktree: "/w/omni",
+    repo: "doiteng/omni",
   });
 });
 

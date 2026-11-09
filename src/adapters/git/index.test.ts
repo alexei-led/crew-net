@@ -160,6 +160,18 @@ describe("real git", () => {
     ]);
   });
 
+  test("checkout of a worktree of a bare clone names the bare repo as its clone", async () => {
+    const bare = join(root, "omni.git");
+    execFileSync("git", ["clone", "--bare", "-q", repo, bare]);
+    const tree = join(root, "omni-feature");
+    execFileSync("git", ["-C", bare, "worktree", "add", "-q", "-b", "f", tree]);
+    expect(await new GitAdapter(tree).checkout()).toEqual({
+      root: realpathSync(tree),
+      clone: realpathSync(bare),
+      branch: "f",
+    });
+  });
+
   test("checkout has no branch on a detached HEAD and fails outside a repository", async () => {
     git("worktree", "add", "--detach", join(root, "detached"), "HEAD");
     expect(await new GitAdapter(join(root, "detached")).checkout()).toEqual({
