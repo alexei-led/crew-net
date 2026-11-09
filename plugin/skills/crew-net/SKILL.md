@@ -65,7 +65,8 @@ in that turn.
   and your PR is the one that must merge after, run
   `crew-net dep add <#N|owner/repo#N>` on your own PR and tell the developer.
   If the other PR must wait for yours instead, ask its author with
-  `crew-net ask`; never edit their PR. `crew-net dep rm` drops one.
+  `crew-net ask`; never edit their PR. `crew-net dep rm` drops one, but only
+  when the developer asks: loosening a merge condition is their call.
 - Never merge a PR whose `depends-on` has an open PR. The merge gate denies
   `gh pr merge` (and `--auto`) while a dependency is open and names it; do not
   try to get around it (other commands, the API, aliases). Wait for the
