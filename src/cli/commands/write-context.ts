@@ -19,6 +19,17 @@ export function newId(): string {
   ).join("");
 }
 
+/**
+ * A worker session never posts; its lead speaks for it (design §9.3).
+ * The role comes from CREW_NET_ROLE, as for heartbeats.
+ */
+export function leadOnly(): void {
+  if (process.env.CREW_NET_ROLE === "worker")
+    throw new Error(
+      "a worker session does not post (CREW_NET_ROLE=worker); ask your lead session to send it",
+    );
+}
+
 /** Build the write commands' context: repo from the cwd's origin or `--repo`. */
 export async function writeContext(ctx: CommandContext): Promise<WriteContext> {
   if (ctx.repo !== undefined && !OWNER_REPO.test(ctx.repo))

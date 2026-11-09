@@ -85,6 +85,23 @@ describe("crew-net write commands", () => {
     });
   });
 
+  test.each([
+    ["ask", "#20", "x"],
+    ["request", "#20", "review", "x"],
+    ["reply", "c-9", "x"],
+  ])("a worker session does not %s", async (...argv) => {
+    const w = world();
+    process.env.CREW_NET_ROLE = "worker";
+    try {
+      expect(await w.run(...argv)).toBe(1);
+    } finally {
+      delete process.env.CREW_NET_ROLE;
+    }
+    expect(w.err()).toMatch(/worker session does not post/);
+    expect(w.github.comments).toEqual([]);
+    expect(w.built()).toBe(false);
+  });
+
   test("request bug opens an Issue", async () => {
     const w = world();
     expect(await w.run("request", "@maria", "bug", "500 on /login")).toBe(0);

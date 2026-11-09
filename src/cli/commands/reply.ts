@@ -2,7 +2,7 @@ import { renderReply, reply as replyCmd } from "../../app/commands/write/index";
 import type { ReplyStatus } from "../../protocol/index";
 import { UsageError } from "../args";
 import type { Command } from "../command";
-import { runWrite, textArg } from "./write-context";
+import { leadOnly, runWrite, textArg } from "./write-context";
 
 const STATUS_FLAGS: Record<string, ReplyStatus> = {
   "--done": "done",
@@ -17,6 +17,7 @@ export const reply: Command = {
     'Usage: crew-net reply <item> [--done|--decline|--accept] "<text>"\n  Without a flag the reply is "answered".',
   spec: { values: [], switches: Object.keys(STATUS_FLAGS) },
   run(ctx) {
+    leadOnly();
     const [item, ...text] = ctx.args.positional;
     if (item === undefined) throw new UsageError("the item id is missing");
     const flags = Object.keys(STATUS_FLAGS).filter((f) =>

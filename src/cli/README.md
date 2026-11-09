@@ -45,6 +45,9 @@ export const example: Command = {
 | `session beat\|end --session <id>` | `--harness`, `--role` (default `CREW_NET_ROLE`, else lead), `--pid` (default parent), `--prompt`                                                                                    |
 | `watch --session <id>`             | The mod's child; see [watch](../watch/README.md)                                                                                                                                    |
 
+`ask`, `request` and `reply` refuse to run in a worker session
+(`CREW_NET_ROLE=worker`): its lead speaks for it.
+
 Developer settings come from `${XDG_CONFIG_HOME:-~/.config}/crew-net/config.json`
 (`autoWake`, `agentsMerge`, `idleMinutes`, `watch`, `mute`); a bad value keeps
 its default and shows in `doctor`.
