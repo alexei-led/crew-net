@@ -2,10 +2,14 @@ import { lexShell, type Word } from "./shell";
 
 /**
  * The PR a merge command targets. `repo` is `owner/name`; when it is missing
- * the caller uses the repo of the command's working directory. With neither
- * `pr` nor `branch` the target is the PR of the current branch.
+ * the caller uses gh's default repo of the command's working directory. With
+ * neither `pr` nor `branch` the target is the PR of the current branch.
+ * `host` (lower case) is set when the command names one: `-R host/o/r`, a PR
+ * URL, `gh api --hostname` or an API URL. Without it gh takes `GH_HOST`, else
+ * github.com, for a named repo, and the remote's host for the default repo.
  */
 export interface MergeTarget {
+  host?: string;
   repo?: string;
   pr?: number;
   branch?: string;
@@ -103,6 +107,7 @@ const FIND_EXEC = new Set(["-exec", "-execdir", "-ok", "-okdir"]);
 /** Commands that change which repo a later `gh` acts on. */
 const CHANGES_DIR = new Set(["cd", "pushd", "popd"]);
 const GH_CONTEXT_VAR = /^GH_(REPO|HOST)=/;
+const GH_HOST_VAR = /^GH_HOST=/;
 
 const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*\+?=/;
@@ -207,29 +212,36 @@ function splitArgs(words: readonly Word[]): {
   return { flags, positionals };
 }
 
-/** `owner/name` from `-R` values: `owner/name` or `host/owner/name`. */
-function repoFromFlag(value: string): string | undefined {
+type RepoHost = { host?: string; repo: string };
+
+const host = (name: string): string => name.toLowerCase().replace(/:\d+$/, "");
+
+/** `-R` values: `owner/name` or `[https://]host/owner/name`. */
+function repoFromFlag(value: string): RepoHost | undefined {
   const parts = value
     .replace(/^https?:\/\//, "")
     .split("/")
     .filter(Boolean);
   if (parts.length < 2 || parts.length > 3) return undefined;
-  return parts.slice(-2).join("/");
+  const repo = parts.slice(-2).join("/");
+  return parts.length === 3
+    ? { host: host(parts[0] as string), repo }
+    : { repo };
 }
 
 function repoFlag(
   flags: readonly Flag[],
-): { repo?: string } | { error: string } {
-  let repo: string | undefined;
+): { host?: string; repo?: string } | { error: string } {
+  let found: RepoHost | undefined;
   for (const f of flags) {
     if (f.name !== "-R" && f.name !== "--repo") continue;
     if (!f.value || f.value.dynamic)
       return { error: "the --repo value is not literal" };
     const parsed = repoFromFlag(f.value.text);
     if (!parsed) return { error: `cannot read --repo ${f.value.text}` };
-    repo = parsed;
+    found = parsed;
   }
-  return repo === undefined ? {} : { repo };
+  return found ?? {};
 }
 
 function prMerge(args: readonly Word[]): MergeDetection {
@@ -249,11 +261,17 @@ function prMerge(args: readonly Word[]): MergeDetection {
       targets: [{ ...repo, pr: Number(t.replace("#", "")) }],
     };
   const url =
-    /^https?:\/\/[^/]+\/([^/]+\/[^/]+)\/pull\/(\d{1,9})(?:[/?#].*)?$/.exec(t);
+    /^https?:\/\/([^/]+)\/([^/]+\/[^/]+)\/pull\/(\d{1,9})(?:[/?#].*)?$/.exec(t);
   if (url)
     return {
       kind: "merge",
-      targets: [{ repo: url[1] as string, pr: Number(url[2]) }],
+      targets: [
+        {
+          host: host(url[1] as string),
+          repo: url[2] as string,
+          pr: Number(url[3]),
+        },
+      ],
     };
   if (t.includes("://")) return denied(`gh pr merge: cannot read target ${t}`);
   return { kind: "merge", targets: [{ ...repo, branch: t }] };
@@ -282,6 +300,29 @@ function apiPath(endpoint: string): string {
 }
 
 const BODY_FLAGS = new Set(["-f", "--raw-field", "-F", "--field", "--input"]);
+
+/** The GitHub host an API URL goes to: `api.github.com` and `api.<x>.ghe.com` are their hosts' APIs. */
+function apiUrlHost(endpoint: string): string | undefined {
+  const m = /^[A-Za-z][A-Za-z0-9+.-]*:\/\/([^/?#]*)/.exec(endpoint);
+  if (!m) return undefined;
+  const name = host((m[1] as string).replace(/^[^@]*@/, ""));
+  const api = name.startsWith("api.") ? name.slice(4) : undefined;
+  return api === "github.com" || api?.endsWith(".ghe.com") ? api : name;
+}
+
+/** `gh api --hostname`: the host, none, or an error when it is not literal. */
+function hostnameFlag(
+  flags: readonly Flag[],
+): { host?: string } | { error: string } {
+  let found: string | undefined;
+  for (const f of flags) {
+    if (f.name !== "--hostname") continue;
+    if (!f.value || f.value.dynamic || f.value.text === "")
+      return { error: "the --hostname value is not literal" };
+    found = host(f.value.text);
+  }
+  return found === undefined ? {} : { host: found };
+}
 
 /** The HTTP method gh will use, or null when it cannot be known. */
 function apiMethod(flags: readonly Flag[]): string | null {
@@ -343,7 +384,15 @@ function api(args: readonly Word[]): MergeDetection {
         : { repo: `${pull[1]}/${pull[2]}` };
     if (/[{}]/.test(repo.repo ?? ""))
       return denied(`gh api: cannot read the repo in ${endpoint.text}`);
-    return { kind: "merge", targets: [{ ...repo, pr: Number(pull[3]) }] };
+    const named = hostnameFlag(flags);
+    if ("error" in named) return denied(`gh api: ${named.error}`);
+    // A full URL goes to its own host whatever --hostname says.
+    const urlHost = apiUrlHost(endpoint.text);
+    const target = urlHost === undefined ? named : { host: urlHost };
+    return {
+      kind: "merge",
+      targets: [{ ...target, ...repo, pr: Number(pull[3]) }],
+    };
   }
   if (/^repos\/[^/]+\/[^/]+\/merges$/.test(path) && !readOnly)
     return denied("gh api: branch merges are not gated; use gh pr merge");
@@ -558,6 +607,16 @@ function detectIn(
   )
     return denied(
       `${where}: changes directory or GH_REPO before a merge; name the PR with -R owner/repo or a URL`,
+    );
+  // gh sends a named repo without a host to GH_HOST; the gate cannot tell
+  // which value a set in the line reaches gh, so the host must be named.
+  if (
+    result.kind === "merge" &&
+    result.targets.some((t) => t.host === undefined) &&
+    lexed.commands.some((words) => words.some((w) => GH_HOST_VAR.test(w.text)))
+  )
+    return denied(
+      `${where}: sets GH_HOST before a merge; name the host with -R host/owner/repo or a PR URL`,
     );
   return result;
 }

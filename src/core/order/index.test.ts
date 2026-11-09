@@ -147,12 +147,27 @@ describe("detectMerge: gh pr merge", () => {
     ["gh pr merge 5 -Ro/r", merge({ repo: "o/r", pr: 5 })],
     ["gh pr merge -sRother/repo 7", merge({ repo: "other/repo", pr: 7 })],
     ["gh pr merge -sdR other/repo 7", merge({ repo: "other/repo", pr: 7 })],
-    ["gh pr merge 5 -R ghe.example.com/o/r", merge({ repo: "o/r", pr: 5 })],
+    [
+      "gh pr merge 5 -R ghe.example.com/o/r",
+      merge({ host: "ghe.example.com", repo: "o/r", pr: 5 }),
+    ],
+    [
+      "gh pr merge 5 -R https://GHE.example.com/o/r",
+      merge({ host: "ghe.example.com", repo: "o/r", pr: 5 }),
+    ],
+    [
+      "gh pr merge https://ghe.example.com/o/r/pull/7",
+      merge({ host: "ghe.example.com", repo: "o/r", pr: 7 }),
+    ],
+    [
+      "GH_HOST=ghe.example.com gh pr merge 5 -R github.com/o/r",
+      merge({ host: "github.com", repo: "o/r", pr: 5 }),
+    ],
     ["gh pr -R o/r merge 5", merge({ repo: "o/r", pr: 5 })],
     ["gh pr --repo o/r merge --auto", merge({ repo: "o/r" })],
     [
       "gh pr merge https://github.com/o/r/pull/7",
-      merge({ repo: "o/r", pr: 7 }),
+      merge({ host: "github.com", repo: "o/r", pr: 7 }),
     ],
     ["gh pr merge 5 -b 'merge body' -t subj", merge({ pr: 5 })],
     ["/opt/homebrew/bin/gh pr merge 5", merge({ pr: 5 })],
@@ -202,7 +217,7 @@ describe("detectMerge: wrappers and chains", () => {
     ["cd ../other && gh pr merge 7 -R o/r", merge({ repo: "o/r", pr: 7 })],
     [
       "cd ../other && gh pr merge https://github.com/o/r/pull/7",
-      merge({ repo: "o/r", pr: 7 }),
+      merge({ host: "github.com", repo: "o/r", pr: 7 }),
     ],
     ["command gh pr merge 5", merge({ pr: 5 })],
     ["command -p gh pr merge 5", merge({ pr: 5 })],
@@ -237,6 +252,9 @@ describe("detectMerge: wrappers and chains", () => {
     // biome-ignore lint/suspicious/noTemplateCurlyInString: bash parameter expansion under test
     "gh ${P:-pr} merge 7",
     "cd ../other-repo && gh pr merge 7",
+    "GH_HOST=ghe.example.com gh pr merge 5 -R o/r",
+    "export GH_HOST=ghe.example.com; gh pr merge 5 -R o/r",
+    "env GH_HOST=ghe.example.com gh api -X PUT repos/o/r/pulls/5/merge",
     "pushd ../other; gh pr merge 7",
     "(cd ../other; gh pr merge 7)",
     "GH_REPO=acme/other gh pr merge 7",
@@ -303,11 +321,23 @@ describe("detectMerge: gh api", () => {
     ],
     [
       "gh api -X PUT https://api.github.com/repos/o/r/pulls/5/merge",
-      merge({ repo: "o/r", pr: 5 }),
+      merge({ host: "github.com", repo: "o/r", pr: 5 }),
     ],
     [
       "gh api -X PUT https://ghe.example.com/api/v3/repos/o/r/pulls/5/merge",
-      merge({ repo: "o/r", pr: 5 }),
+      merge({ host: "ghe.example.com", repo: "o/r", pr: 5 }),
+    ],
+    [
+      "gh api -X PUT https://api.acme.ghe.com/repos/o/r/pulls/5/merge",
+      merge({ host: "acme.ghe.com", repo: "o/r", pr: 5 }),
+    ],
+    [
+      "gh api --hostname ghe.example.com -X PUT repos/o/r/pulls/5/merge",
+      merge({ host: "ghe.example.com", repo: "o/r", pr: 5 }),
+    ],
+    [
+      "gh api --hostname=GHE.example.com -X PUT repos/{owner}/{repo}/pulls/5/merge",
+      merge({ host: "ghe.example.com", pr: 5 }),
     ],
     [
       "gh api -X PUT 'repos/o/r/pulls/9/../5/merge?x=1'",
@@ -347,6 +377,7 @@ describe("detectMerge: gh api", () => {
     "gh api -X POST repos/o/r/merges -f base=main -f head=x",
     "gh api -X PUT repos/$R/pulls/5/merge",
     "gh api -X PUT repos/o/r/pulls/$N/merge",
+    "gh api --hostname $H -X PUT repos/o/r/pulls/5/merge",
   ])("denies %s", (command) => {
     expect(detectMerge(command).kind).toBe("deny");
   });
