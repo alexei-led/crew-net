@@ -1,199 +1,164 @@
 import { describe, expect, test } from "bun:test";
-import {
-  type LeadFacts,
-  type PullFacts,
-  type Route,
-  type RoutedMessage,
-  route,
-} from "./index";
+import { type LiveSession, type Route, type RouteItem, route } from "./index";
 
-const lead = (address: string, over: Partial<LeadFacts> = {}): LeadFacts => ({
-  address,
-  developer: address.split("/")[0] ?? "",
-  leaseLive: true,
-  lastActiveMs: 0,
-  work: [],
+const REPO = "doiteng/reflex";
+const OTHER = "doiteng/omni";
+
+const session = (id: string, over: Partial<LiveSession> = {}): LiveSession => ({
+  id,
+  role: "lead",
+  repo: REPO,
+  worktree: `/w/${id}`,
+  branch: "main",
+  cloneRoot: "/w/reflex",
+  lastActiveMs: 100,
   ...over,
 });
 
-const pull = (number: number, over: Partial<PullFacts> = {}): PullFacts => ({
-  number,
-  author: "maria",
-  branch: `b${number}`,
-  changedPaths: [],
-  ...over,
-});
+const onPr: RouteItem = { repo: REPO, thread: 2310, branch: "feat/users" };
+const onIssue: RouteItem = { repo: REPO, thread: 42 };
 
-const toMaria = (pr?: number): RoutedMessage =>
-  pr === undefined
-    ? { address: { developer: "maria" } }
-    : { address: { developer: "maria" }, pr };
+const to = (id: string, step: string, wakeable = true): Route =>
+  ({ session: id, step, wakeable }) as Route;
+const none: Route = { session: null, step: "none", wakeable: false };
 
-describe("route to developer", () => {
-  const cases: [string, RoutedMessage, Parameters<typeof route>[1], Route][] = [
+describe("route", () => {
+  const cases: [string, RouteItem, LiveSession[], Route][] = [
+    // 1. checkout
     [
-      "step 1: comment on her PR goes to the state-block lead, lease or not",
-      toMaria(10),
-      {
-        pulls: [pull(10, { lead: "maria/orion" })],
-        leads: [
-          lead("maria/orion", { leaseLive: false }),
-          lead("maria/vega", { lastActiveMs: 99 }),
-        ],
-      },
-      { lead: "maria/orion", step: "state-block" },
+      "lead with the PR branch checked out",
+      onPr,
+      [
+        session("a", { branch: "feat/users", lastActiveMs: 1 }),
+        session("b", { lastActiveMs: 999 }),
+      ],
+      to("a", "checkout"),
     ],
     [
-      "step 1 wins over overlap and recency",
-      toMaria(10),
-      {
-        pulls: [pull(10, { lead: "maria/orion", changedPaths: ["a.ts"] })],
-        leads: [
-          lead("maria/vega", {
-            lastActiveMs: 99,
-            work: [{ branch: "x", changedPaths: ["a.ts"] }],
-          }),
-        ],
-      },
-      { lead: "maria/orion", step: "state-block" },
+      "two leads on the branch: most recent",
+      onPr,
+      [
+        session("a", { branch: "feat/users", lastActiveMs: 1 }),
+        session("b", { branch: "feat/users", lastActiveMs: 2 }),
+      ],
+      to("b", "checkout"),
     ],
     [
-      "step 1 ignores a state-block lead of another developer",
-      toMaria(10),
-      {
-        pulls: [pull(10, { lead: "alexei/atlas" })],
-        leads: [lead("maria/vega")],
-      },
-      { lead: "maria/vega", step: "recent-lease" },
+      "checkout tie breaks on id",
+      onPr,
+      [
+        session("z", { branch: "feat/users" }),
+        session("m", { branch: "feat/users" }),
+      ],
+      to("m", "checkout"),
     ],
     [
-      "step 2: PR by someone else, lead with overlapping worktree path",
-      toMaria(20),
-      {
-        pulls: [pull(20, { author: "alexei", changedPaths: ["api/a.yaml"] })],
-        leads: [
-          lead("maria/orion", { lastActiveMs: 50 }),
-          lead("maria/vega", {
-            lastActiveMs: 1,
-            work: [{ branch: "feat", changedPaths: ["api/a.yaml", "z"] }],
-          }),
-        ],
-      },
-      { lead: "maria/vega", step: "overlap" },
+      "same branch name in another repo is not a checkout match",
+      onPr,
+      [
+        session("a", { repo: OTHER, branch: "feat/users", lastActiveMs: 9 }),
+        session("b", { lastActiveMs: 1 }),
+      ],
+      to("b", "repo"),
     ],
     [
-      "step 2: same branch counts as overlap, no lease needed",
-      toMaria(20),
-      {
-        pulls: [pull(20, { author: "alexei", branch: "shared" })],
-        leads: [
-          lead("maria/vega", {
-            leaseLive: false,
-            work: [{ branch: "shared", changedPaths: [] }],
-          }),
-          lead("maria/orion", { lastActiveMs: 50 }),
-        ],
-      },
-      { lead: "maria/vega", step: "overlap" },
+      "repo match is case-insensitive",
+      { ...onPr, repo: "DoitEng/Reflex" },
+      [session("a", { branch: "feat/users" })],
+      to("a", "checkout"),
+    ],
+    // 2. clone
+    [
+      "branch in a worker's worktree goes to the lead of that clone",
+      onPr,
+      [
+        session("w", {
+          role: "worker",
+          branch: "feat/users",
+          worktree: "/w/reflex.worktrees/users",
+          lastActiveMs: 999,
+        }),
+        session("lead1", { cloneRoot: "/w/reflex", lastActiveMs: 1 }),
+        session("lead2", { cloneRoot: "/w/reflex-2", lastActiveMs: 50 }),
+      ],
+      to("lead1", "clone"),
     ],
     [
-      "step 2: several overlapping leads, most recently active wins",
-      toMaria(20),
-      {
-        pulls: [pull(20, { author: "alexei", changedPaths: ["p"] })],
-        leads: [
-          lead("maria/a", {
-            lastActiveMs: 1,
-            work: [{ branch: "x", changedPaths: ["p"] }],
-          }),
-          lead("maria/b", {
-            lastActiveMs: 2,
-            work: [{ branch: "y", changedPaths: ["p"] }],
-          }),
-        ],
-      },
-      { lead: "maria/b", step: "overlap" },
+      "two leads in that clone: most recent",
+      onPr,
+      [
+        session("w", { role: "worker", branch: "feat/users" }),
+        session("a", { lastActiveMs: 1 }),
+        session("b", { lastActiveMs: 2 }),
+      ],
+      to("b", "clone"),
     ],
     [
-      "step 3: no overlap, most recent live lease",
-      toMaria(20),
-      {
-        pulls: [pull(20, { author: "alexei", changedPaths: ["p"] })],
-        leads: [
-          lead("maria/a", { lastActiveMs: 5 }),
-          lead("maria/b", { lastActiveMs: 9, leaseLive: false }),
-          lead("maria/c", { lastActiveMs: 7 }),
-        ],
-      },
-      { lead: "maria/c", step: "recent-lease" },
+      "checkout beats clone",
+      onPr,
+      [
+        session("w", { role: "worker", branch: "feat/users" }),
+        session("a", { lastActiveMs: 50 }),
+        session("b", {
+          branch: "feat/users",
+          cloneRoot: "/w/other-clone",
+          lastActiveMs: 1,
+        }),
+      ],
+      to("b", "checkout"),
+    ],
+    // 3. repo
+    [
+      "no branch match: most recent lead in the repo",
+      onPr,
+      [
+        session("a", { lastActiveMs: 1 }),
+        session("b", { lastActiveMs: 5 }),
+        session("c", { repo: OTHER, lastActiveMs: 99 }),
+      ],
+      to("b", "repo"),
     ],
     [
-      "step 3: comment not on a PR",
-      toMaria(),
-      { pulls: [], leads: [lead("maria/a", { lastActiveMs: 5 })] },
-      { lead: "maria/a", step: "recent-lease" },
+      "Issue (no branch): most recent lead in the repo",
+      onIssue,
+      [
+        session("a", { branch: "feat/users", lastActiveMs: 1 }),
+        session("b", { lastActiveMs: 5 }),
+      ],
+      to("b", "repo"),
     ],
+    // 4. any
     [
-      "step 3: unknown PR number",
-      toMaria(404),
-      { pulls: [], leads: [lead("maria/a")] },
-      { lead: "maria/a", step: "recent-lease" },
+      "no lead in the repo: most recent lead anywhere, not wakeable",
+      onPr,
+      [
+        session("a", { repo: OTHER, lastActiveMs: 1 }),
+        session("b", { repo: "x/y", lastActiveMs: 7 }),
+      ],
+      to("b", "any", false),
     ],
+    // 5. none
+    ["no sessions", onPr, [], none],
     [
-      "step 3: equal activity breaks the tie on address",
-      toMaria(),
-      { pulls: [], leads: [lead("maria/b"), lead("maria/a")] },
-      { lead: "maria/a", step: "recent-lease" },
-    ],
-    [
-      "step 4: no live lease waits",
-      toMaria(20),
-      {
-        pulls: [pull(20, { author: "alexei" })],
-        leads: [lead("maria/a", { leaseLive: false })],
-      },
-      { wait: true },
-    ],
-    [
-      "step 4: no leads at all waits",
-      toMaria(),
-      { pulls: [], leads: [] },
-      { wait: true },
-    ],
-    [
-      "other developers' leads are never picked",
-      toMaria(),
-      { pulls: [], leads: [lead("alexei/atlas", { lastActiveMs: 99 })] },
-      { wait: true },
-    ],
-    [
-      "logins compare case-insensitively",
-      { address: { developer: "Maria" } },
-      { pulls: [], leads: [lead("maria/a")] },
-      { lead: "maria/a", step: "recent-lease" },
+      "only workers, even with the branch checked out",
+      onPr,
+      [session("w", { role: "worker", branch: "feat/users" })],
+      none,
     ],
   ];
-  test.each(cases)("%s", (_name, message, facts, expected) => {
-    expect(route(message, facts)).toEqual(expected);
+
+  test.each(cases)("%s", (_name, item, sessions, expected) => {
+    expect(route(item, sessions)).toEqual(expected);
   });
-});
 
-describe("route to developer/name", () => {
-  const msg: RoutedMessage = { address: { developer: "maria", name: "orion" } };
-  const cases: [string, LeadFacts[], Route][] = [
-    [
-      "lead holds a lease",
-      [lead("maria/orion"), lead("maria/vega", { lastActiveMs: 99 })],
-      { lead: "maria/orion", step: "named" },
-    ],
-    [
-      "lease expired: wait, never fall back to a sibling",
-      [lead("maria/orion", { leaseLive: false }), lead("maria/vega")],
-      { wait: true },
-    ],
-    ["name nobody holds", [lead("maria/vega")], { wait: true }],
-  ];
-  test.each(cases)("%s", (_name, leads, expected) => {
-    expect(route(msg, { pulls: [], leads })).toEqual(expected);
+  test("a worker is never the target at any step", () => {
+    const worker = session("w", {
+      role: "worker",
+      branch: "feat/users",
+      lastActiveMs: 1_000,
+    });
+    for (const item of [onPr, onIssue, { repo: OTHER }]) {
+      expect(route(item, [worker, session("a")]).session).toBe("a");
+    }
   });
 });

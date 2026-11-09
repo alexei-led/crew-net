@@ -2,106 +2,145 @@ import { describe, expect, test } from "bun:test";
 import {
   type Action,
   type DeliveryItem,
+  type DeliverySettings,
   decide,
   type SessionSignals,
 } from "./index";
 
 const NOW = 10_000_000;
 const MIN = 60_000;
-const addressed: DeliveryItem = {
-  kind: "message",
-  addressed: true,
-  blocking: false,
-};
-const blocking: DeliveryItem = {
-  kind: "finding",
-  addressed: false,
-  blocking: true,
-};
-const info: DeliveryItem = {
-  kind: "message",
-  addressed: false,
-  blocking: false,
-};
-const digest: DeliveryItem = {
-  kind: "digest",
-  addressed: true,
-  blocking: true,
-};
-const idle: SessionSignals = { draft: "" };
+const ask: DeliveryItem = { kind: "ask", wakeable: true };
+const idle: SessionSignals = { starting: false, draft: "", turnRunning: false };
+const sig = (over: Partial<SessionSignals>): SessionSignals => ({
+  ...idle,
+  ...over,
+});
 
-type Settings = { autoWake?: boolean; idleMinutes?: number };
+const WAKE: Action[] = ["band", "wake"];
+const NEXT: Action[] = ["band", "inject-next-prompt"];
 
 describe("decide", () => {
-  const cases: [string, DeliveryItem, SessionSignals, Settings, Action][] = [
-    ["draft present, addressed", addressed, { draft: "wip" }, {}, "inject"],
-    ["draft present, informational", info, { draft: "wip" }, {}, "hold"],
-    ["whitespace draft is empty", addressed, { draft: " \n" }, {}, "wake"],
-    [
-      "recent edit",
-      addressed,
-      { draft: "", lastEditMs: NOW - 2 * MIN },
-      {},
-      "inject",
-    ],
-    [
-      "recent user prompt",
-      blocking,
-      { draft: "", lastUserPromptMs: NOW - 9 * MIN },
-      {},
-      "inject",
-    ],
-    [
-      "edit just under N is active",
-      addressed,
-      { draft: "", lastEditMs: NOW - (10 * MIN - 1) },
-      {},
-      "inject",
-    ],
-    [
-      "edit exactly N ago is idle",
-      addressed,
-      { draft: "", lastEditMs: NOW - 10 * MIN },
-      {},
-      "wake",
-    ],
-    [
-      "custom N respected",
-      addressed,
-      { draft: "", lastEditMs: NOW - 4 * MIN },
-      { idleMinutes: 3 },
-      "wake",
-    ],
-    ["idle addressed wakes", addressed, idle, {}, "wake"],
-    ["idle blocking wakes", blocking, idle, {}, "wake"],
-    [
-      "idle addressed, auto-wake off",
-      addressed,
+  const cases: [
+    string,
+    DeliveryItem,
+    SessionSignals,
+    Partial<DeliverySettings>,
+    Action[],
+  ][] = [
+    ["idle ask wakes", ask, idle, {}, WAKE],
+    ...(["review", "fix", "bug"] as const).map(
+      (kind): [string, DeliveryItem, SessionSignals, object, Action[]] => [
+        `idle ${kind} wakes`,
+        { kind, wakeable: true },
+        idle,
+        {},
+        WAKE,
+      ],
+    ),
+    ...(
+      [
+        "info",
+        "reply",
+        "comment",
+        "review-comment",
+        "finding",
+        "unblocked",
+        "dependency-closed",
+      ] as const
+    ).map((kind): [string, DeliveryItem, SessionSignals, object, Action[]] => [
+      `idle ${kind} never wakes`,
+      { kind, wakeable: true },
       idle,
-      { autoWake: false },
-      "inject",
-    ],
-    ["idle informational", info, idle, {}, "band"],
-    ["idle digest never wakes", digest, idle, {}, "band"],
-    ["active digest is held", digest, { draft: "x" }, {}, "hold"],
+      {},
+      NEXT,
+    ]),
+    ["starting: digest", ask, sig({ starting: true }), {}, ["digest"]],
     [
-      "draft beats idle timers with auto-wake on",
-      blocking,
-      { draft: "x", lastEditMs: NOW - 60 * MIN },
-      { autoWake: true },
-      "inject",
+      "starting beats active",
+      ask,
+      sig({ starting: true, draft: "x", turnRunning: true }),
+      {},
+      ["digest"],
+    ],
+    ["draft present", ask, sig({ draft: "wip" }), {}, NEXT],
+    ["whitespace draft is empty", ask, sig({ draft: " \n" }), {}, WAKE],
+    ["typing 2 min ago", ask, sig({ lastTypingMs: NOW - 2 * MIN }), {}, NEXT],
+    [
+      "user prompt 9 min ago",
+      ask,
+      sig({ lastUserPromptMs: NOW - 9 * MIN }),
+      {},
+      NEXT,
+    ],
+    [
+      "typing just under 10 min ago is active",
+      ask,
+      sig({ lastTypingMs: NOW - (10 * MIN - 1) }),
+      {},
+      NEXT,
+    ],
+    [
+      "typing exactly 10 min ago is idle",
+      ask,
+      sig({ lastTypingMs: NOW - 10 * MIN }),
+      {},
+      WAKE,
+    ],
+    [
+      "custom idle minutes",
+      ask,
+      sig({ lastTypingMs: NOW - 4 * MIN }),
+      { idleMinutes: 3 },
+      WAKE,
+    ],
+    ["turn running", ask, sig({ turnRunning: true }), {}, NEXT],
+    [
+      "during a wake turn (plugin turn, no user prompt)",
+      ask,
+      sig({ turnRunning: true, lastWakeAtMs: NOW - 20 * MIN }),
+      {},
+      NEXT,
+    ],
+    ["auto-wake off", ask, idle, { autoWake: "off" }, NEXT],
+    [
+      "routed to a session in another repo",
+      { kind: "ask", wakeable: false },
+      idle,
+      {},
+      NEXT,
+    ],
+    ["woke 9 min ago", ask, sig({ lastWakeAtMs: NOW - 9 * MIN }), {}, NEXT],
+    [
+      "woke exactly 10 min ago",
+      ask,
+      sig({ lastWakeAtMs: NOW - 10 * MIN }),
+      {},
+      WAKE,
+    ],
+    [
+      "wake cooldown ignores idle minutes",
+      ask,
+      sig({ lastWakeAtMs: NOW - 5 * MIN }),
+      { idleMinutes: 3 },
+      NEXT,
     ],
   ];
+
   test.each(cases)("%s", (_name, item, signals, settings, expected) => {
-    expect(decide(item, signals, settings, NOW)).toBe(expected);
+    expect(decide(item, signals, settings, NOW)).toEqual(expected);
   });
 
-  test("never wakes while a draft is present, for any item and setting", () => {
-    for (const item of [addressed, blocking, info, digest]) {
-      for (const autoWake of [true, false]) {
-        expect(decide(item, { draft: "x" }, { autoWake }, NOW)).not.toBe(
-          "wake",
-        );
+  test("never wakes with a draft, for any kind and setting", () => {
+    for (const kind of ["ask", "review", "fix", "bug", "info", "finding"]) {
+      for (const autoWake of ["reply", "off"] as const) {
+        expect(
+          decide(
+            { kind, wakeable: true },
+            sig({ draft: "x" }),
+            { autoWake },
+            NOW,
+          ),
+        ).not.toContain("wake");
       }
     }
   });

@@ -1,111 +1,95 @@
-/** Who a message is for. Replaced when routing is rewritten to design §9.3. */
-export interface Address {
-  developer: string;
-  name?: string;
+/** An inbound item, as far as routing cares. */
+export interface RouteItem {
+  /** `owner/repo` of the thread the item sits on. */
+  repo: string;
+  /** PR or Issue number of the thread, if any. */
+  thread?: number;
+  /** Head branch of the PR; absent for Issues and items without a thread. */
+  branch?: string;
 }
 
-/** An inbound crew message, already parsed. */
-export interface RoutedMessage {
-  /** Parsed `crew → developer[/name]` line. */
-  address: Address;
-  /** PR or Issue number the comment sits on. */
-  pr?: number;
-}
+export type SessionRole = "lead" | "worker";
 
-/** An open PR in the repo. */
-export interface PullFacts {
-  number: number;
-  /** GitHub login of the PR author. */
-  author: string;
+/** A live session on this laptop, from its heartbeat. Stale heartbeats are filtered out by the caller. */
+export interface LiveSession {
+  id: string;
+  role: SessionRole;
+  /** `owner/repo` of the session's working copy. */
+  repo: string;
+  /** Path of the session's working copy. */
+  worktree: string;
+  /** Branch checked out in the working copy. */
   branch: string;
-  changedPaths: string[];
-  /** `lead` field of the PR's state block, `developer/name`, if it has one. */
-  lead?: string;
-}
-
-/** A branch a lead works on: a worktree checkout or a local branch with an open PR. */
-export interface LeadWork {
-  branch: string;
-  changedPaths: string[];
-}
-
-export interface LeadFacts {
-  /** `developer/name`. */
-  address: string;
-  developer: string;
-  /** Holds an unexpired lease right now. */
-  leaseLive: boolean;
-  /** Epoch ms of the lead's last activity. */
+  /** Path of the clone the working copy belongs to (shared by all its worktrees). */
+  cloneRoot: string;
+  /** Epoch ms of the session's last activity. */
   lastActiveMs: number;
-  work: LeadWork[];
-}
-
-export interface RoutingFacts {
-  pulls: PullFacts[];
-  leads: LeadFacts[];
-}
-
-export type RouteStep = "state-block" | "overlap" | "recent-lease" | "named";
-
-export type Route = { lead: string; step: RouteStep } | { wait: true };
-
-const WAIT: Route = { wait: true };
-const same = (a: string, b: string): boolean =>
-  a.toLowerCase() === b.toLowerCase();
-
-/** Most recent first; ties break on address so the outcome is stable. */
-function mostRecent(leads: LeadFacts[]): LeadFacts | undefined {
-  return [...leads].sort(
-    (a, b) =>
-      b.lastActiveMs - a.lastActiveMs || a.address.localeCompare(b.address),
-  )[0];
-}
-
-function overlaps(work: LeadWork[], pull: PullFacts): boolean {
-  const paths = new Set(pull.changedPaths);
-  return work.some(
-    (w) => w.branch === pull.branch || w.changedPaths.some((p) => paths.has(p)),
-  );
 }
 
 /**
- * Pick exactly one recipient lead for a message, or wait.
- *
- * `crew → dev/name`: that lead if it holds a lease, else wait.
- * `crew → dev`, first match wins:
- * 1. The comment is on one of the developer's PRs: the lead in its state block.
- * 2. The developer's lead whose open PR or worktree branch overlaps that PR.
- * 3. The developer's most recently active lead with a live lease.
- * 4. Wait for the developer's next lead.
+ * Which rule picked the session (design §9.3):
+ * `checkout`: the session has the PR branch checked out.
+ * `clone`: the PR branch is checked out in another worktree of the session's clone.
+ * `repo`: most recently active session in the item's repo.
+ * `any`: most recently active session in any repo; never woken.
+ * `none`: no lead session; the item waits for the next session's digest.
  */
-export function route(message: RoutedMessage, facts: RoutingFacts): Route {
-  const { developer, name } = message.address;
-  const mine = facts.leads.filter((l) => same(l.developer, developer));
+export type RouteStep = "checkout" | "clone" | "repo" | "any";
 
-  if (name !== undefined) {
-    const target = `${developer}/${name}`;
-    const lead = mine.find((l) => same(l.address, target));
-    return lead?.leaseLive ? { lead: lead.address, step: "named" } : WAIT;
+export type Route =
+  | { session: string; step: RouteStep; wakeable: boolean }
+  | { session: null; step: "none"; wakeable: false };
+
+const NONE: Route = { session: null, step: "none", wakeable: false };
+
+const same = (a: string, b: string): boolean =>
+  a.toLowerCase() === b.toLowerCase();
+
+/** Most recent first; ties break on id so the outcome is stable. */
+function mostRecent(sessions: readonly LiveSession[]): LiveSession | undefined {
+  return [...sessions].sort(
+    (a, b) => b.lastActiveMs - a.lastActiveMs || a.id.localeCompare(b.id),
+  )[0];
+}
+
+/**
+ * Pick exactly one session for an item, or none. First match wins:
+ * 1. A lead whose working copy has the item's PR branch checked out.
+ * 2. A lead whose clone has that branch in another worktree (a worker's).
+ * 3. The most recently active lead in the item's repo.
+ * 4. The most recently active lead in any repo; `wakeable` is false.
+ * 5. None.
+ * Workers are never a target. Several matches in one step: most recent.
+ */
+export function route(
+  item: RouteItem,
+  sessions: readonly LiveSession[],
+): Route {
+  const leads = sessions.filter((s) => s.role === "lead");
+  const inRepo = leads.filter((s) => same(s.repo, item.repo));
+  const pick = (candidates: LiveSession[], step: RouteStep): Route | null => {
+    const session = mostRecent(candidates);
+    return session
+      ? { session: session.id, step, wakeable: step !== "any" }
+      : null;
+  };
+
+  const { branch } = item;
+  if (branch !== undefined) {
+    const checkedOut = sessions.filter(
+      (s) => same(s.repo, item.repo) && s.branch === branch,
+    );
+    const roots = new Set(checkedOut.map((s) => s.cloneRoot));
+    const hit =
+      pick(
+        inRepo.filter((s) => s.branch === branch),
+        "checkout",
+      ) ??
+      pick(
+        inRepo.filter((s) => roots.has(s.cloneRoot)),
+        "clone",
+      );
+    if (hit) return hit;
   }
-
-  const pull =
-    message.pr === undefined
-      ? undefined
-      : facts.pulls.find((p) => p.number === message.pr);
-
-  // The state block names the owner even when no session holds it right now.
-  if (
-    pull?.lead !== undefined &&
-    same(pull.lead.split("/")[0] ?? "", developer)
-  ) {
-    return { lead: pull.lead, step: "state-block" };
-  }
-
-  if (pull) {
-    const lead = mostRecent(mine.filter((l) => overlaps(l.work, pull)));
-    if (lead) return { lead: lead.address, step: "overlap" };
-  }
-
-  const lead = mostRecent(mine.filter((l) => l.leaseLive));
-  return lead ? { lead: lead.address, step: "recent-lease" } : WAIT;
+  return pick(inRepo, "repo") ?? pick(leads, "any") ?? NONE;
 }
