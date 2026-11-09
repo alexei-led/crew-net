@@ -22,6 +22,13 @@ const SEPARATORS = new Set([";", "&", "|", "\n", "(", ")"]);
 const DQ_ESCAPABLE = new Set(["$", "`", '"', "\\", "\n"]);
 const MAX_DEPTH = 8;
 
+interface Heredoc {
+  delimiter: string;
+  stripTabs: boolean;
+  /** A quoted delimiter makes the body literal; otherwise bash expands `$(...)` in it. */
+  quoted: boolean;
+}
+
 class Reader {
   i = 0;
   readonly commands: Word[][] = [];
@@ -29,13 +36,19 @@ class Reader {
   private word: Word | null = null;
   /** Unquoted text of the current word, to spot brace lists. */
   private bare = "";
-  private pendingHeredocs: { delimiter: string; stripTabs: boolean }[] = [];
+  private pendingHeredocs: Heredoc[] = [];
   /** The next word is a redirection target, not an argument. */
   private redirectTarget = false;
+  /** Open `(` inside a substitution body. */
+  private parens = 0;
+  /** In a substitution body: index of the `)` that closed it, or -1. */
+  closedAt = -1;
 
   constructor(
     readonly src: string,
     readonly depth: number,
+    /** Read a `$(...)` body: stop at the `)` that closes it. */
+    readonly substitutionBody = false,
   ) {}
 
   private start(): Word {
@@ -69,7 +82,7 @@ class Reader {
     this.current = [];
   }
 
-  /** Read a nested `$(...)`, `<(...)` or backtick body and keep its commands. */
+  /** Read a nested backtick body and keep its commands. */
   private nested(body: string): string | null {
     if (this.depth >= MAX_DEPTH) return "substitutions nest too deep";
     const inner = lex(body, this.depth + 1);
@@ -78,37 +91,24 @@ class Reader {
     return null;
   }
 
-  /** Index just past the `)` that closes the `(` before `from`, or -1. */
-  private closingParen(from: number): number {
-    let level = 1;
-    let quote: "'" | '"' | null = null;
-    for (let j = from; j < this.src.length; j++) {
-      const c = this.src.charAt(j);
-      if (quote === "'") {
-        if (c === "'") quote = null;
-      } else if (c === "\\") {
-        j++;
-      } else if (quote === '"') {
-        if (c === '"') quote = null;
-      } else if (c === "'" || c === '"') {
-        quote = c;
-      } else if (c === "(") {
-        level++;
-      } else if (c === ")" && --level === 0) {
-        return j + 1;
-      }
-    }
-    return -1;
+  /** Keep the commands of `$(...)` and backticks in text bash expands like a double-quoted string. */
+  private expansionsIn(text: string): string | null {
+    if (!/\$\(|`/.test(text)) return null;
+    return this.nested(`echo "${text.replaceAll('"', '\\"')}"`);
   }
 
+  /** At `$(`, `<(` or `>(`. Reads the body in place, so quotes and here-documents inside it are handled. */
   private substitution(): string | null {
-    // At `$(` or `<(` / `>(`; i points at the opener's first char.
-    const open = this.i + 2;
-    const end = this.closingParen(open);
-    if (end < 0) return "unterminated substitution";
+    if (this.depth >= MAX_DEPTH) return "substitutions nest too deep";
+    const inner = new Reader(this.src, this.depth + 1, true);
+    inner.i = this.i + 2;
+    const result = inner.run();
+    if (!result.ok) return result.error;
+    if (inner.closedAt < 0) return "unterminated substitution";
+    this.commands.push(...result.commands);
     this.markDynamic();
-    this.i = end;
-    return this.nested(this.src.slice(open, end - 1));
+    this.i = inner.closedAt + 1;
+    return null;
   }
 
   private backtick(): string | null {
@@ -136,8 +136,9 @@ class Reader {
       const end = this.src.indexOf("}", this.i);
       if (end < 0) return "unterminated parameter expansion";
       this.markDynamic();
+      const body = this.src.slice(this.i + 2, end);
       this.i = end + 1;
-      return null;
+      return this.expansionsIn(body);
     }
     if (/[A-Za-z0-9_@*#?$!-]/.test(next)) {
       this.markDynamic();
@@ -226,9 +227,11 @@ class Reader {
       } else {
         const stripTabs = this.src.charAt(this.i + 2) === "-";
         this.i += stripTabs ? 3 : 2;
-        const delimiter = this.heredocDelimiter();
-        if (delimiter === null) return "missing here-document delimiter";
-        this.pendingHeredocs.push({ delimiter, stripTabs });
+        const heredoc = this.heredocDelimiter(stripTabs);
+        if (heredoc === null) return "missing here-document delimiter";
+        // `(( x << 2 ))` is a shift, not a here-document.
+        if (!heredoc.quoted && /^\d+$/.test(heredoc.delimiter)) return null;
+        this.pendingHeredocs.push(heredoc);
         return null;
       }
     } else {
@@ -238,7 +241,7 @@ class Reader {
     return null;
   }
 
-  private heredocDelimiter(): string | null {
+  private heredocDelimiter(stripTabs: boolean): Heredoc | null {
     while (this.src.charAt(this.i) === " " || this.src.charAt(this.i) === "\t")
       this.i++;
     const m = /^(?:'([^']*)'|"([^"]*)"|([^\s;&|<>()]+))/.exec(
@@ -246,13 +249,19 @@ class Reader {
     );
     if (!m) return null;
     this.i += m[0].length;
-    return (m[1] ?? m[2] ?? m[3] ?? "").replaceAll("\\", "");
+    const raw = m[1] ?? m[2] ?? m[3] ?? "";
+    return {
+      delimiter: raw.replaceAll("\\", ""),
+      stripTabs,
+      quoted: m[3] === undefined || raw.includes("\\"),
+    };
   }
 
-  /** After a newline: skip here-document bodies. Their text is data. */
+  /** After a newline: read here-document bodies. Their text is data, except substitutions in an unquoted one. */
   private skipHeredocs(): string | null {
-    for (const { delimiter, stripTabs } of this.pendingHeredocs) {
+    for (const { delimiter, stripTabs, quoted } of this.pendingHeredocs) {
       let found = false;
+      let body = "";
       while (this.i < this.src.length) {
         const eol = this.src.indexOf("\n", this.i);
         const end = eol < 0 ? this.src.length : eol;
@@ -263,8 +272,11 @@ class Reader {
           found = true;
           break;
         }
+        body += `${line}\n`;
       }
       if (!found) return "unterminated here-document";
+      const error = quoted ? null : this.expansionsIn(body);
+      if (error) return error;
     }
     this.pendingHeredocs = [];
     return null;
@@ -281,6 +293,18 @@ class Reader {
         error = this.doubleQuoted();
       } else if (c === "$" && src.charAt(this.i + 1) === "'") {
         error = this.ansiQuoted();
+      } else if (c === "$" && src.charAt(this.i + 1) === '"') {
+        // `$"..."` is a locale-translated double-quoted string.
+        this.i++;
+        error = this.doubleQuoted();
+      } else if (this.substitutionBody && (c === "(" || c === ")")) {
+        if (c === ")" && this.parens === 0) {
+          this.closedAt = this.i;
+          break;
+        }
+        this.parens += c === "(" ? 1 : -1;
+        this.endCommand();
+        this.i++;
       } else if (c === "$") {
         error = this.dollar();
       } else if (c === "`") {
@@ -318,10 +342,6 @@ class Reader {
       if (error) return { ok: false, error };
     }
     this.endCommand();
-    if (this.pendingHeredocs.length > 0) {
-      // A here-document at the very end of the line has no body yet: bash reads it from stdin.
-      this.pendingHeredocs = [];
-    }
     return { ok: true, commands: this.commands };
   }
 }

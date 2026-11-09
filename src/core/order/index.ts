@@ -85,12 +85,13 @@ export function gate(
 ): GateDecision {
   const deps = dependencies(pr);
   if (!deps.ok) return { decision: "deny", reasons: [deps.reason] };
-  const byKey = new Map(
-    states.map((s) => [
-      key({ repo: s.repo.toLowerCase(), number: s.number }),
-      s.state,
-    ]),
-  );
+  // Two reads of one dependency: the less merged one counts (fail closed).
+  const byKey = new Map<string, DependencyState["state"]>();
+  for (const s of states) {
+    const k = key({ repo: s.repo.toLowerCase(), number: s.number });
+    if (byKey.get(k) === undefined || byKey.get(k) === "merged")
+      byKey.set(k, s.state);
+  }
   const reasons: string[] = [];
   for (const dep of deps.refs) {
     const name = label(pr, dep);

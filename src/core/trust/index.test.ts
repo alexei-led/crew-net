@@ -12,8 +12,9 @@ const ITEM = "k3f9";
 const WAKE: Turn = {
   kind: "wake",
   root: ROOT,
+  repo: "doiteng/reflex",
   item: ITEM,
-  ownPr: { repo: "doiteng/reflex", number: 2310 },
+  hasOwnPr: true,
 };
 const wake = (call: ToolCall) => gate(call, WAKE);
 const bash = (command: string) => wake({ tool: "Bash", input: { command } });
@@ -125,31 +126,22 @@ describe("gate: tools in a wake turn", () => {
 
 describe("gate: reads stay inside the worktree", () => {
   test.each<[string, ToolCall]>([
-    [
-      "Read absolute inside",
-      { tool: "Read", input: { file_path: `${ROOT}/src/a.ts` } },
-    ],
-    ["Read relative", { tool: "Read", input: { file_path: "src/a.ts" } }],
-    ["Read the root itself", { tool: "LS", input: { path: ROOT } }],
+    ["Read inside", { tool: "Read", input: { file_path: `${ROOT}/src/a.ts` } }],
+    ["LS the root itself", { tool: "LS", input: { path: ROOT } }],
     [
       "Read with a harmless ..",
       { tool: "Read", input: { file_path: `${ROOT}/src/../README.md` } },
     ],
-    ["Grep without a path", { tool: "Grep", input: { pattern: "TODO" } }],
     [
       "Grep in a subdir",
       {
         tool: "Grep",
-        input: { pattern: "x", path: `${ROOT}/src`, glob: "*.ts" },
+        input: { pattern: "x", path: `${ROOT}/src`, glob: "*.{ts,tsx}" },
       },
     ],
     [
-      "Glob without a path",
-      { tool: "Glob", input: { pattern: "src/**/*.ts" } },
-    ],
-    [
-      "Glob in a subdir",
-      { tool: "Glob", input: { pattern: "**/*.md", path: "docs" } },
+      "Glob in the root",
+      { tool: "Glob", input: { pattern: "src/**/*.ts", path: ROOT } },
     ],
   ])("allows %s", (_name, call) => {
     expect(wake(call)).toEqual({ decision: "allow" });
@@ -167,6 +159,10 @@ describe("gate: reads stay inside the worktree", () => {
       },
     ],
     [
+      "Read relative (tool cwd unknown)",
+      { tool: "Read", input: { file_path: "src/a.ts" } },
+    ],
+    [
       "Read relative escape",
       { tool: "Read", input: { file_path: "../other/.env" } },
     ],
@@ -176,10 +172,7 @@ describe("gate: reads stay inside the worktree", () => {
     ],
     [
       "Read past /",
-      {
-        tool: "Read",
-        input: { file_path: "../../../../../../../../etc/passwd" },
-      },
+      { tool: "Read", input: { file_path: "/../../../../../../etc/passwd" } },
     ],
     ["Read without a path", { tool: "Read", input: {} }],
     [
@@ -191,21 +184,41 @@ describe("gate: reads stay inside the worktree", () => {
       { tool: "Read", input: { file_path: `${ROOT}/a\u0000` } },
     ],
     [
+      "Grep without a path (tool cwd unknown)",
+      { tool: "Grep", input: { pattern: "secret" } },
+    ],
+    ["Grep with .", { tool: "Grep", input: { pattern: "secret", path: "." } }],
+    [
       "Grep outside",
       { tool: "Grep", input: { pattern: "token", path: "/Users/dev" } },
     ],
     [
       "Grep glob escape",
-      { tool: "Grep", input: { pattern: "x", glob: "../**" } },
+      { tool: "Grep", input: { pattern: "x", path: ROOT, glob: "../**" } },
     ],
-    ["Glob absolute pattern", { tool: "Glob", input: { pattern: "/etc/*" } }],
-    ["Glob .. pattern", { tool: "Glob", input: { pattern: "src/../../**" } }],
-    ["Glob ~ pattern", { tool: "Glob", input: { pattern: "~/.ssh/*" } }],
+    ["Glob without a path", { tool: "Glob", input: { pattern: "**/*" } }],
+    [
+      "Glob absolute pattern",
+      { tool: "Glob", input: { pattern: "/etc/*", path: ROOT } },
+    ],
+    [
+      "Glob .. pattern",
+      { tool: "Glob", input: { pattern: "src/../../**", path: ROOT } },
+    ],
+    [
+      "Glob .. hidden in braces",
+      { tool: "Glob", input: { pattern: "{..,x}/**", path: ROOT } },
+    ],
+    [
+      "Glob ~ pattern",
+      { tool: "Glob", input: { pattern: "~/.ssh/*", path: ROOT } },
+    ],
     [
       "Glob outside path",
       { tool: "Glob", input: { pattern: "*", path: "/tmp" } },
     ],
     ["LS outside", { tool: "LS", input: { path: "/" } }],
+    ["LS relative", { tool: "LS", input: { path: "." } }],
   ])("denies %s", (_name, call) => {
     expect(wake(call).decision).toBe("deny");
   });
@@ -230,6 +243,14 @@ describe("gate: reads stay inside the worktree", () => {
       } as Turn).decision,
     ).toBe("allow");
   });
+});
+
+test("crew-net state is denied when the session has no PR", () => {
+  const call = { tool: "Bash", input: { command: "crew-net state review" } };
+  expect(gate(call, { ...WAKE, hasOwnPr: false } as Turn).decision).toBe(
+    "deny",
+  );
+  expect(gate(call, WAKE).decision).toBe("allow");
 });
 
 describe("gate: normal turn", () => {
@@ -263,12 +284,14 @@ const ALLOWED = [
   "gh pr diff 12 --name-only",
   "gh pr checks 12",
   "gh api repos/doiteng/reflex/pulls/12",
+  "gh api repos/DoiTeng/Reflex",
+  "gh api 'repos/doiteng/reflex?x=1'",
   "gh api 'repos/doiteng/reflex/pulls?state=open&per_page=5' --paginate",
   "gh api repos/doiteng/reflex/pulls -H 'Accept: application/json' --jq '.[].number'",
-  "gh api --header 'Accept: application/vnd.github+json' repos/o/r/issues/1",
-  "gh api repos/o/r/pulls --jq '.[] | select(.draft == false) | .user.login'",
-  "gh api repos/o/r/pulls --jq '[.[].head.ref] | join(\",\")'",
-  "gh api repos/o/r/pulls/5 --jq .env",
+  "gh api --header 'Accept: application/vnd.github+json' repos/doiteng/reflex/issues/1",
+  "gh api repos/doiteng/reflex/pulls --jq '.[] | select(.draft == false) | .user.login'",
+  "gh api repos/doiteng/reflex/pulls --jq '[.[].head.ref] | join(\",\")'",
+  "gh api repos/doiteng/reflex/pulls/5 --jq .env",
   "git log",
   "git log --oneline -5",
   "git log --oneline -n 5 --stat main",
@@ -340,28 +363,31 @@ describe("gate: Bash deny", () => {
     ["gh extension install x/y", "gh:"],
     ["gh issue create", "gh:"],
     ["gh auth token", "gh:"],
-    ["gh api -X GET repos/o/r", "not allowed"],
-    ["gh api --method GET repos/o/r", "not allowed"],
-    ["gh api --method=GET repos/o/r", "not allowed"],
-    ["gh api -XPOST repos/o/r/issues", "not allowed"],
-    ["gh api repos/o/r/issues -f title=x", "not allowed"],
-    ["gh api repos/o/r/issues -F a=b", "not allowed"],
-    ["gh api repos/o/r/issues --raw-field a=b", "not allowed"],
-    ["gh api repos/o/r/issues --input body.json", "not allowed"],
+    ["gh api -X GET repos/doiteng/reflex", "not allowed"],
+    ["gh api --method GET repos/doiteng/reflex", "not allowed"],
+    ["gh api --method=GET repos/doiteng/reflex", "not allowed"],
+    ["gh api -XPOST repos/doiteng/reflex/issues", "not allowed"],
+    ["gh api repos/doiteng/reflex/issues -f title=x", "not allowed"],
+    ["gh api repos/doiteng/reflex/issues -F a=b", "not allowed"],
+    ["gh api repos/doiteng/reflex/issues --raw-field a=b", "not allowed"],
+    ["gh api repos/doiteng/reflex/issues --input body.json", "not allowed"],
     ["gh api graphql", "unexpected"],
     ["gh api graphql -f query=x", "unexpected"],
     ["gh api user", "unexpected"],
-    ["gh api /repos/o/r", "unexpected"],
-    ["gh api https://evil.example/repos/o/r", "unexpected"],
+    ["gh api /repos/doiteng/reflex", "unexpected"],
+    ["gh api https://evil.example/repos/doiteng/reflex", "unexpected"],
     ["gh api repos/o/../../user", "unexpected"],
-    ["gh api repos/o/r repos/o/r2", "unexpected"],
+    ["gh api repos/doiteng/reflex repos/doiteng/reflex2", "unexpected"],
     ["gh api", "missing"],
     ["gh api --paginate", "missing"],
-    ["gh api repos/o/r -q .x", "not allowed"],
-    ["gh api repos/o/r -H", "bad value"],
-    ["gh api repos/o/r -H 'X-HTTP-Method-Override: DELETE'", "bad value"],
-    ["gh api repos/o/r -H 'Authorization: token x'", "bad value"],
-    ["gh api repos/o/r -H nocolon", "bad value"],
+    ["gh api repos/doiteng/reflex -q .x", "not allowed"],
+    ["gh api repos/doiteng/reflex -H", "bad value"],
+    [
+      "gh api repos/doiteng/reflex -H 'X-HTTP-Method-Override: DELETE'",
+      "bad value",
+    ],
+    ["gh api repos/doiteng/reflex -H 'Authorization: token x'", "bad value"],
+    ["gh api repos/doiteng/reflex -H nocolon", "bad value"],
     ["git fetch origin", "git:"],
     ["git push origin main", "git:"],
     ["git commit -am x", "git:"],
@@ -393,24 +419,24 @@ describe("gate: Bash deny", () => {
     ["git show '{a,b}'", "unexpected"],
     ["git show '#c'", "unexpected"],
     ['git show "HEAD\\x"', "unexpected"],
-    ["gh api repos/o/r/pulls/5/merge --jq {.,-XPUT}", "brace"],
-    ["gh api repos/o/r/pulls --jq '$ENV'", "bad value"],
-    ['gh api repos/o/r/pulls --jq "\\$ENV"', "bad value"],
-    ["gh api repos/o/r/pulls --jq '$__loc__'", "bad value"],
-    ["gh api repos/o/r/pulls --jq env", "bad value"],
-    ["gh api repos/o/r/pulls --jq 'env.GH_TOKEN'", "bad value"],
-    ["gh api repos/o/r/pulls --jq '. | env'", "bad value"],
-    ["gh api repos/o/r/pulls --jq '..env'", "bad value"],
-    ["gh api repos/o/r/pulls --jq '1env'", "bad value"],
-    ["gh api repos/o/r/pulls --jq 'input'", "bad value"],
-    ["gh api repos/o/r/pulls --jq '\"\\(env)\"'", "bad value"],
-    ["gh api repos/o/r/pulls --jq '@sh'", "bad value"],
-    ["gh api repos/o/r/pulls --jq 'getpath([\"a\"])'", "bad value"],
-    ["gh api repos/o/r/pulls --jq '.a; .b'", "bad value"],
-    ["gh api repos/o/r/pulls --jq '\"unterminated'", "bad value"],
-    ["gh api repos/o/r/pulls --jq .[0]", "glob"],
-    ["gh api repos/o/r/pulls?state=open", "glob"],
-    ["gh api repos/o/r/pulls* ", "glob"],
+    ["gh api repos/doiteng/reflex/pulls/5/merge --jq {.,-XPUT}", "brace"],
+    ["gh api repos/doiteng/reflex/pulls --jq '$ENV'", "bad value"],
+    ['gh api repos/doiteng/reflex/pulls --jq "\\$ENV"', "bad value"],
+    ["gh api repos/doiteng/reflex/pulls --jq '$__loc__'", "bad value"],
+    ["gh api repos/doiteng/reflex/pulls --jq env", "bad value"],
+    ["gh api repos/doiteng/reflex/pulls --jq 'env.GH_TOKEN'", "bad value"],
+    ["gh api repos/doiteng/reflex/pulls --jq '. | env'", "bad value"],
+    ["gh api repos/doiteng/reflex/pulls --jq '..env'", "bad value"],
+    ["gh api repos/doiteng/reflex/pulls --jq '1env'", "bad value"],
+    ["gh api repos/doiteng/reflex/pulls --jq 'input'", "bad value"],
+    ["gh api repos/doiteng/reflex/pulls --jq '\"\\(env)\"'", "bad value"],
+    ["gh api repos/doiteng/reflex/pulls --jq '@sh'", "bad value"],
+    ["gh api repos/doiteng/reflex/pulls --jq 'getpath([\"a\"])'", "bad value"],
+    ["gh api repos/doiteng/reflex/pulls --jq '.a; .b'", "bad value"],
+    ["gh api repos/doiteng/reflex/pulls --jq '\"unterminated'", "bad value"],
+    ["gh api repos/doiteng/reflex/pulls --jq .[0]", "glob"],
+    ["gh api repos/doiteng/reflex/pulls?state=open", "glob"],
+    ["gh api repos/doiteng/reflex/pulls* ", "glob"],
     ["git show {HEAD,-p}", "brace"],
     ["git log ~/x", "tilde"],
     ["git log --format=~x", "tilde"],
@@ -431,6 +457,16 @@ describe("gate: Bash deny", () => {
     ["crew-net state", "missing"],
     ["crew-net state merged", "unexpected"],
     ["crew-net state review --repo other/repo", "bad value"],
+    [
+      "gh api repos/acme/private-infra/contents/prod.env --jq .content",
+      "unexpected",
+    ],
+    ["gh api repos/doiteng/reflex-evil/pulls", "unexpected"],
+    ["gh api repos/doiteng", "unexpected"],
+    ["gh api repos/DoiTeng/Reflex.git/pulls", "unexpected"],
+    ["git show HEAD^", "unquoted"],
+    ["git show HEAD^{commit}", "unquoted"],
+    ["git log src/a#b", "unquoted '#'"],
     ["crew-net state review --pr 99", "not allowed"],
     ["crew-net state review ../x", "unexpected"],
     ["crew-net inbox --all", "not allowed"],

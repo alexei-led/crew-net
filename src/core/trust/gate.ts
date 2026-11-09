@@ -4,24 +4,19 @@ export interface ToolCall {
   input?: Readonly<Record<string, unknown>>;
 }
 
-/** The PR a session owns. */
-export interface OwnPr {
-  /** `owner/name`. */
-  repo: string;
-  number: number;
-}
-
 export type Turn =
   /** The developer drives the turn. The merge gate still applies; this gate does not. */
   | { kind: "normal" }
   | {
       kind: "wake";
-      /** Absolute path of the session's worktree. Reads stay inside it. */
+      /** Absolute path of the session's worktree. Reads stay inside it. The Bash cwd must be this root. */
       root: string;
+      /** `owner/name` of the session's repo. `gh api` may read only this repo. */
+      repo: string;
       /** The waking item, as `crew-net reply` names it. The only item a reply may answer. */
       item: string;
-      /** The session's own PR; `crew-net state` may only change it. None: `state` is denied. */
-      ownPr?: OwnPr;
+      /** The current branch has a PR. `crew-net state` updates only that PR; without one it is denied. */
+      hasOwnPr: boolean;
     };
 
 export type ToolDecision =
@@ -78,12 +73,12 @@ function tokenize(line: string): { words: string[] } | { error: string } {
       return { error: `shell operator ${JSON.stringify(c)}` };
     } else if (c === "\\") {
       return { error: "backslash escape outside quotes" };
-    } else if ("*?[]{}".includes(c)) {
+    } else if ("*?[]{}^".includes(c)) {
       return {
         error: `unquoted ${JSON.stringify(c)} (glob or brace expansion)`,
       };
-    } else if (c === "#" && word === null) {
-      return { error: "comment" };
+    } else if (c === "#") {
+      return { error: "unquoted '#' (comment or zsh glob)" };
     } else if (c === "~" && (word === null || /[=:]$/.test(word))) {
       return { error: "tilde expansion" };
     } else if (c === " ") {
@@ -286,18 +281,28 @@ const HEADER = matches(
   /^(?![^:]*(override|authorization))[A-Za-z][A-Za-z0-9-]*: [\x20-\x7e]*$/i,
 );
 
-const GH_API_RULES: ArgRules = {
+/** `gh api` reads one path of the session's repo; any other repo is refused. */
+const ghApiRules = (repo: string): ArgRules => ({
   flags: flags({
     "-H": HEADER,
     "--header": HEADER,
     "--jq": safeJq,
     "--paginate": true,
   }),
-  positional: (word) =>
-    /^repos\/[A-Za-z0-9_./?&=%,:-]+$/.test(word) && !word.includes(".."),
+  positional: (word) => {
+    const prefix = `repos/${repo.toLowerCase()}`;
+    const lower = word.toLowerCase();
+    return (
+      /^repos\/[A-Za-z0-9_./?&=%,:-]+$/.test(word) &&
+      !word.includes("..") &&
+      (lower === prefix ||
+        lower.startsWith(`${prefix}/`) ||
+        lower.startsWith(`${prefix}?`))
+    );
+  },
   maxPositional: 1,
   minPositional: 1,
-};
+});
 
 function gitPolicy(words: readonly string[]): ToolDecision {
   const sub = words[1] ?? "";
@@ -307,10 +312,10 @@ function gitPolicy(words: readonly string[]): ToolDecision {
   return error ? deny(`git ${sub}: ${error}`) : ALLOW;
 }
 
-function ghPolicy(words: readonly string[]): ToolDecision {
+function ghPolicy(words: readonly string[], turn: WakeTurn): ToolDecision {
   const [, sub, action = ""] = words;
   if (sub === "api") {
-    const error = checkArgs(words.slice(2), GH_API_RULES);
+    const error = checkArgs(words.slice(2), ghApiRules(turn.repo));
     return error ? deny(`gh api: ${error}`) : ALLOW;
   }
   if (sub !== "pr") return deny("gh: only pr view|list|diff|checks and api");
@@ -353,14 +358,13 @@ function crewNetPolicy(words: readonly string[], turn: WakeTurn): ToolDecision {
       });
       break;
     case "state": {
-      const own = turn.ownPr;
-      if (!own) return deny("crew-net state: this session has no PR");
+      if (!turn.hasOwnPr) return deny("crew-net state: this session has no PR");
       // Without `--repo` the CLI updates the current branch's PR: the session's own.
       error = checkArgs(args, {
         flags: flags({
           "--scope": safeRefOrPath,
           "--json": true,
-          "--repo": (v) => v.toLowerCase() === own.repo.toLowerCase(),
+          "--repo": (v) => v.toLowerCase() === turn.repo.toLowerCase(),
         }),
         positional: (word, index) =>
           index === 0 ? STATES(word) : safeRefOrPath(word),
@@ -385,7 +389,7 @@ function bashPolicy(command: unknown, turn: WakeTurn): ToolDecision {
     case "crew-net":
       return crewNetPolicy(words, turn);
     case "gh":
-      return ghPolicy(words);
+      return ghPolicy(words, turn);
     case "git":
       return gitPolicy(words);
     default:
@@ -393,13 +397,15 @@ function bashPolicy(command: unknown, turn: WakeTurn): ToolDecision {
   }
 }
 
-/** True when `path`, resolved against `root` without following links, stays inside `root`. */
+/**
+ * True when absolute `path`, normalized without following links, stays inside
+ * `root`. Relative paths are refused: the tool resolves them against its own
+ * cwd, which the gate cannot see.
+ */
 function insideRoot(root: string, path: string): boolean {
-  if (path === "" || path.startsWith("~") || path.includes("\0")) return false;
+  if (!path.startsWith("/") || path.includes("\0")) return false;
   const parts: string[] = [];
-  for (const part of (path.startsWith("/") ? path : `${root}/${path}`).split(
-    "/",
-  )) {
+  for (const part of path.split("/")) {
     if (part === "..") {
       if (parts.pop() === undefined) return false;
     } else if (part && part !== ".") {
@@ -410,22 +416,22 @@ function insideRoot(root: string, path: string): boolean {
   return full === root || full.startsWith(`${root}/`);
 }
 
-/** A glob that cannot reach above its base: relative, no `..`, no `~`. */
+/** A glob that cannot reach above its base: relative, no `..` anywhere (brace lists hide segments), no `~`. */
 function safeGlob(pattern: string): boolean {
   return (
     !pattern.startsWith("/") &&
     !pattern.startsWith("~") &&
     !pattern.includes("\\") &&
-    !pattern.split("/").includes("..")
+    !pattern.includes("..")
   );
 }
 
-/** Input keys that name a file or directory, and whether each is required. */
-const READ_TOOLS: Record<string, Record<string, boolean>> = {
-  Read: { file_path: true },
-  Grep: { path: false },
-  Glob: { path: false },
-  LS: { path: true },
+/** Input key that names the file or directory read. Required and absolute. */
+const READ_TOOLS: Record<string, string> = {
+  Read: "file_path",
+  Grep: "path",
+  Glob: "path",
+  LS: "path",
 };
 
 /** Input keys that hold a glob pattern. */
@@ -439,12 +445,12 @@ function readPolicy(call: ToolCall, turn: WakeTurn): ToolDecision {
   if (!root.startsWith("/") || root.split("/").includes(".."))
     return deny("wake turn has no valid worktree root");
   const input = call.input ?? {};
-  for (const [key, required] of Object.entries(READ_TOOLS[call.tool] ?? {})) {
-    const value = input[key];
-    if (value === undefined && !required) continue;
-    if (typeof value !== "string" || !insideRoot(root, value))
-      return deny(`${call.tool}: ${key} must be inside the worktree ${root}`);
-  }
+  const key = READ_TOOLS[call.tool] ?? "";
+  const value = input[key];
+  if (typeof value !== "string" || !insideRoot(root, value))
+    return deny(
+      `${call.tool}: ${key} must be an absolute path inside the worktree ${root}`,
+    );
   for (const key of GLOB_KEYS[call.tool] ?? []) {
     const value = input[key];
     if (value !== undefined && (typeof value !== "string" || !safeGlob(value)))
