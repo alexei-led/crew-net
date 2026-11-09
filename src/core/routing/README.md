@@ -1,16 +1,25 @@
 # routing
 
-Picks exactly one recipient lead, or waits. Pure.
+Picks exactly one local session for an inbound item, or none (design §9.3). Pure.
 
-`route(message, facts) → { lead, step } | { wait: true }`
+`route(item, sessions) → { session, step, wakeable } | { session: null, step: "none", wakeable: false }`
 
-`crew → dev/name`: that lead if it holds a live lease, else wait.
+Input: the item's repo, thread and PR head branch; the live sessions on this
+laptop (id, role, repo, worktree, branch, clone root, last activity). The caller
+drops sessions whose heartbeat is stale.
 
-`crew → dev`, first match wins:
+First match wins, among lead sessions only:
 
-1. Comment is on one of the developer's PRs: the lead in its state block (no lease needed).
-2. The developer's lead whose open PR or worktree branch shares the branch or a changed path with the message's PR. Several: most recently active.
-3. The developer's most recently active lead with a live lease.
-4. Wait.
+| Step       | Rule                                                                                 | Wakeable |
+| ---------- | ------------------------------------------------------------------------------------ | -------- |
+| `checkout` | A lead in the item's repo has the PR branch checked out                              | yes      |
+| `clone`    | A live session (a worker) has the branch checked out in a worktree of a lead's clone | yes      |
+| `repo`     | The most recently active lead in the item's repo                                     | yes      |
+| `any`      | The most recently active lead in any repo                                            | no       |
+| `none`     | No lead session; the item waits for the next session's digest                        | no       |
 
-Ties break on address, so the result is stable.
+- Workers (`role: "worker"`) are never a target; their branches still route to their lead.
+- `clone` sees a worktree only through the live session in it. A worktree with no
+  session falls through to `repo`.
+- Several matches in one step: the most recently active, ties broken by id.
+- Repos compare case-insensitively; branches exactly.

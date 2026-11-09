@@ -1,17 +1,23 @@
 # delivery
 
-Decides what to do with one inbound item now. Pure; the mod bundles it.
+Decides what to do with one inbound item now (design §9.4). Pure; adapters bundle it.
 
-`decide(item, signals, settings, nowMs) → "hold" | "inject" | "wake" | "band"`
+`decide(item, signals, settings, nowMs) → Action[]`
 
-| Session | Item                                 | Action                                |
-| ------- | ------------------------------------ | ------------------------------------- |
-| Active  | addressed or blocking                | `inject` (context on the next prompt) |
-| Active  | anything else                        | `hold`                                |
-| Idle    | addressed or blocking, auto-wake on  | `wake`                                |
-| Idle    | addressed or blocking, auto-wake off | `inject`                              |
-| Idle    | anything else, and every digest      | `band`                                |
+| Session                               | Item                                                    | Actions                      |
+| ------------------------------------- | ------------------------------------------------------- | ---------------------------- |
+| Starting (start, `/clear`, resume)    | any                                                     | `digest`                     |
+| Idle, no wake turn in the last 10 min | `ask review fix bug`, wakeable route, auto-wake `reply` | `band`, `wake`               |
+| Anything else                         | any                                                     | `band`, `inject-next-prompt` |
 
-Active: non-empty draft, or a `prompt.edit` or user `prompt.submit` less than N
-minutes ago (default 10). A draft therefore never coexists with a wake. Every
-action also shows the item in the band; the mod does that.
+- Active: a non-empty draft, typing or a user prompt within `idleMinutes`
+  (default 10), or a running turn. Idle: none of these.
+- Plugin-submitted turns (wake turns) are not user activity, so they do not set
+  `lastUserPromptMs`, but they do set `turnRunning`. Items that arrive during a
+  wake turn get `band` + `inject-next-prompt` for now.
+- A decision holds only for `nowMs`. Callers run `decide` again on each tick
+  for every item not yet delivered, so an ask held back by a running turn or the
+  wake cooldown starts the next wake turn once those clear.
+- `wakeable` comes from routing: false when the session was picked only because
+  no session is in the item's repo.
+- Findings, replies, people's comments and dependency events never wake.
