@@ -5,7 +5,9 @@ import {
   type MergeTarget,
   gate as orderGate,
 } from "../../../core/order/index";
-import { currentWorktree, type WriteContext } from "./context";
+import type { GitHubPort } from "../../../ports/index";
+import { parseRepoIdentity } from "../../../protocol/index";
+import { currentWorktree, same, type WriteContext } from "./context";
 
 export interface GateArgs {
   /** The Bash command: one argument holding the whole line, or its words. */
@@ -65,11 +67,97 @@ export function mayMerge(
   );
 }
 
-async function resolve(
+/** Where a target's PR lives, and the GitHub that reads it. */
+interface Located {
+  host: string;
+  repo: string;
+  github: GitHubPort;
+}
+
+const REMOTE_RANK: Record<string, number> = {
+  upstream: 3,
+  github: 2,
+  origin: 1,
+};
+
+/**
+ * The repo gh merges in when the command names none (design §11): `GH_REPO`,
+ * else the remote `gh repo set-default` resolved (`gh-resolved`), else the
+ * first remote in gh's order (upstream, github, origin, the rest). In a fork
+ * clone that can be the parent, not origin.
+ */
+async function defaultRepo(
+  ctx: WriteContext,
+): Promise<{ host?: string; repo: string }> {
+  if (ctx.ghRepo !== undefined) {
+    const parts = ctx.ghRepo.split("/").filter(Boolean);
+    if (parts.length === 2) return { repo: parts.join("/") };
+    if (parts.length === 3)
+      return {
+        host: (parts[0] as string).toLowerCase(),
+        repo: parts.slice(1).join("/"),
+      };
+    throw new GateFailure(`cannot read GH_REPO ${ctx.ghRepo}`);
+  }
+  const remotes = (await ctx.git.remotes()).flatMap((r) => {
+    try {
+      return [{ ...r, ...parseRepoIdentity(r.url) }];
+    } catch {
+      return [];
+    }
+  });
+  const ranked = remotes
+    .map((r, i) => ({ r, i, rank: REMOTE_RANK[r.name.toLowerCase()] ?? 0 }))
+    .sort((a, b) => b.rank - a.rank || a.i - b.i)
+    .map((x) => x.r);
+  const resolved = ranked.find((r) => r.ghResolved !== undefined);
+  if (resolved && resolved.ghResolved !== "base") {
+    if (!/^[\w.-]+\/[\w.-]+$/.test(resolved.ghResolved ?? ""))
+      throw new GateFailure(
+        `cannot read gh's default repo ${resolved.ghResolved}`,
+      );
+    return { host: resolved.host, repo: resolved.ghResolved as string };
+  }
+  const chosen = resolved ?? ranked[0];
+  return chosen
+    ? { host: chosen.host, repo: chosen.repo }
+    : { host: ctx.host, repo: ctx.repo };
+}
+
+/**
+ * The host and repo gh sends the merge to. A repo named without a host goes
+ * to `GH_HOST`, else github.com; in a clone on another host gh's choice is
+ * not certain, so the host must be named.
+ */
+async function locate(
   ctx: WriteContext,
   target: MergeTarget,
+): Promise<Located> {
+  const named =
+    target.repo !== undefined
+      ? { ...(target.host ? { host: target.host } : {}), repo: target.repo }
+      : await defaultRepo(ctx);
+  const host = target.host ?? named.host ?? ctx.ghHost ?? ctx.host;
+  if (
+    named.host === undefined &&
+    target.host === undefined &&
+    ctx.ghHost === undefined &&
+    !same(ctx.host, "github.com")
+  )
+    throw new GateFailure(
+      `${named.repo} names no host and this clone is on ${ctx.host}; name it: -R ${ctx.host}/${named.repo}`,
+    );
+  // Any host other than the clone's needs its own token; none denies.
+  const github = same(host, ctx.host) ? ctx.github : ctx.githubFor(host);
+  return { host: host.toLowerCase(), repo: named.repo, github };
+}
+
+async function resolve(
+  ctx: WriteContext,
+  where: Located,
+  target: MergeTarget,
 ): Promise<{ repo: string; number: number }> {
-  const repo = target.repo ?? ctx.repo;
+  const { repo } = where;
   if (target.pr !== undefined) return { repo, number: target.pr };
   let branch = target.branch;
   if (branch === undefined) {
@@ -81,7 +169,7 @@ async function resolve(
     branch = tree.branch;
   }
   const head = branch;
-  const matches = (await ctx.github.listOpenPulls(repo)).filter(
+  const matches = (await where.github.listOpenPulls(repo)).filter(
     (p) => p.headRef === head,
   );
   if (matches.length !== 1 || !matches[0])
@@ -94,11 +182,11 @@ async function resolve(
 }
 
 async function dependencyState(
-  ctx: WriteContext,
+  github: GitHubPort,
   ref: { repo: string; number: number },
 ): Promise<DependencyState | null> {
   try {
-    const pr = await ctx.github.getPull(ref.repo, ref.number);
+    const pr = await github.getPull(ref.repo, ref.number);
     return { ...ref, state: pr.merged ? "merged" : pr.state };
   } catch {
     // Unread: the order gate denies it as unknown (fail closed).
@@ -110,15 +198,19 @@ async function check(
   ctx: WriteContext,
   target: MergeTarget,
 ): Promise<{ name: string; reasons: string[] }> {
-  const ref = await resolve(ctx, target);
-  const name = `${ref.repo}#${ref.number}`;
-  const pr = await ctx.github.getPull(ref.repo, ref.number);
+  const where = await locate(ctx, target);
+  const ref = await resolve(ctx, where, target);
+  const name = `${same(where.host, ctx.host) ? "" : `${where.host}/`}${ref.repo}#${ref.number}`;
+  const pr = await where.github.getPull(ref.repo, ref.number);
   const gated = { repo: ref.repo, number: ref.number, body: pr.body };
   const deps = dependencies(gated);
+  // Dependencies are on the PR's host: depends-on names no host.
   const states = deps.ok
-    ? (await Promise.all(deps.refs.map((d) => dependencyState(ctx, d)))).filter(
-        (s): s is DependencyState => s !== null,
-      )
+    ? (
+        await Promise.all(
+          deps.refs.map((d) => dependencyState(where.github, d)),
+        )
+      ).filter((s): s is DependencyState => s !== null)
     : [];
   const decision = orderGate(gated, states);
   return {

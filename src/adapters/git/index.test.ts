@@ -144,6 +144,22 @@ describe("real git", () => {
     });
   });
 
+  test("remotes list each url with gh's resolved default, in config order", async () => {
+    expect(await adapter.remotes()).toEqual([]);
+    git("remote", "add", "origin", "git@github.com:me/app.git");
+    git("remote", "add", "upstream", "https://github.com/acme/app.git");
+    git("config", "remote.upstream.gh-resolved", "base");
+    git("config", "--add", "remote.origin.pushurl", "git@github.com:x/y.git");
+    expect(await adapter.remotes()).toEqual([
+      { name: "origin", url: "git@github.com:me/app.git" },
+      {
+        name: "upstream",
+        url: "https://github.com/acme/app.git",
+        ghResolved: "base",
+      },
+    ]);
+  });
+
   test("checkout has no branch on a detached HEAD and fails outside a repository", async () => {
     git("worktree", "add", "--detach", join(root, "detached"), "HEAD");
     expect(await new GitAdapter(join(root, "detached")).checkout()).toEqual({

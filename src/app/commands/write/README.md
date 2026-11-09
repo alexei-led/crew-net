@@ -101,10 +101,18 @@ argument with the whole Bash line, or its words.
 1. `mayMerge` runs `core/order` `detectMerge`. No merge: `allow`, without
    reading the repo, a token or GitHub.
 2. `deny` from detection (`eval "$X"`, a merge after `cd`): `deny`.
-3. Each target: the repo is `-R`/URL or the cwd's repo; the PR is the number,
-   the open PR of the named branch, or the open PR of the cwd's branch. The PR
-   body is read live, then every `depends-on`, any repo, in parallel.
-   `core/order` `gate` decides: open, closed or unreadable dependencies deny.
+3. Each target: host and repo as gh picks them. A named host (`-R host/o/r`,
+   a PR URL, `gh api --hostname`, an API URL) wins. A repo named without a
+   host goes to `GH_HOST`, else github.com; in a clone on another host that is
+   ambiguous and denied (name the host). No repo named: `GH_REPO`, else gh's
+   default repo of the clone: the remote `gh repo set-default` resolved
+   (`remote.<n>.gh-resolved`), else the first of upstream, github, origin, the
+   rest. In a fork clone that is the parent, not origin. Another host is read
+   with that host's token; none, or a failing read, denies. The PR is the
+   number, the open PR of the named branch, or the open PR of the cwd's
+   branch. The PR body is read live, then every `depends-on` on the same
+   host, any repo, in parallel. `core/order` `gate` decides: open, closed or
+   unreadable dependencies deny.
 4. Any failure (PR unreadable, no branch, several PRs for one branch, no answer
    within 10 s) is `deny` with `failed: true` (fail closed).
 

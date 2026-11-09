@@ -112,6 +112,9 @@ describe.skipIf(!LIVE)("live sandbox write commands", () => {
         tokenProvider: async () => gh("auth", "token"),
         kv: store.kv,
       }),
+      githubFor: (host) => {
+        throw new Error(`no token for ${host}`);
+      },
       git: new FakeGit([{ path: dir, branch: BRANCHES[0] }]),
       store,
       files: new FilesAdapter(),

@@ -5,6 +5,7 @@ import type {
   EnvPort,
   GitHubPort,
   GitPort,
+  GitRemote,
   IssueComment,
   LandedCommit,
   ManagedHooksPolicy,
@@ -196,7 +197,7 @@ export function comment(
 export class FakeGit implements GitPort {
   fetches = 0;
   worktrees: WorktreeBranch[] = [];
-  remotes: RemoteBranch[] = [];
+  branches: RemoteBranch[] = [];
   /** `base...head` → changed paths. */
   readonly diffs = new Map<string, string[]>();
   /** `a|b` → conflicted paths. */
@@ -210,6 +211,7 @@ export class FakeGit implements GitPort {
   readonly authors = new Map<string, BranchAuthor>();
   /** Root of the clone every worktree belongs to; else each worktree is its own. */
   clone: string | undefined;
+  remoteList: GitRemote[] = [];
   /** The directory `checkout()` answers for; `at(dir)` gives a view for another. */
   cwd = "/work/r";
 
@@ -226,7 +228,7 @@ export class FakeGit implements GitPort {
       loginHint = null,
     } = extra;
     const tip = `refs/remotes/origin/${name}`;
-    this.remotes.push({ name, lastCommitAt });
+    this.branches.push({ name, lastCommitAt });
     this.diffs.set(`origin/${base}...${tip}`, paths);
     this.authors.set(`origin/${base}..${tip}`, { authorEmail, loginHint });
   }
@@ -241,6 +243,7 @@ export class FakeGit implements GitPort {
     return {
       checkout: async () => this.checkoutOf(dir),
       fetch: () => this.fetch(),
+      remotes: () => this.remotes(),
       worktreeBranches: () => this.worktreeBranches(),
       remoteBranches: () => this.remoteBranches(),
       mergeBase: (a, b) => this.mergeBase(a, b),
@@ -273,12 +276,16 @@ export class FakeGit implements GitPort {
     this.fetches++;
   }
 
+  async remotes(): Promise<GitRemote[]> {
+    return this.remoteList;
+  }
+
   async worktreeBranches(): Promise<WorktreeBranch[]> {
     return this.worktrees;
   }
 
   async remoteBranches(): Promise<RemoteBranch[]> {
-    return this.remotes;
+    return this.branches;
   }
 
   async mergeBase(a: string, b: string): Promise<string | undefined> {

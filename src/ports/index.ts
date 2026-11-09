@@ -149,6 +149,14 @@ export interface BranchAuthor {
   loginHint: string | null;
 }
 
+/** A git remote, as `gh` reads it to pick a repo. */
+export interface GitRemote {
+  name: string;
+  url: string;
+  /** `remote.<name>.gh-resolved`, set by `gh repo set-default`: `base` or `owner/repo`. */
+  ghResolved?: string;
+}
+
 export interface WorktreeBranch {
   path: string;
   branch: string;
@@ -179,6 +187,8 @@ export interface GitPort {
   fetch(): Promise<void>;
   /** The worktree, clone and branch of the directory this port runs in. */
   checkout(): Promise<Checkout>;
+  /** Remotes with a URL, in config order. */
+  remotes(): Promise<GitRemote[]>;
   /** Branches checked out in the main and linked worktrees, with their paths. */
   worktreeBranches(): Promise<WorktreeBranch[]>;
   /** Remote-tracking branches on origin. */

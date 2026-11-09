@@ -3,11 +3,12 @@
 The client merge gate (design §11, §12). Pure. The caller (`crew-net gate`) reads GitHub; these functions decide.
 
 1. `detectMerge(command, { aliases? }) → none | merge(targets) | deny(reason)` reads a Bash command line.
-2. For each target, the caller resolves the PR (`repo` missing: the repo of the Bash tool's cwd at call time; `pr` and `branch` missing: the PR of the current branch), reads its body, calls `dependencies(pr)` to learn which PRs to read, reads their state, and calls `gate(pr, states)`.
+2. For each target, the caller resolves the PR (`host` missing: gh's default host for a named repo, the remote's for the default repo; `repo` missing: gh's default repo of the Bash tool's cwd at call time; `pr` and `branch` missing: the PR of the current branch), reads its body, calls `dependencies(pr)` to learn which PRs to read, reads their state, and calls `gate(pr, states)`.
 
 ## `detectMerge`
 
-- `gh pr merge [N|URL|branch]`, any flag order, `--auto`, `gh pr -R o/r merge`: `merge` with `repo`, `pr` or `branch`.
+- `gh pr merge [N|URL|branch]`, any flag order, `--auto`, `gh pr -R [host/]o/r merge`: `merge` with `host` (from `-R host/o/r` or the URL, lower case), `repo`, `pr` or `branch`. `gh api` targets take the host from `--hostname` or a full API URL (`api.github.com` is github.com, `api.<x>.ghe.com` is `<x>.ghe.com`).
+- A merge whose host is not named on a line that sets `GH_HOST`: `deny`; the gate cannot tell which value reaches gh.
 - `gh pr merge --disable-auto`: `none`, it removes risk.
 - `gh api` to `repos/o/r/pulls/N/merge` with a non-GET method, a body or a method override: `merge`.
 - `gh api graphql` (or `api/graphql` on GHES) with `mergePullRequest`, `enablePullRequestAutoMerge` or `enqueuePullRequest`, a query from a file (`-F query=@f`, `--input`) or a non-literal field: `deny`.

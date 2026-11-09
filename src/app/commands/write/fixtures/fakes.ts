@@ -2,6 +2,7 @@ import type {
   FilesPort,
   GitHubPort,
   GitPort,
+  GitRemote,
   InboxEntry,
   JsonObject,
   JsonValue,
@@ -147,6 +148,15 @@ export class FakeGitHub implements GitHubPort {
   listReviews(): never {
     throw new Error("not used by write commands");
   }
+  listPullFiles(): never {
+    throw new Error("not used by write commands");
+  }
+  defaultBranch(): never {
+    throw new Error("not used by write commands");
+  }
+  threadState(): never {
+    throw new Error("not used by write commands");
+  }
   requestStats(): RequestStats {
     return { requests: 0, notModified: 0, writes: 0, rateLimitRemaining: null };
   }
@@ -154,9 +164,21 @@ export class FakeGitHub implements GitHubPort {
 
 /** Git with fixed worktrees; the write commands only ask where the cwd is. */
 export class FakeGit implements GitPort {
-  constructor(readonly trees: WorktreeBranch[] = []) {}
+  constructor(
+    readonly trees: WorktreeBranch[] = [],
+    readonly remoteList: GitRemote[] = [],
+  ) {}
   async worktreeBranches(): Promise<WorktreeBranch[]> {
     return this.trees;
+  }
+  async remotes(): Promise<GitRemote[]> {
+    return this.remoteList;
+  }
+  checkout(): never {
+    throw new Error("not used by write commands");
+  }
+  branchAuthor(): never {
+    throw new Error("not used by write commands");
   }
   fetch(): never {
     throw new Error("not used by write commands");
@@ -253,6 +275,8 @@ export const BRANCH = "feat-users";
 export interface Harness {
   ctx: WriteContext;
   github: FakeGitHub;
+  /** GitHub of other hosts by name; a host missing here has no token. */
+  hosts: Map<string, FakeGitHub>;
   store: FakeStore;
   files: FakeFiles;
 }
@@ -260,11 +284,17 @@ export interface Harness {
 /** A context whose cwd is ROOT on BRANCH in REPO, with ids id00001, id00002, … */
 export function harness(over: Partial<WriteContext> = {}): Harness {
   const github = new FakeGitHub();
+  const hosts = new Map<string, FakeGitHub>();
   const store = new FakeStore();
   const files = new FakeFiles();
   let n = 0;
   const ctx: WriteContext = {
     github,
+    githubFor: (host) => {
+      const other = hosts.get(host);
+      if (!other) throw new Error(`gh has no token for ${host}`);
+      return other;
+    },
     git: new FakeGit([{ path: ROOT, branch: BRANCH }]),
     store,
     files,
@@ -275,5 +305,5 @@ export function harness(over: Partial<WriteContext> = {}): Harness {
     newId: () => `id${String(++n).padStart(5, "0")}`,
     ...over,
   };
-  return { ctx, github, store, files };
+  return { ctx, github, hosts, store, files };
 }

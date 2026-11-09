@@ -10,7 +10,13 @@ import { findClosingKeywords, LOGIN_PATTERN } from "../../../protocol/index";
 
 /** What the write commands need. The CLI builds it per invocation. */
 export interface WriteContext {
+  /** GitHub of `host`. */
   github: GitHubPort;
+  /** GitHub of another host, for a merge on it; throws when it has no usable token. */
+  githubFor(host: string): GitHubPort;
+  /** `GH_HOST` and `GH_REPO` from the environment: where gh sends a command (gate). */
+  ghHost?: string;
+  ghRepo?: string;
   git: GitPort;
   store: StorePort;
   files: FilesPort;

@@ -7,6 +7,7 @@ import type {
   ManagedHooksPolicy,
   RepoIdentity,
 } from "../../ports/index";
+import { parseRepoIdentity } from "../../protocol/index";
 
 export interface CommandResult {
   stdout: string;
@@ -98,40 +99,6 @@ export class EnvCommandError extends Error {
     super(`${command} failed`);
     this.name = "EnvCommandError";
   }
-}
-
-/** Host and owner/repo of a git remote URL (HTTPS, ssh:// or SCP-style). */
-export function parseRepoIdentity(remote: string): RepoIdentity {
-  let host: string;
-  let path: string;
-  const scp = remote.match(/^[^/@\s]+@([^/:\s]+):(.*)$/);
-  if (scp) {
-    host = scp[1] ?? "";
-    path = scp[2] ?? "";
-  } else {
-    let url: URL;
-    try {
-      url = new URL(remote);
-    } catch {
-      throw new Error("Unsupported origin remote URL");
-    }
-    if (!["https:", "http:", "ssh:"].includes(url.protocol))
-      throw new Error("Unsupported origin remote URL");
-    host = url.hostname;
-    path = url.pathname.replace(/^\//, "");
-  }
-  host = host.toLowerCase();
-  // GitHub's SSH-over-443 endpoint is still github.com for the API and gh.
-  if (host === "ssh.github.com") host = "github.com";
-  if (!/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/.test(host))
-    throw new Error("Origin remote has no valid host");
-  path = path.replace(/\/$/, "").replace(/\.git$/, "");
-  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(path))
-    throw new Error("Origin remote must identify owner/repo");
-  const [owner, repo] = path.split("/");
-  if (owner === "." || owner === ".." || repo === "." || repo === "..")
-    throw new Error("Invalid origin repository");
-  return { host, repo: path };
 }
 
 type Lookup = { found: false } | { found: true; value: ManagedHooksPolicy };

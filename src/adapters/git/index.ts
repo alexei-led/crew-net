@@ -4,6 +4,7 @@ import type {
   BranchAuthor,
   Checkout,
   GitPort,
+  GitRemote,
   LandedCommit,
   MergeTreeResult,
   RemoteBranch,
@@ -156,6 +157,36 @@ export class GitAdapter implements GitPort {
         ? { branch: ref.slice("refs/heads/".length) }
         : {}),
     };
+  }
+
+  async remotes(): Promise<GitRemote[]> {
+    // Exit 1: no such keys. -z: `key\nvalue\0` records.
+    const { stdout } = await this.run(
+      ["config", "-z", "--get-regexp", "^remote\\..*\\.(url|gh-resolved)$"],
+      [0, 1],
+    );
+    const byName = new Map<string, { url?: string; ghResolved?: string }>();
+    for (const record of stdout.split("\0")) {
+      const m = /^remote\.(.+)\.(url|gh-resolved)\n([\s\S]*)$/.exec(record);
+      if (!m) continue;
+      const name = m[1] as string;
+      const value = m[3] as string;
+      const entry = byName.get(name) ?? {};
+      if (m[2] === "url") entry.url ??= value;
+      else entry.ghResolved = value;
+      byName.set(name, entry);
+    }
+    return [...byName].flatMap(([name, e]) =>
+      e.url === undefined
+        ? []
+        : [
+            {
+              name,
+              url: e.url,
+              ...(e.ghResolved ? { ghResolved: e.ghResolved } : {}),
+            },
+          ],
+    );
   }
 
   async worktreeBranches(): Promise<WorktreeBranch[]> {
