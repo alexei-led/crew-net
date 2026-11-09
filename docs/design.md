@@ -685,7 +685,7 @@ and shows `crew-net: rate-limited until 14:32`. Cursors do not move.
 
 ## 19. Code structure
 
-One TypeScript package. Node 22, no runtime dependencies besides `git` and
+One TypeScript package. Node 26 (LTS), no runtime dependencies besides `git` and
 `gh`. GitHub through built-in `fetch`, git through the binary.
 
 ```text
@@ -703,7 +703,7 @@ repo-kit/     crew-deps workflows, draft-gate snippet, crew-net.yml template
 e2e/          architecture gates, release checks, two-laptop scenario scripts
 ```
 
-Dependency rules, checked by dependency-cruiser in CI:
+Dependency rules, checked in CI by Biome `noRestrictedImports` (`biome.json`):
 
 1. `protocol` imports nothing.
 2. `core` imports only `protocol`. No `node:`, no `fetch`, no clock.

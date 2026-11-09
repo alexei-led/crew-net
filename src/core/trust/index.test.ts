@@ -499,6 +499,7 @@ describe("gate: Bash deny", () => {
     'crew-net reply k3f9 "token $GH_TOKEN"',
     "crew-net reply k3f9 `id`",
     'crew-net reply k3f9 "`id`"',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: a literal shell expansion is the input under test
     "crew-net reply k3f9 ${IFS}x",
     "gh pr view 1 > /tmp/x",
     "git log >> log.txt",

@@ -33,7 +33,7 @@ ln -s "$PWD/dist/crew-net.js" ~/.local/bin/crew-net   # any directory on PATH
 crew-net doctor
 ```
 
-You need Node 22 or newer, `git`, and a signed-in `gh`. Bun is needed for the build
+You need Node 26 or newer, `git`, and a signed-in `gh`. Bun is needed for the build
 only. `doctor` reports the Claude Code plugin and the merge gate as missing. That is
 expected here.
 

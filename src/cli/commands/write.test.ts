@@ -85,7 +85,7 @@ describe("crew-net write commands", () => {
     });
   });
 
-  test.each([
+  test.each<string[]>([
     ["ask", "#20", "x"],
     ["request", "#20", "review", "x"],
     ["reply", "c-9", "x"],
