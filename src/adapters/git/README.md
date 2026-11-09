@@ -1,12 +1,29 @@
 # Git adapter
 
-`GitAdapter` implements `GitPort` using the Git executable in a repository
-specified at construction. Git 2.38 or later is required for `merge-tree
---write-tree`. The runner can be injected for tests.
+`new GitAdapter(repoDir, runner?)` implements `GitPort` with the `git` binary.
+Git 2.38 or later is required for `merge-tree --write-tree`.
 
-Commands: `git fetch --prune origin`, `git worktree list --porcelain -z`,
-`git merge-tree --write-tree --name-only --no-messages -z -- <a> <b>`, and
-`git diff --name-only -z --no-ext-diff --no-textconv --end-of-options
-<base>...<a> --`. Paths are NUL-delimited, so names with whitespace and
-newlines are preserved. `mergeTree` returns a clean flag and conflict paths;
-Git failures throw `GitCommandError` with the arguments and stderr.
+| Method                     | Command                                                                                                             |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `fetch()`                  | `git fetch --prune origin`                                                                                          |
+| `worktreeBranches()`       | `git worktree list --porcelain -z` → `{ path, branch }`, detached and bare skipped                                  |
+| `remoteBranches()`         | `git for-each-ref refs/remotes/origin/` → `{ name, lastCommitAt, authorEmail, loginHint }`                          |
+| `mergeBase(a, b)`          | `git merge-base`; `undefined` when the refs share no history                                                        |
+| `mergeTree(a, b)`          | `git merge-tree --write-tree --name-only --no-messages -z`                                                          |
+| `changedFiles(base, head)` | `git diff --name-only -z --no-ext-diff --no-textconv --no-renames <base>...<head>`: a rename lists old and new path |
+
+- `remoteBranches` skips the `origin/HEAD` symref. `loginHint` is the login in
+  a `[id+]login@users.noreply.<host>` author email, else `null`; it is a hint
+  for a bare branch's owner (design §10), not an identity.
+- Timeouts: `fetch` 120 s, every other command 30 s. A killed command throws
+  `GitCommandError` with "timed out".
+- Git never prompts for credentials: `GIT_ASKPASS=""` (so git does not fall
+  back to `core.askPass` or `SSH_ASKPASS`), `SSH_ASKPASS` removed and
+  `GIT_TERMINAL_PROMPT=0`. SSH passphrase prompts are not suppressed (that
+  would override `core.sshCommand`); the timeout bounds them.
+- `GitCommandError` carries the args, stderr and exit code. URL userinfo and
+  GitHub token shapes (`ghp_…`, `ghs_…`, `github_pat_…`) are redacted from the
+  message and stderr; the underlying error is not kept as `cause`.
+- Paths are NUL-delimited, so names with whitespace and newlines survive.
+
+The runner `(repoDir, args, timeoutMs)` can be injected for tests.
