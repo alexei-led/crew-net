@@ -5,16 +5,13 @@ import { join } from "node:path";
 import { FileStoreAdapter } from "../adapters/store/index";
 import type { StorePort } from "../ports/index";
 import { readDeps, readRadar, readSnapshot } from "./files";
-import { comment, FakeEnv, FakeGit, FakeGitHub, pull } from "./fixtures/fakes";
+import { comment, pull } from "./fixtures/fakes";
+import { world as makeWorld, REF, REPO, START } from "./fixtures/world";
 import { notificationsCursor } from "./inbox";
 import type { AppPorts } from "./ports";
-import type { Here } from "./scope";
 import { DEFAULT_SETTINGS } from "./settings";
 import { INTERVALS, runSync } from "./sync";
 
-const REPO = "o/r";
-const REF = { host: "github.com", owner: "o", name: "r" };
-const START = Date.parse("2026-11-09T12:00:00Z");
 const dirs: string[] = [];
 
 afterEach(() => {
@@ -23,37 +20,11 @@ afterEach(() => {
 });
 
 function world() {
-  const dir = mkdtempSync(join(tmpdir(), "crew-net-app-"));
-  dirs.push(dir);
-  let now = START;
-  const clock = { now: () => now };
-  const store = new FileStoreAdapter(dir, clock);
-  const github = new FakeGitHub();
-  const git = new FakeGit();
-  const ports: AppPorts = {
-    store,
-    clock,
-    env: new FakeEnv(),
-    settings: DEFAULT_SETTINGS,
-    settingsProblems: [],
-    github: () => github,
-    git: () => git,
-  };
-  const here: Here = { ref: REF, dir: "/work/r" };
-  return {
-    store,
-    github,
-    git,
-    ports,
-    here,
-    advance: (ms: number) => {
-      now += ms;
-    },
-    sync: (p: AppPorts = ports) => runSync(p, here),
-    items: async () => (await store.inbox.list()).map((e) => e.item),
-    itemEvents: async () =>
-      (await store.events.read()).filter((e) => e.type === "item"),
-  };
+  return makeWorld((clock) => {
+    const dir = mkdtempSync(join(tmpdir(), "crew-net-app-"));
+    dirs.push(dir);
+    return new FileStoreAdapter(dir, clock);
+  });
 }
 
 /** The same store, except one method throws: a sync killed at that point. */
@@ -177,7 +148,8 @@ describe("inbox job", () => {
 
   test.each([
     ["my own comment", "me", "hello", undefined],
-    ["a bot", "dependabot[bot]", "bump", undefined],
+    ["a known bot", "dependabot", "bump", undefined],
+    ["a GitHub App", "greptile-apps[bot]", "<!-- summary -->", undefined],
     ["a person", "maria", "nice", { event: "comment", addressed: false }],
     [
       "a malformed marker",

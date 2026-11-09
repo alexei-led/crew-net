@@ -56,6 +56,10 @@ export function mentions(visible: string, login: string): boolean {
   return m !== null && sameLogin(m[1] ?? "", login);
 }
 
+/** GitHub Apps (`name[bot]`) and the known bots are never peers. */
+export const isBotLogin = (login: string): boolean =>
+  /\[bot\]$/i.test(login) || isBot(login, DEFAULT_BOTS);
+
 const isRequest = (marker: MessageMarker): boolean =>
   REQUEST_KINDS.some((kind) => kind === marker.kind);
 
@@ -135,7 +139,7 @@ async function commentItem(
   repo: string,
   comment: IssueComment,
 ): Promise<ReadComment | undefined> {
-  if (sameLogin(comment.author, me) || isBot(comment.author, DEFAULT_BOTS))
+  if (sameLogin(comment.author, me) || isBotLogin(comment.author))
     return undefined;
   const parsed = parseMessageMarker(comment.body);
   const marker = parsed?.ok ? parsed.marker : undefined;
@@ -225,8 +229,7 @@ async function readReviews(
       r.submittedAt !== null && r.submittedAt > after,
   );
   for (const review of reviews) {
-    if (sameLogin(review.author, me) || isBot(review.author, DEFAULT_BOTS))
-      continue;
+    if (sameLogin(review.author, me) || isBotLogin(review.author)) continue;
     const body = review.body.trim();
     // Inline-only reviews arrive as COMMENTED with no body: nothing to read here.
     if (review.state === "COMMENTED" && body === "") continue;

@@ -12,6 +12,8 @@ export interface Runtime {
   now(): number;
   /** Built on first use, so `--help` and `--version` touch no disk. */
   ports(): AppPorts;
+  /** Start `crew-net <args>` in the background and return at once (hooks never wait). */
+  detach(args: readonly string[]): void;
 }
 
 export interface CommandContext {

@@ -91,7 +91,9 @@ in int32 (what `kill` accepts); anything else is a corrupt lock.
 
 ## Events
 
-`events.append(event)` writes one JSON line with one `O_APPEND` write. When the
+`events.append(event)` writes one JSON line with one `O_APPEND` write.
+`events.read()` returns `events.ndjson.1` then `events.ndjson`, skipping
+lines that are not JSON objects (a torn last line). When the
 file has reached 10 MB, the next append renames it to `events.ndjson.1` under
 a mutex (replacing the older one) and starts a new file.
 

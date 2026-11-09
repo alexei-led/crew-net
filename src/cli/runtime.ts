@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -27,6 +28,15 @@ export function createRuntime(
   return {
     cwd,
     now: () => Date.now(),
+    detach(args) {
+      const script = process.argv[1];
+      if (!script) return;
+      spawn(process.execPath, [script, ...args], {
+        cwd,
+        detached: true,
+        stdio: "ignore",
+      }).unref();
+    },
     ports(): AppPorts {
       if (built) return built;
       const clock = { now: () => Date.now() };

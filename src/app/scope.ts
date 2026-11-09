@@ -18,10 +18,14 @@ export interface SyncScope {
   hosts: string[];
 }
 
-/** The working copy a CLI command runs in; active for that run even without a session. */
+/**
+ * The repo a CLI command is about. With a working copy (`dir`) it is active
+ * for that run even without a session; without one (`--repo` elsewhere) it
+ * is watched.
+ */
 export interface Here {
   ref: RepoRef;
-  dir: string;
+  dir?: string;
 }
 
 /**
@@ -50,14 +54,19 @@ export async function syncScope(
     if (repo) repo.sessions.push(session);
     else byKey.set(key, { ref, dir: session.worktree, sessions: [session] });
   }
-  if (here && !isMuted(here.ref) && !byKey.has(repoKey(here.ref))) {
-    byKey.set(repoKey(here.ref), { ...here, sessions: [] });
+  if (here?.dir && !isMuted(here.ref) && !byKey.has(repoKey(here.ref))) {
+    byKey.set(repoKey(here.ref), {
+      ref: here.ref,
+      dir: here.dir,
+      sessions: [],
+    });
   }
   const active = [...byKey.values()];
   await touchWatched(store, [...byKey.keys()], clock.now());
 
   const host = here?.ref.host ?? active[0]?.ref.host ?? "github.com";
   const watchedKeys = new Set(Object.keys(await readWatched(store)));
+  if (here && !here.dir) watchedKeys.add(repoKey(here.ref));
   for (const slug of settings.watch) {
     const ref = refFromSlug(host, slug);
     if (ref) watchedKeys.add(repoKey(ref));

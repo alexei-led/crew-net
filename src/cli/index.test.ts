@@ -8,6 +8,9 @@ const runtime: Runtime = {
   ports: () => {
     throw new Error("ports must not be built");
   },
+  detach: () => {
+    throw new Error("nothing may detach");
+  },
 };
 
 function capture() {
