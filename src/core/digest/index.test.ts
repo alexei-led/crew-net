@@ -291,7 +291,9 @@ describe("compose: Others", () => {
             {
               name: "api",
               producer: ["api/openapi/**"],
-              consumers: ["doiteng/omni:clients/reflex/**"],
+              consumers: [
+                { repo: "doiteng/omni", pattern: "clients/reflex/**" },
+              ],
             },
           ],
         },

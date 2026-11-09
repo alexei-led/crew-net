@@ -1,3 +1,5 @@
+import { type Contract, DEFAULT_CONTRACT } from "../../protocol";
+
 /** A work item: an open PR, or a pushed branch without one. */
 export interface WorkFacts {
   /** `owner/repo`. */
@@ -32,38 +34,14 @@ export interface LandedFacts {
   changedPaths: string[];
 }
 
-/**
- * Paths whose change must merge before the paths that use it (design §10.1).
- * A consumer glob may name another repo as `owner/repo:glob`.
- */
-export interface Contract {
-  name: string;
-  producer: string[];
-  consumers: string[];
-}
-
 export interface RadarConfig {
-  /** Contracts by declaring repo (`owner/repo`). A repo missing here uses `DEFAULT_CONTRACTS`. */
+  /** Contracts by declaring repo (`owner/repo`). A repo missing here uses `DEFAULT_CONTRACT`. */
   contracts: Readonly<Record<string, readonly Contract[]>>;
   /** Logins whose work is ignored, in addition to `DEFAULT_BOTS`. */
   bots: string[];
 }
 
 export const DEFAULT_BOTS = ["renovate", "dependabot", "github-actions"];
-
-/** Without a repo config: these producers, and any other path in the same repo consumes them. */
-export const DEFAULT_CONTRACTS: readonly Contract[] = [
-  {
-    name: "default",
-    producer: [
-      "**/migrations/**",
-      "**/*migration*",
-      "api/openapi/**",
-      "**/*.proto",
-    ],
-    consumers: ["**"],
-  },
-];
 
 export const DEFAULT_RADAR_CONFIG: RadarConfig = {
   contracts: {},
@@ -217,10 +195,8 @@ const contractsOf = (
   const entry = Object.entries(config.contracts).find(([r]) =>
     sameRepo(r, repo),
   );
-  return entry ? entry[1] : DEFAULT_CONTRACTS;
+  return entry ? entry[1] : [DEFAULT_CONTRACT];
 };
-
-const CROSS_REPO = /^([\w.-]+\/[\w.-]+):(.+)$/;
 
 /** Paths of `consumer` that use a contract declared in `declaring`. Producer paths are not consumers. */
 function consumerPaths(
@@ -229,11 +205,11 @@ function consumerPaths(
   consumer: WorkFacts,
 ): string[] {
   const local = sameRepo(consumer.repo, declaring);
-  const globs = contract.consumers.flatMap((glob) => {
-    const cross = CROSS_REPO.exec(glob);
-    if (!cross) return local ? [glob] : [];
-    return sameRepo(cross[1] ?? "", consumer.repo) ? [cross[2] ?? ""] : [];
-  });
+  const globs = contract.consumers
+    .filter((c) =>
+      c.repo === undefined ? local : sameRepo(c.repo, consumer.repo),
+    )
+    .map((c) => c.pattern);
   if (globs.length === 0) return [];
   const uses = matchesAny(globs);
   const produces = local ? matchesAny(contract.producer) : () => false;

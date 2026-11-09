@@ -20,8 +20,9 @@ Turns git facts into findings (design §10). Deterministic, no LLM. Pure.
   `github-actions`, with or without `[bot]` or `app/`, plus `config.bots`).
 - `order` is one finding per contract and direction; `producer` says which side
   produces. Paths are the producer's matched paths plus the consumer's.
-- Contracts come from `config.contracts[repo]`, keyed by the declaring repo. A
-  repo without an entry uses the defaults: producers `**/migrations/**`,
+- Contracts are the protocol's `Contract` (from `parseRepoConfig`), in
+  `config.contracts[repo]`, keyed by the declaring repo. A repo without an
+  entry uses `DEFAULT_CONTRACT`: producers `**/migrations/**`,
   `**/*migration*`, `api/openapi/**`, `**/*.proto`; consumers any other path in
   the same repo.
 - `key` = kind, contract and direction (`order` only), both work items, and the

@@ -1,5 +1,4 @@
-/** Item kinds that may start a wake turn: crew requests addressed to me. */
-export const WAKE_KINDS = ["ask", "review", "fix", "bug"] as const;
+import { REQUEST_KINDS } from "../../protocol";
 
 /** One inbound item, as far as delivery cares. */
 export interface DeliveryItem {
@@ -70,7 +69,7 @@ export function isActive(
 }
 
 const isWakeKind = (kind: string): boolean =>
-  (WAKE_KINDS as readonly string[]).includes(kind);
+  (REQUEST_KINDS as readonly string[]).includes(kind);
 
 /**
  * Decide what to do with one inbound item now (design §9.4).

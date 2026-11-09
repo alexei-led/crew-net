@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { type Contract, parseRepoConfig } from "../../protocol";
 import {
-  type Contract,
   classify,
   type Finding,
   type LandedFacts,
@@ -198,7 +198,10 @@ describe("classify: order with declared contracts", () => {
   const api: Contract = {
     name: "api",
     producer: ["api/openapi/**"],
-    consumers: ["web/src/api/**", `${OMNI}:clients/reflex/**`],
+    consumers: [
+      { pattern: "web/src/api/**" },
+      { repo: OMNI, pattern: "clients/reflex/**" },
+    ],
   };
   const config: Partial<RadarConfig> = { contracts: { [REPO]: [api] } };
   const order = (mine: WorkFacts, theirs: WorkFacts) =>
@@ -267,6 +270,29 @@ describe("classify: order with declared contracts", () => {
     );
     expect(findings.map((f) => f.contract)).toEqual(["api"]);
   });
+});
+
+test("a parsed crew-net.yml drives order findings across repos", () => {
+  const parsed = parseRepoConfig(
+    [
+      "contracts:",
+      "  - name: api",
+      "    producer: [api/openapi/**]",
+      `    consumers: [web/src/api/**, "${OMNI}:clients/reflex/**"]`,
+    ].join("\n"),
+  );
+  if (!parsed.ok) throw new Error(parsed.detail);
+  const findings = classify(
+    {
+      mine: work("a", ["clients/reflex/u.ts"], { repo: OMNI }),
+      theirs: work("b", ["api/openapi/u.yaml"]),
+      merge: clean,
+    },
+    { contracts: { [REPO]: parsed.config.contracts } },
+  );
+  expect(findings.map((f) => [f.kind, f.contract, f.producer])).toEqual([
+    ["order", "api", "other"],
+  ]);
 });
 
 describe("stale", () => {
