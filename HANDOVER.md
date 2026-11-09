@@ -1,3 +1,5 @@
+> Superseded on 2026-11-09 by [docs/design.md](docs/design.md). Kept as history.
+
 # crew-net handover
 
 From: the Claude Code session that led pi-crew work on 2026-11-06 (intercom name `lead-98AC142D`).
