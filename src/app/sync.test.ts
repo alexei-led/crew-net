@@ -668,6 +668,46 @@ describe("fetch and radar", () => {
     );
   });
 
+  test("a squash-merged branch nobody deleted is not bare work", async () => {
+    const w = world();
+    w.git.local("feat/mine", ["web/a.ts"]);
+    w.git.remote("dmitri/merged", ["web/a.ts"], {
+      loginHint: "dmitri",
+      lastCommitAt: "2026-11-09T11:00:00Z",
+      merged: true,
+    });
+    w.git.remote("dmitri/open", ["web/a.ts"], {
+      loginHint: "dmitri",
+      lastCommitAt: "2026-11-09T11:00:00Z",
+    });
+    await w.sync();
+    const radar = await readRadar(w.store, REF);
+    expect(radar?.work.map((x) => x.branch)).toEqual([
+      "feat/mine",
+      "dmitri/open",
+    ]);
+    expect(radar?.findings.map((f) => f.other.branch)).toEqual(["dmitri/open"]);
+  });
+
+  test("a failing content check keeps the bare branch and the pass", async () => {
+    const w = world();
+    w.git.local("feat/mine", ["web/a.ts"]);
+    w.git.remote("dmitri/x", ["web/a.ts"], {
+      loginHint: "dmitri",
+      lastCommitAt: "2026-11-09T11:00:00Z",
+    });
+    w.git.sameContent = async () => {
+      throw new Error("git timed out");
+    };
+    const report = await w.sync();
+    expect(report.jobs.find((j) => j.job.startsWith("radar"))?.outcome).toBe(
+      "ran",
+    );
+    expect(
+      (await readRadar(w.store, REF))?.findings.map((f) => f.other.branch),
+    ).toEqual(["dmitri/x"]);
+  });
+
   test("bare branches are diffed against the default branch GitHub names, read once a day", async () => {
     const w = world();
     w.github.defaults.set(REPO, "dev");

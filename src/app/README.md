@@ -61,7 +61,9 @@ becomes the notice `crew-net: rate-limited until HH:MM` in `sync:status`.
   from GitHub (`GET /repos/{o}/{r}`, kv `default-branch:<repo>`, read once a
   day; the last known one when GitHub cannot be read). A bare branch's
   owner is the author of its newest own non-merge commit, so merging main
-  into it does not make the merger its owner.
+  into it does not make the merger its owner. A bare branch whose changed
+  paths already read the same on the default branch was squash- or
+  rebase-merged and not deleted; it is left out.
 - **Cross-repo contracts (§10.1).** A contract consumer `owner/repo:glob`
   names another repo. When that repo is watched, others' open PRs there
   (from its snapshot) are compared with my work for `order` only, whatever

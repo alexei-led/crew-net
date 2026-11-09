@@ -209,6 +209,8 @@ export class FakeGit implements GitPort {
   readonly mergeTrees: string[] = [];
   /** `base..tip` → the branch's own last author. */
   readonly authors = new Map<string, BranchAuthor>();
+  /** `a|b` pairs whose changed paths read the same: the branch is on the base already. */
+  readonly sameContents = new Set<string>();
   /** Root of the clone every worktree belongs to; else each worktree is its own. */
   clone: string | undefined;
   remoteList: GitRemote[] = [];
@@ -219,10 +221,14 @@ export class FakeGit implements GitPort {
   remote(
     name: string,
     paths: string[],
-    extra: Partial<RemoteBranch & BranchAuthor> & { base?: string } = {},
+    extra: Partial<RemoteBranch & BranchAuthor> & {
+      base?: string;
+      merged?: boolean;
+    } = {},
   ): void {
     const {
       base = "main",
+      merged = false,
       lastCommitAt = "2026-11-09T09:00:00Z",
       authorEmail = "someone@example.test",
       loginHint = null,
@@ -231,6 +237,7 @@ export class FakeGit implements GitPort {
     this.branches.push({ name, lastCommitAt });
     this.diffs.set(`origin/${base}...${tip}`, paths);
     this.authors.set(`origin/${base}..${tip}`, { authorEmail, loginHint });
+    if (merged) this.sameContents.add(`origin/${base}|${tip}`);
   }
 
   local(branch: string, paths: string[], base = "main"): void {
@@ -250,6 +257,7 @@ export class FakeGit implements GitPort {
       mergeBase: (a, b) => this.mergeBase(a, b),
       mergeTree: (a, b) => this.mergeTree(a, b),
       changedFiles: (base, head) => this.changedFiles(base, head),
+      sameContent: (a, b, paths) => this.sameContent(a, b, paths),
       showFile: (ref, path) => this.showFile(ref, path),
       branchAuthor: (base, tip) => this.branchAuthor(base, tip),
       landed: (from, to) => this.landed(from, to),
@@ -309,6 +317,14 @@ export class FakeGit implements GitPort {
     const paths = this.diffs.get(`${base}...${head}`);
     if (!paths) throw new Error(`unknown revision ${head}`);
     return paths;
+  }
+
+  async sameContent(
+    a: string,
+    b: string,
+    _paths: readonly string[],
+  ): Promise<boolean> {
+    return this.sameContents.has(`${a}|${b}`);
   }
 
   async showFile(ref: string, path: string): Promise<string | undefined> {
