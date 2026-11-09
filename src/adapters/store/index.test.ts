@@ -21,7 +21,6 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 const item = (id = "comment:42", text = "hello"): ItemEvent => ({
-  v: 1,
   type: "item",
   id,
   kind: "message",

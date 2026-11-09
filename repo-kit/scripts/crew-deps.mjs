@@ -3,49 +3,59 @@ import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 // Keep this dependency-free reader in sync with src/protocol/state-block.ts.
+const STATES = ["planning", "building", "review", "blocked"];
+const KNOWN_FIELDS = new Set(["state", "scope", "depends-on", "lead"]);
+const OPEN = /<!--[ \t]*crew-net(?=\s|-->)/;
+const LEGACY_TAG = /^v\d+(?:\.\d+)*(?=\s|$)/;
+const REF = /^(?:[\w.-]+\/[\w.-]+)?#\d+$/;
+const KEY = /^[a-z][a-z0-9-]*$/;
+
+const list = (value) =>
+  (value ?? "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+
 export function parseStateBlock(body) {
-  const match = /<!--[ \t]*crew-net[ \t]+v(\d+)(?:\.\d+)*\b([\s\S]*?)-->/.exec(
-    body,
-  );
-  if (!match) return null;
-  const version = Number(match[1]);
-  if (version > 1) return { ok: false, reason: "unsupported-version", version };
-  if (version < 1)
-    return { ok: false, reason: "malformed", detail: `version ${version}` };
+  const open = OPEN.exec(body);
+  if (!open) return null;
+  const start = open.index + open[0].length;
+  const end = body.indexOf("-->", start);
+  if (end < 0)
+    return { ok: false, reason: "malformed", detail: "unterminated block" };
   const fields = new Map();
-  for (const line of match[2].split("\n")) {
+  for (const line of body
+    .slice(start, end)
+    .trimStart()
+    .replace(LEGACY_TAG, "")
+    .split("\n")) {
     const colon = line.indexOf(":");
     if (colon < 0) continue;
     const key = line.slice(0, colon).trim().toLowerCase();
     if (key && !fields.has(key)) fields.set(key, line.slice(colon + 1).trim());
   }
-  const lead = fields.get("lead");
-  if (!lead) return { ok: false, reason: "malformed", detail: "missing lead" };
-  const state = fields.get("state");
-  if (!["planning", "building", "review", "blocked"].includes(state))
-    return {
-      ok: false,
-      reason: "malformed",
-      detail: "missing or unknown state",
-    };
-  const list = (value) =>
-    (value ?? "")
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean);
-  const dependsOn = list(fields.get("depends-on"));
-  const badRef = dependsOn.find(
-    (ref) => !/^(?:[\w.-]+\/[\w.-]+)?#\d+$/.test(ref),
-  );
-  if (badRef !== undefined)
-    return {
-      ok: false,
-      reason: "malformed",
-      detail: `bad depends-on ref ${badRef}`,
-    };
+  const warnings = [];
+  const rawState = fields.get("state");
+  const state = STATES.find((s) => s === rawState);
+  if (rawState !== undefined && state === undefined)
+    warnings.push({ field: "state", value: rawState, detail: "unknown state" });
+  const dependsOn = [];
+  for (const ref of list(fields.get("depends-on"))) {
+    if (REF.test(ref)) dependsOn.push(ref);
+    else warnings.push({ field: "depends-on", value: ref, detail: "bad ref" });
+  }
+  const extra = [...fields]
+    .filter(([key]) => KEY.test(key) && !KNOWN_FIELDS.has(key))
+    .map(([key, value]) => ({ key, value }));
   return {
     ok: true,
-    state: { lead, state, scope: list(fields.get("scope")), dependsOn },
+    state: {
+      ...(state === undefined ? {} : { state }),
+      scope: list(fields.get("scope")),
+      dependsOn,
+      extra,
+    },
+    warnings,
   };
 }
 
@@ -60,22 +70,24 @@ function api(path, ...args) {
   );
 }
 
-function check(file, repo, prNumber) {
-  const body = readFileSync(file, "utf8");
-  if (!/^\d+$/.test(prNumber ?? ""))
-    throw new Error("GITHUB_PR_NUMBER is required");
-  const current = api(`repos/${repo}/pulls/${prNumber}`);
-  if ((current.body ?? "") !== body)
-    throw new Error("PR body changed since this event; rerun the latest check");
+// Prints one line per dependency and returns true when any blocks the merge.
+// A depends-on value the reader had to drop blocks too: skipping it would read
+// as "no dependency".
+function evaluate(body, repo) {
   const result = parseStateBlock(body);
   if (!result) {
-    if (/<!--[ \t]*crew-net\b/i.test(body))
-      throw new Error("Malformed or incomplete crew-net state block");
-    return console.log("No crew-net state block; no dependencies.");
+    console.log("No crew-net state block; no dependencies.");
+    return false;
   }
   if (!result.ok)
     throw new Error(`Invalid crew-net state block: ${JSON.stringify(result)}`);
   let blocked = false;
+  for (const warning of result.warnings) {
+    console.error(
+      `Unreadable ${warning.field} value "${warning.value}": ${warning.detail}.`,
+    );
+    if (warning.field === "depends-on") blocked = true;
+  }
   for (const ref of result.state.dependsOn) {
     const number = sameRepo(ref, repo);
     if (number === null) {
@@ -87,6 +99,37 @@ function check(file, repo, prNumber) {
       console.error(`Dependency ${ref} is not merged.`);
       blocked = true;
     } else console.log(`Dependency ${ref} is merged.`);
+  }
+  return blocked;
+}
+
+function check(file, repo, prNumber) {
+  const body = readFileSync(file, "utf8");
+  if (!/^\d+$/.test(prNumber ?? ""))
+    throw new Error("GITHUB_PR_NUMBER is required");
+  const current = api(`repos/${repo}/pulls/${prNumber}`);
+  if ((current.body ?? "") !== body)
+    throw new Error("PR body changed since this event; rerun the latest check");
+  if (evaluate(body, repo)) process.exitCode = 1;
+}
+
+// GitHub names the merge queue branch gh-readonly-queue/<base>/pr-<N>-<sha>.
+// The name carries one PR number: the PR the group was built for.
+export function queuePullNumbers(headRef) {
+  const match =
+    /^(?:refs\/heads\/)?gh-readonly-queue\/.+\/pr-(\d+)-[0-9a-f]{7,40}$/.exec(
+      headRef ?? "",
+    );
+  if (!match) throw new Error(`Unrecognised merge queue ref: ${headRef}`);
+  return [match[1]];
+}
+
+function checkQueue(headRef, repo) {
+  let blocked = false;
+  for (const number of queuePullNumbers(headRef)) {
+    console.log(`Merge queue entry for PR #${number}.`);
+    const pull = api(`repos/${repo}/pulls/${number}`);
+    if (evaluate(pull.body ?? "", repo)) blocked = true;
   }
   if (blocked) process.exitCode = 1;
 }
@@ -101,13 +144,15 @@ function rerun(repo, mergedNumber) {
   let failed = false;
   for (const pr of pages.flat()) {
     const result = parseStateBlock(pr.body ?? "");
-    if (!result?.ok) {
-      if (result)
-        console.error(
-          `PR #${pr.number}: invalid state block; its check remains failed.`,
-        );
+    if (result && !result.ok) {
+      // Cannot tell whether it depends on the merged PR: fail the job so it is seen.
+      console.error(
+        `PR #${pr.number}: unreadable state block (${result.detail}); not rerun.`,
+      );
+      failed = true;
       continue;
     }
+    if (!result) continue;
     if (
       !result.state.dependsOn.some((ref) => {
         const number = sameRepo(ref, repo);
@@ -153,12 +198,13 @@ if (
     const repo = process.env.GITHUB_REPOSITORY;
     if (!repo || !arg)
       throw new Error(
-        "Usage: crew-deps.mjs check BODY_FILE | rerun MERGED_PR_NUMBER (GITHUB_REPOSITORY required)",
+        "Usage: crew-deps.mjs check BODY_FILE | check-queue QUEUE_HEAD_REF | rerun MERGED_PR_NUMBER (GITHUB_REPOSITORY required)",
       );
     if (command === "parse")
       console.log(JSON.stringify(parseStateBlock(readFileSync(arg, "utf8"))));
     else if (command === "check")
       check(arg, repo, process.env.GITHUB_PR_NUMBER);
+    else if (command === "check-queue") checkQueue(arg, repo);
     else if (command === "rerun" && /^\d+$/.test(arg)) rerun(repo, arg);
     else throw new Error("Unknown command or invalid PR number");
   } catch (error) {

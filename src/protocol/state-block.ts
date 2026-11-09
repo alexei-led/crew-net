@@ -1,29 +1,43 @@
-import { LOGIN_PATTERN, NAME_PATTERN } from "./address";
 import {
   type ClosingKeywordMatch,
   findClosingKeywords,
 } from "./closing-keywords";
 
-export const STATE_BLOCK_VERSION = 1;
-
 export const PR_STATES = ["planning", "building", "review", "blocked"] as const;
 export type PrState = (typeof PR_STATES)[number];
 
-/** The machine-readable block in a draft PR body. */
+/** A field this reader models. Everything else is kept as an `extra` field. */
+const KNOWN_FIELDS = new Set(["state", "scope", "depends-on", "lead"]);
+
+/** One field the reader does not model. Written back unchanged. */
+export interface ExtraField {
+  /** Lowercase key, as read. */
+  key: string;
+  value: string;
+}
+
+/** The machine-readable block in a PR or Issue body. */
 export interface StateBlock {
-  /** Address of the owning lead, `developer/name`. */
-  lead: string;
-  state: PrState;
+  /** Missing or unrecognised `state`. Then the work item's state comes from draft or ready. */
+  state?: PrState;
   /** Paths the work expects to touch. */
   scope: string[];
   /** PR refs: `#N` or `owner/repo#N`. */
   dependsOn: string[];
+  /** Fields this reader does not know, in document order. */
+  extra: ExtraField[];
+}
+
+/** A value the reader skipped. The rest of the block is still usable. */
+export interface StateBlockWarning {
+  field: string;
+  value: string;
+  detail: string;
 }
 
 /** Result of reading a block. A missing block is `null`, not a result. */
 export type ParseStateBlockResult =
-  | { ok: true; state: StateBlock }
-  | { ok: false; reason: "unsupported-version"; version: number }
+  | { ok: true; state: StateBlock; warnings: StateBlockWarning[] }
   | { ok: false; reason: "malformed"; detail: string };
 
 export type RenderStateBlockError =
@@ -38,14 +52,17 @@ export type ReplaceStateBlockResult =
   | { ok: true; body: string }
   | {
       ok: false;
-      error:
-        | RenderStateBlockError
-        | { reason: "unsupported-version"; version: number };
+      error: RenderStateBlockError | { reason: "unterminated-block" };
     };
 
-const BLOCK = /<!--[ \t]*crew-net[ \t]+v(\d+)(?:\.\d+)*\b([\s\S]*?)-->/;
+/** Opening tag. The tag must be followed by whitespace or the closing `-->`, so `<!-- crew-net:msg` does not match. */
+const OPEN = /<!--[ \t]*crew-net(?=\s|-->)/;
+const CLOSE = "-->";
 const REF = /^(?:[\w.-]+\/[\w.-]+)?#\d+$/;
-const LEAD = new RegExp(`^${LOGIN_PATTERN}/${NAME_PATTERN}$`);
+const KEY = /^[a-z][a-z0-9-]*$/;
+
+/** Version tag of the old format: `v1`, `v1.3`. Read and dropped. */
+const LEGACY_TAG = /^v\d+(?:\.\d+)*(?=\s|$)/;
 
 function readFields(inner: string): Map<string, string> {
   const fields = new Map<string, string>();
@@ -58,51 +75,68 @@ function readFields(inner: string): Map<string, string> {
   return fields;
 }
 
+/** Fields this reader does not model, first occurrence of each key. Keys that could not be written back are dropped. */
+function readExtras(fields: Map<string, string>): ExtraField[] {
+  return [...fields]
+    .filter(([key]) => KEY.test(key) && !KNOWN_FIELDS.has(key))
+    .map(([key, value]) => ({ key, value }));
+}
+
 const list = (value: string | undefined): string[] =>
   (value ?? "")
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
 
-function readBlock(match: RegExpExecArray): ParseStateBlockResult {
-  const version = Number(match[1]);
-  if (version > STATE_BLOCK_VERSION)
-    return { ok: false, reason: "unsupported-version", version };
-  if (version < STATE_BLOCK_VERSION) {
-    return { ok: false, reason: "malformed", detail: `version ${version}` };
+function readBlock(inner: string): ParseStateBlockResult {
+  const fields = readFields(inner.trimStart().replace(LEGACY_TAG, ""));
+  const warnings: StateBlockWarning[] = [];
+
+  const rawState = fields.get("state");
+  const state = PR_STATES.find((s) => s === rawState);
+  if (rawState !== undefined && state === undefined) {
+    warnings.push({
+      field: "state",
+      value: rawState,
+      detail: "unknown state",
+    });
   }
-  const fields = readFields(match[2] ?? "");
-  const lead = fields.get("lead");
-  if (!lead) return { ok: false, reason: "malformed", detail: "missing lead" };
-  const state = PR_STATES.find((s) => s === fields.get("state"));
-  if (!state)
-    return {
-      ok: false,
-      reason: "malformed",
-      detail: "missing or unknown state",
-    };
-  const dependsOn = list(fields.get("depends-on"));
-  const badRef = dependsOn.find((ref) => !REF.test(ref));
-  if (badRef !== undefined) {
-    return {
-      ok: false,
-      reason: "malformed",
-      detail: `bad depends-on ref ${badRef}`,
-    };
+
+  // Bad refs are dropped here. The gate must still fail closed on them: see warnings.
+  const dependsOn: string[] = [];
+  for (const ref of list(fields.get("depends-on"))) {
+    if (REF.test(ref)) dependsOn.push(ref);
+    else warnings.push({ field: "depends-on", value: ref, detail: "bad ref" });
   }
+
   return {
     ok: true,
-    state: { lead, state, scope: list(fields.get("scope")), dependsOn },
+    state: {
+      ...(state === undefined ? {} : { state }),
+      scope: list(fields.get("scope")),
+      dependsOn,
+      extra: readExtras(fields),
+    },
+    warnings,
   };
 }
 
 /**
- * Read the first `<!-- crew-net v1 ... -->` block. Unknown fields are ignored.
- * Returns null when the body has no block. Never throws.
+ * Read the first crew-net state block. Accepts the unversioned form and the
+ * old `<!-- crew-net v1 ... -->` form. `lead` is accepted and ignored. Unknown
+ * fields are kept. A bad value is skipped and reported in `warnings`, so the
+ * rest of the block still reads. Returns null only when no block opens. Never
+ * throws.
  */
 export function parseStateBlock(body: string): ParseStateBlockResult | null {
-  const match = BLOCK.exec(body);
-  return match ? readBlock(match) : null;
+  const open = OPEN.exec(body);
+  if (!open) return null;
+  const start = open.index + open[0].length;
+  const end = body.indexOf(CLOSE, start);
+  if (end < 0) {
+    return { ok: false, reason: "malformed", detail: "unterminated block" };
+  }
+  return readBlock(body.slice(start, end));
 }
 
 const breaksComment = (value: string): boolean => /[\r\n]|-->/.test(value);
@@ -111,14 +145,20 @@ function invalid(field: string, detail: string): RenderStateBlockResult {
   return { ok: false, error: { reason: "invalid", field, detail } };
 }
 
+function validExtra(field: ExtraField): string | null {
+  if (!KEY.test(field.key) || KNOWN_FIELDS.has(field.key)) return "bad key";
+  if (breaksComment(field.value) || field.value !== field.value.trim())
+    return "bad value";
+  return null;
+}
+
 /**
  * Write a block. Refuses a block that holds a closing keyword (the repo's
  * `pr-body-keywords` check scans HTML comments) or a value that would break
  * the comment or the field syntax.
  */
 export function renderStateBlock(state: StateBlock): RenderStateBlockResult {
-  if (!LEAD.test(state.lead)) return invalid("lead", "expected developer/name");
-  if (!PR_STATES.includes(state.state))
+  if (state.state !== undefined && !PR_STATES.includes(state.state))
     return invalid("state", "unknown state");
   for (const path of state.scope) {
     if (!path || path.includes(",") || breaksComment(path))
@@ -127,14 +167,16 @@ export function renderStateBlock(state: StateBlock): RenderStateBlockResult {
   for (const ref of state.dependsOn) {
     if (!REF.test(ref)) return invalid("depends-on", ref);
   }
-  const lines = [
-    `<!-- crew-net v${STATE_BLOCK_VERSION}`,
-    `lead: ${state.lead}`,
-    `state: ${state.state}`,
-  ];
+  for (const field of state.extra) {
+    const detail = validExtra(field);
+    if (detail) return invalid(`extra:${field.key}`, detail);
+  }
+  const lines = ["<!-- crew-net"];
+  if (state.state !== undefined) lines.push(`state: ${state.state}`);
   if (state.scope.length) lines.push(`scope: ${state.scope.join(", ")}`);
   if (state.dependsOn.length)
     lines.push(`depends-on: ${state.dependsOn.join(", ")}`);
+  for (const { key, value } of state.extra) lines.push(`${key}: ${value}`);
   lines.push("-->");
   const block = lines.join("\n");
   const matches = findClosingKeywords(block);
@@ -144,33 +186,36 @@ export function renderStateBlock(state: StateBlock): RenderStateBlockResult {
 }
 
 /**
- * Put `state` into a PR body: replace the existing block in place, or append
- * one when there is none. Other text is untouched. Refuses to overwrite a block
- * of a higher major version.
+ * Put a state into a PR body: replace the existing block in place, or append
+ * one when there is none. Other text is untouched. Unknown fields of the
+ * existing block are kept. `lead` is dropped. Refuses to write over a block
+ * that does not close, because it would hide the rest of the body.
  */
 export function replaceStateBlock(
   body: string,
-  state: StateBlock,
+  state: Omit<StateBlock, "extra">,
 ): ReplaceStateBlockResult {
-  const rendered = renderStateBlock(state);
-  if (!rendered.ok) return rendered;
-  const match = BLOCK.exec(body);
-  if (!match) {
+  const open = OPEN.exec(body);
+  if (!open) {
+    const rendered = renderStateBlock({ ...state, extra: [] });
+    if (!rendered.ok) return rendered;
     const separator = body === "" ? "" : body.endsWith("\n") ? "\n" : "\n\n";
     return { ok: true, body: `${body}${separator}${rendered.block}\n` };
   }
-  const existing = readBlock(match);
-  if (!existing.ok && existing.reason === "unsupported-version") {
-    return {
-      ok: false,
-      error: { reason: "unsupported-version", version: existing.version },
-    };
-  }
+  const start = open.index + open[0].length;
+  const end = body.indexOf(CLOSE, start);
+  if (end < 0) return { ok: false, error: { reason: "unterminated-block" } };
+  const existing = readBlock(body.slice(start, end));
+  if (!existing.ok)
+    return { ok: false, error: { reason: "unterminated-block" } };
+  const rendered = renderStateBlock({
+    ...state,
+    extra: existing.state.extra,
+  });
+  if (!rendered.ok) return rendered;
+  const close = end + CLOSE.length;
   return {
     ok: true,
-    body:
-      body.slice(0, match.index) +
-      rendered.block +
-      body.slice(match.index + match[0].length),
+    body: body.slice(0, open.index) + rendered.block + body.slice(close),
   };
 }
