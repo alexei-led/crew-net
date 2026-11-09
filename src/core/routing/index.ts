@@ -6,6 +6,8 @@ export interface RouteItem {
   thread?: number;
   /** Head branch of the PR; absent for Issues and items without a thread. */
   branch?: string;
+  /** `owner/repo` of the PR head when it differs from `repo` (a fork). Fork branches are never checked out here. */
+  headRepo?: string;
 }
 
 export type SessionRole = "lead" | "worker";
@@ -75,7 +77,9 @@ export function route(
   };
 
   const { branch } = item;
-  if (branch !== undefined) {
+  const fromFork =
+    item.headRepo !== undefined && !same(item.headRepo, item.repo);
+  if (branch !== undefined && !fromFork) {
     const checkedOut = sessions.filter(
       (s) => same(s.repo, item.repo) && s.branch === branch,
     );

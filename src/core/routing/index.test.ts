@@ -67,6 +67,21 @@ describe("route", () => {
       [session("a", { branch: "feat/users" })],
       to("a", "checkout"),
     ],
+    [
+      "fork PR head branch does not match a local checkout",
+      { ...onPr, branch: "main", headRepo: "someone/reflex" },
+      [
+        session("a", { branch: "main", lastActiveMs: 1 }),
+        session("b", { branch: "dev", lastActiveMs: 5 }),
+      ],
+      to("b", "repo"),
+    ],
+    [
+      "head repo equal to the repo is not a fork",
+      { ...onPr, headRepo: "DOITENG/reflex" },
+      [session("a", { branch: "feat/users" })],
+      to("a", "checkout"),
+    ],
     // 2. clone
     [
       "branch in a worker's worktree goes to the lead of that clone",

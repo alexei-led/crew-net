@@ -45,7 +45,7 @@ export interface Contract {
 export interface RadarConfig {
   /** Contracts by declaring repo (`owner/repo`). A repo missing here uses `DEFAULT_CONTRACTS`. */
   contracts: Readonly<Record<string, readonly Contract[]>>;
-  /** Logins whose work is ignored. */
+  /** Logins whose work is ignored, in addition to `DEFAULT_BOTS`. */
   bots: string[];
 }
 
@@ -67,7 +67,7 @@ export const DEFAULT_CONTRACTS: readonly Contract[] = [
 
 export const DEFAULT_RADAR_CONFIG: RadarConfig = {
   contracts: {},
-  bots: DEFAULT_BOTS,
+  bots: [],
 };
 
 export type FindingKind = "conflict" | "overlap" | "order" | "stale";
@@ -113,7 +113,11 @@ const sameRepo = (a: string, b: string): boolean =>
 const escapeRegex = (s: string): string =>
   s.replace(/[.+^${}()|[\]\\?]/g, "\\$&");
 
-/** `**` crosses `/`, `**` followed by `/` also matches zero directories, `*` stays inside one segment. */
+/**
+ * `**` crosses `/`, `**` followed by `/` also matches zero directories, `*`
+ * stays inside one segment, `?` is one character other than `/`. Nothing else
+ * is special.
+ */
 function globToRegex(glob: string): RegExp {
   let out = "";
   for (let i = 0; i < glob.length; i++) {
@@ -128,6 +132,8 @@ function globToRegex(glob: string): RegExp {
       }
     } else if (c === "*") {
       out += "[^/]*";
+    } else if (c === "?") {
+      out += "[^/]";
     } else {
       out += escapeRegex(c);
     }
@@ -263,9 +269,10 @@ function orderFindings(
   return out;
 }
 
+/** Configured bots add to `DEFAULT_BOTS`; contracts default to none declared. */
 const resolve = (config: Partial<RadarConfig>): RadarConfig => ({
-  ...DEFAULT_RADAR_CONFIG,
-  ...config,
+  contracts: config.contracts ?? DEFAULT_RADAR_CONFIG.contracts,
+  bots: [...DEFAULT_BOTS, ...(config.bots ?? [])],
 });
 
 /**

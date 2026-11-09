@@ -29,6 +29,6 @@ Turns git facts into findings (design §10). Deterministic, no LLM. Pure.
 - `mayWake` is always `false`: findings go to the band and the next prompt.
 
 `matchGlob` follows `.gitignore` placement: `**` crosses `/`, `*` stays in one
-segment; a trailing `/` matches only a directory (everything below it); a
+segment, `?` is one character other than `/` (no `[...]` classes); a trailing `/` matches only a directory (everything below it); a
 leading or middle `/` anchors at the root, otherwise the glob matches at any
 depth; a glob that matches a directory matches everything below it.

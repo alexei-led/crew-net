@@ -130,6 +130,11 @@ describe("classify: conflict and overlap", () => {
       [],
     );
     expect(kinds(run(work("a", ["x"]), theirs))).toEqual(["overlap"]);
+    expect(
+      run(work("a", ["x"]), work("renovate", ["x"]), clean, {
+        bots: ["ci-bot"],
+      }),
+    ).toEqual([]);
   });
 
   test("dedupe key changes with the file set, not with order of paths", () => {
@@ -330,6 +335,9 @@ describe("matchGlob", () => {
     ["a.b", "a.b", true],
     ["a.b", "aXb", false],
     ["a(b)+", "a(b)+", true],
+    ["api/v?/**", "api/v2/x.yaml", true],
+    ["api/v?/**", "api/v22/x.yaml", false],
+    ["a?b", "a/b", false],
     ["**", "anything/at/all", true],
     ["", "a", false],
     // Trailing slash: a directory prefix.

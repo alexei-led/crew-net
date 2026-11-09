@@ -78,8 +78,10 @@ const isWakeKind = (kind: string): boolean =>
  * - Wake: idle, a crew request (`ask review fix bug`), wakeable route,
  *   auto-wake `reply`, and no wake turn in the last 10 min: `band` + `wake`.
  * - Otherwise: `band` + `inject-next-prompt`.
- * A running turn (a wake turn included) makes the session active, so items
- * arriving during a wake turn wait for the next prompt.
+ * A running turn (a wake turn included) makes the session active.
+ * The decision holds only for `nowMs`: callers run it again on each tick for
+ * every item not yet delivered, so an ask held back by a running turn or the
+ * wake cooldown wakes the session once those clear.
  */
 export function decide(
   item: DeliveryItem,
@@ -87,7 +89,10 @@ export function decide(
   settings: Partial<DeliverySettings>,
   nowMs: number,
 ): Action[] {
-  const resolved = { ...DEFAULT_DELIVERY_SETTINGS, ...settings };
+  const resolved: DeliverySettings = {
+    idleMinutes: settings.idleMinutes ?? DEFAULT_DELIVERY_SETTINGS.idleMinutes,
+    autoWake: settings.autoWake ?? DEFAULT_DELIVERY_SETTINGS.autoWake,
+  };
   if (signals.starting) return ["digest"];
   const wake =
     resolved.autoWake === "reply" &&

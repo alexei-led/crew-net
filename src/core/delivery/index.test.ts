@@ -130,6 +130,30 @@ describe("decide", () => {
     expect(decide(item, signals, settings, NOW)).toEqual(expected);
   });
 
+  test("undefined settings from parsed config fall back to the defaults", () => {
+    const settings = JSON.parse(
+      '{"idleMinutes":null,"autoWake":null}',
+    ) as Partial<DeliverySettings>;
+    expect(
+      decide(ask, sig({ lastTypingMs: NOW - MIN }), settings, NOW),
+    ).toEqual(NEXT);
+    expect(decide(ask, idle, settings, NOW)).toEqual(WAKE);
+  });
+
+  test("an ask held back by the cooldown wakes once it clears", () => {
+    const signals = sig({ lastWakeAtMs: NOW - 3 * MIN });
+    expect(decide(ask, signals, {}, NOW)).toEqual(NEXT);
+    expect(decide(ask, signals, {}, NOW + 7 * MIN)).toEqual(WAKE);
+  });
+
+  test("an ask held back by a running turn wakes after the turn ends", () => {
+    const during = sig({ turnRunning: true, lastWakeAtMs: NOW - 30 * MIN });
+    expect(decide(ask, during, {}, NOW)).toEqual(NEXT);
+    expect(decide(ask, { ...during, turnRunning: false }, {}, NOW)).toEqual(
+      WAKE,
+    );
+  });
+
   test("never wakes with a draft, for any kind and setting", () => {
     for (const kind of ["ask", "review", "fix", "bug", "info", "finding"]) {
       for (const autoWake of ["reply", "off"] as const) {
