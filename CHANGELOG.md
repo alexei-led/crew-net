@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.0 (unreleased)
+
+First public release. The repository is public and MIT licensed.
+
+### Changed
+
+- The standalone CLI (`crew-net.js`, Pi and Codex) needs Node 26, the current
+  LTS. The Claude Code plugin is not affected.
+- `package.json` carries the project metadata (description, repository,
+  homepage, bugs, keywords, author, license). `bin` points at the committed
+  bundle `plugin/bin/crew-net`, which exists in every checkout.
+- Faster, smaller test suite and a minimal CI. No behaviour change.
+
 ## 0.1.1 - 2026-11-09
 
 ### Changed

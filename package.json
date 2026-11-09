@@ -1,11 +1,31 @@
 {
   "name": "crew-net",
   "version": "0.1.1",
+  "description": "Coding-agent sessions on different laptops share work, requests and merge order through GitHub alone.",
+  "keywords": [
+    "claude-code",
+    "coding-agents",
+    "github",
+    "pull-requests",
+    "multi-agent",
+    "merge-order",
+    "developer-tools",
+    "cli"
+  ],
+  "homepage": "https://github.com/alexei-led/crew-net#readme",
+  "bugs": {
+    "url": "https://github.com/alexei-led/crew-net/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/alexei-led/crew-net.git"
+  },
   "license": "MIT",
+  "author": "Alexei Ledenev",
   "private": true,
   "type": "module",
   "bin": {
-    "crew-net": "dist/crew-net.js"
+    "crew-net": "plugin/bin/crew-net"
   },
   "engines": {
     "node": ">=26"
