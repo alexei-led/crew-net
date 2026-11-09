@@ -1,8 +1,13 @@
 {
-  "v": 1,
   "type": "hello",
-  "lead": "atlas",
-  "claudePid": 4242,
-  "cwd": "/Users/alexei/Workspace/reflex",
-  "settings": { "autoWake": false }
+  "session": "9f2c41d8",
+  "role": "lead",
+  "harness": "claude-code",
+  "repo": "doiteng/reflex",
+  "worktree": "/Users/alexei/Workspace/reflex",
+  "branch": "feat/openapi-users",
+  "pid": 4242,
+  "settings": {
+    "autoWake": false
+  }
 }

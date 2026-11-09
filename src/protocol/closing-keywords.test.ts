@@ -17,6 +17,21 @@ describe("findClosingKeywords", () => {
       "closes",
       "https://github.com/doiteng/reflex/issues/945",
     ],
+    [
+      "fixes https://www.github.com/doiteng/reflex/issues/945",
+      "fixes",
+      "https://www.github.com/doiteng/reflex/issues/945",
+    ],
+    [
+      "closes https://octocorp.ghe.com/doiteng/reflex/issues/945",
+      "closes",
+      "https://octocorp.ghe.com/doiteng/reflex/issues/945",
+    ],
+    [
+      "Resolves http://a.b.ghe.com/o/r/issues/1",
+      "Resolves",
+      "http://a.b.ghe.com/o/r/issues/1",
+    ],
     ["and closes\n#945.", "closes", "#945"],
     ["closes GH-945", "closes", "GH-945"],
     ["closes#945", "closes", "#945"],
@@ -51,6 +66,9 @@ describe("findClosingKeywords", () => {
     "disclose #945",
     "prefix #945",
     "closes the loop.\n\n#945 stays open",
+    "see https://octocorp.ghe.com/doiteng/reflex/issues/945",
+    "closes https://example.com/doiteng/reflex/issues/945",
+    "closes https://notghe.com/doiteng/reflex/issues/945",
     "",
   ])("ignores %j", (text) => {
     expect(findClosingKeywords(text)).toEqual([]);
@@ -58,7 +76,7 @@ describe("findClosingKeywords", () => {
 
   test("scans text inside HTML comments", () => {
     expect(
-      findClosingKeywords("<!-- crew-net v1\nnote: fixes #3\n-->"),
+      findClosingKeywords("<!-- crew-net\nnote: fixes #3\n-->"),
     ).toMatchObject([{ line: 2, keyword: "fixes" }]);
   });
 

@@ -1,5 +1,3 @@
-export const EVENT_VERSION = 1;
-
 export const ITEM_KINDS = ["message", "finding", "digest"] as const;
 export type ItemKind = (typeof ITEM_KINDS)[number];
 
@@ -8,7 +6,6 @@ export const ACK_OUTCOMES = ["context", "band", "wake", "ignored"] as const;
 export type AckOutcome = (typeof ACK_OUTCOMES)[number];
 
 interface Tagged<T extends string> {
-  v: typeof EVENT_VERSION;
   type: T;
 }
 
@@ -19,7 +16,7 @@ export interface ItemEvent extends Tagged<"item"> {
   id: string;
   kind: ItemKind;
   text: string;
-  /** True when the item is addressed to this lead. */
+  /** True when the item is addressed to this session's developer. */
   addressed: boolean;
   /** GitHub login of the sender, for messages. */
   from?: string;
@@ -35,11 +32,22 @@ export interface ErrorEvent extends Tagged<"error"> {
 
 export type HelperEvent = ReadyEvent | ItemEvent | StatusEvent | ErrorEvent;
 
+export const SESSION_ROLES = ["lead", "worker"] as const;
+export type SessionRole = (typeof SESSION_ROLES)[number];
+
+/** First event of a session: who the watcher serves. */
 export interface HelloEvent extends Tagged<"hello"> {
-  /** Lead name, without the developer. */
-  lead: string;
-  claudePid: number;
-  cwd: string;
+  session: string;
+  role: SessionRole;
+  /** `claude-code`, `pi`, `codex`, ... */
+  harness: string;
+  /** `owner/name`, when the working copy has a GitHub remote. */
+  repo?: string;
+  worktree: string;
+  /** Checked-out branch, absent on a detached HEAD. */
+  branch?: string;
+  /** Process id of the harness session. */
+  pid: number;
   settings: { autoWake: boolean };
 }
 
@@ -48,23 +56,14 @@ export interface AckEvent extends Tagged<"ack"> {
   outcome: AckOutcome;
 }
 
-/** A reply to send. `id` lets the helper dedupe a resent post. */
-export interface PostEvent extends Tagged<"post"> {
-  id: string;
-  /** Address line target, `developer` or `developer/name`. */
-  to: string;
-  body: string;
-}
-
 export interface ByeEvent extends Tagged<"bye"> {}
 
-export type ModEvent = HelloEvent | AckEvent | PostEvent | ByeEvent;
+export type ModEvent = HelloEvent | AckEvent | ByeEvent;
 
 export type CrewEvent = HelperEvent | ModEvent;
 
 export type DecodeEventResult =
   | { ok: true; event: CrewEvent }
-  | { ok: false; reason: "unknown-version"; version: number }
   | { ok: false; reason: "malformed"; detail: string };
 
 /** One NDJSON line, without the trailing newline. */
@@ -97,9 +96,14 @@ const SHAPES: Record<
   },
   status: { text: isString },
   error: { message: isString },
-  hello: { lead: isString, claudePid: isInt, cwd: isString },
+  hello: {
+    session: isString,
+    role: oneOf(SESSION_ROLES),
+    harness: isString,
+    worktree: isString,
+    pid: isInt,
+  },
   ack: { id: isString, outcome: oneOf(ACK_OUTCOMES) },
-  post: { id: isString, to: isString, body: isString },
   bye: {},
 };
 
@@ -109,7 +113,7 @@ const malformed = (detail: string): DecodeEventResult => ({
   detail,
 });
 
-/** Parse one NDJSON line. Never throws. A line with another `v` is `unknown-version`. */
+/** Parse one NDJSON line. Never throws. Unknown fields, `v` included, are ignored. */
 export function decodeEvent(line: string): DecodeEventResult {
   let raw: unknown;
   try {
@@ -121,9 +125,6 @@ export function decodeEvent(line: string): DecodeEventResult {
     return malformed("not an object");
   }
   const fields = raw as Fields;
-  if (!isInt(fields.v)) return malformed("missing v");
-  if (fields.v !== EVENT_VERSION)
-    return { ok: false, reason: "unknown-version", version: fields.v };
   const type = fields.type;
   if (!isString(type) || !Object.hasOwn(SHAPES, type))
     return malformed("unknown type");
@@ -135,6 +136,10 @@ export function decodeEvent(line: string): DecodeEventResult {
     return malformed("bad from");
   }
   if (type === "hello") {
+    for (const name of ["repo", "branch"]) {
+      if (fields[name] !== undefined && !isString(fields[name]))
+        return malformed(`bad ${name}`);
+    }
     const settings = fields.settings as Fields | null | undefined;
     if (
       typeof settings !== "object" ||

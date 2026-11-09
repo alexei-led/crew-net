@@ -1,4 +1,8 @@
-import type { Address } from "../../protocol";
+/** Who a message is for. Replaced when routing is rewritten to design §9.3. */
+export interface Address {
+  developer: string;
+  name?: string;
+}
 
 /** An inbound crew message, already parsed. */
 export interface RoutedMessage {

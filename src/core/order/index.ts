@@ -31,7 +31,7 @@ export function isMergeCommand(argv: readonly string[]): boolean {
  * Decide whether `argv` may run.
  * - Not a merge command: allow.
  * - Merge: deny while any same-repo `depends-on` PR is unmerged or unknown.
- * - Malformed or unsupported state block: deny (fail closed).
+ * - Unreadable state block or bad depends-on ref: deny (fail closed).
  * - No state block: allow, nothing is declared.
  * - Cross-repo refs are listed in `advisory` and never block.
  */
@@ -45,13 +45,18 @@ export function gateDecision(
   const parsed = parseStateBlock(pr.body);
   if (parsed === null) return { decision: "allow", advisory: [] };
   if (!parsed.ok) {
-    const why =
-      parsed.reason === "unsupported-version"
-        ? `unsupported state block version ${parsed.version}`
-        : `malformed state block (${parsed.detail})`;
     return {
       decision: "deny",
-      reasons: [`PR #${pr.number}: ${why}`],
+      reasons: [`PR #${pr.number}: malformed state block (${parsed.detail})`],
+      advisory: [],
+    };
+  }
+  // The parser drops a bad ref and keeps the rest; the gate must not read that as "no dependency".
+  const badRef = parsed.warnings.find((w) => w.field === "depends-on");
+  if (badRef) {
+    return {
+      decision: "deny",
+      reasons: [`PR #${pr.number}: bad depends-on ref ${badRef.value}`],
       advisory: [],
     };
   }

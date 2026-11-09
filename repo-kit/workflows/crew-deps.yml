@@ -2,22 +2,26 @@ name: crew-deps
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened, ready_for_review]
+  merge_group:
+    types: [checks_requested]
 permissions:
   contents: read
   pull-requests: read
 concurrency:
-  group: crew-deps-${{ github.event.pull_request.number }}
+  group: crew-deps-${{ github.event.pull_request.number || github.event.merge_group.head_sha }}
   cancel-in-progress: true
 jobs:
   crew-deps:
     runs-on: ubuntu-latest
     steps:
-      # Use the base revision, not code from the PR being checked.
+      # Use the base revision, not code from the PR being checked. In a merge
+      # queue that is the commit the queue branch was built on.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          ref: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
           persist-credentials: false
       - name: Check dependencies
+        if: github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
           PR_BODY: ${{ github.event.pull_request.body }}
@@ -27,3 +31,9 @@ jobs:
           # never substitute it into shell code or pass it as an argument.
           printf '%s' "$PR_BODY" > "$RUNNER_TEMP/crew-pr-body.md"
           node .github/scripts/crew-deps.mjs check "$RUNNER_TEMP/crew-pr-body.md"
+      - name: Check dependencies of the queued PR
+        if: github.event_name == 'merge_group'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QUEUE_HEAD_REF: ${{ github.event.merge_group.head_ref }}
+        run: node .github/scripts/crew-deps.mjs check-queue "$QUEUE_HEAD_REF"

@@ -3,7 +3,7 @@ import { type DependencyFacts, gateDecision, isMergeCommand } from "./index";
 
 const REPO = "doiteng/reflex";
 const body = (dependsOn: string): string =>
-  `text\n<!-- crew-net v1\nlead: alexei/atlas\nstate: review\n${
+  `text\n<!-- crew-net\nstate: review\n${
     dependsOn ? `depends-on: ${dependsOn}\n` : ""
   }-->`;
 const pr = (b: string) => ({ repo: REPO, number: 50, body: b });
@@ -73,12 +73,47 @@ describe("gateDecision", () => {
     ],
     ["unrelated command", body("#2301"), [], ["git", "status"], "allow"],
     ["no state block", "plain body", [], merge, "allow"],
-    ["malformed block", "<!-- crew-net v1\nlead: x\n-->", [], merge, "deny"],
+    ["unterminated block", "<!-- crew-net\nstate: review", [], merge, "deny"],
+    [
+      "old v1 block with lead and an open dependency",
+      "<!-- crew-net v1\nlead: a/b\nstate: review\ndepends-on: #7\n-->",
+      [{ number: 7, merged: false }],
+      merge,
+      "deny",
+    ],
+    [
+      "block without fields means no dependencies",
+      "<!-- crew-net -->",
+      [],
+      merge,
+      "allow",
+    ],
     ["bad depends-on ref", body("not-a-ref"), [], merge, "deny"],
     [
-      "unsupported version",
-      "<!-- crew-net v9\nlead: a/b\nstate: review\n-->",
-      [],
+      "depends-on on the same line as state",
+      "<!-- crew-net state: review depends-on: #3 -->",
+      [{ number: 3, merged: false }],
+      merge,
+      "deny",
+    ],
+    [
+      "prose mention of the format before the block",
+      "About `<!-- crew-net -->`.\n\n<!-- crew-net\ndepends-on: #3\n-->",
+      [{ number: 3, merged: false }],
+      merge,
+      "deny",
+    ],
+    [
+      "good ref next to a bad one",
+      body("#2301, nonsense"),
+      [{ number: 2301, merged: true }],
+      merge,
+      "deny",
+    ],
+    [
+      "future version tag with an open dependency",
+      "<!-- crew-net v9\nstate: review\ndepends-on: #3\n-->",
+      [{ number: 3, merged: false }],
       merge,
       "deny",
     ],

@@ -9,10 +9,11 @@ export interface ClosingKeywordMatch {
 }
 
 // Mirrors GitHub's grammar and over-matches where the docs are silent (markdown
-// emphasis incl. `_fixes_`, a newline between keyword and reference, `GH-N`, issue URLs): a
+// emphasis incl. `_fixes_`, a newline between keyword and reference, `GH-N`, issue URLs
+// on github.com, www.github.com and `*.ghe.com`): a
 // false positive costs one reworded sentence, a miss closes an issue unverified.
 const CLOSING_KEYWORD =
-  /(?<![A-Za-z0-9])(close[sd]?|fix(?:e[sd])?|resolve[sd]?)(?![A-Za-z0-9])[\s:*_]*(https?:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/\d+|(?:[\w.-]+\/[\w.-]+)?(?:#|GH-)\d+)\b/gi;
+  /(?<![A-Za-z0-9])(close[sd]?|fix(?:e[sd])?|resolve[sd]?)(?![A-Za-z0-9])[\s:*_]*(https?:\/\/(?:(?:www\.)?github\.com|[\w-]+(?:\.[\w-]+)*\.ghe\.com)\/[\w.-]+\/[\w.-]+\/issues\/\d+|(?:[\w.-]+\/[\w.-]+)?(?:#|GH-)\d+)\b/gi;
 
 /** Every closing-keyword reference in `text`, in document order. HTML comments are scanned. */
 export function findClosingKeywords(text: string): ClosingKeywordMatch[] {

@@ -1,1 +1,4 @@
-{ "v": 1, "type": "status", "text": "polling, 41 requests left" }
+{
+  "type": "status",
+  "text": "polling, 41 requests left"
+}
