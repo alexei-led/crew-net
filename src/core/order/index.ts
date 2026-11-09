@@ -1,87 +1,113 @@
 import { parseStateBlock } from "../../protocol";
 
-/** The PR the merge command targets. */
-export interface MergeTarget {
-  /** `owner/repo` of the PR. */
+export * from "./merge";
+
+/** A PR named in `depends-on`, with its repo made explicit. */
+export interface DependencyRef {
+  /** `owner/name`, lowercase. */
   repo: string;
   number: number;
-  /** PR body as GitHub returns it. */
+}
+
+/** State of one dependency as read from GitHub at gate time. */
+export interface DependencyState extends DependencyRef {
+  state: "open" | "merged" | "closed";
+}
+
+/** The PR being merged, read from GitHub at gate time. */
+export interface GatedPr {
+  /** `owner/name` of the PR. */
+  repo: string;
+  number: number;
   body: string;
 }
 
-/** Current state of one same-repo PR named in `depends-on`. */
-export interface DependencyFacts {
-  number: number;
-  merged: boolean;
-}
+export type Dependencies =
+  | { ok: true; refs: DependencyRef[] }
+  | { ok: false; reason: string };
 
 export type GateDecision =
-  | { decision: "allow"; advisory: string[] }
-  | { decision: "deny"; reasons: string[]; advisory: string[] };
+  | { decision: "allow" }
+  | { decision: "deny"; reasons: string[] };
 
-const CROSS_REPO_REF = /^([^#]+)#(\d+)$/;
+const REF = /^(?:([\w.-]+\/[\w.-]+))?#(\d+)$/;
 
-/** True for `gh pr merge` in any form, including `--auto` and global flags before `pr`. */
-export function isMergeCommand(argv: readonly string[]): boolean {
-  if (argv[0]?.split("/").pop() !== "gh") return false;
-  return argv.some((arg, i) => arg === "pr" && argv[i + 1] === "merge");
-}
+const key = (ref: DependencyRef): string => `${ref.repo}#${ref.number}`;
 
 /**
- * Decide whether `argv` may run.
- * - Not a merge command: allow.
- * - Merge: deny while any same-repo `depends-on` PR is unmerged or unknown.
- * - Unreadable state block or bad depends-on ref: deny (fail closed).
- * - No state block: allow, nothing is declared.
- * - Cross-repo refs are listed in `advisory` and never block.
+ * The PRs `pr` depends on, in every repo, so the caller knows what to read.
+ * No state block: none. A block that cannot be read, or a `depends-on` value
+ * the parser skipped, is an error: the gate must not read it as "no
+ * dependency".
  */
-export function gateDecision(
-  pr: MergeTarget,
-  deps: readonly DependencyFacts[],
-  argv: readonly string[],
-): GateDecision {
-  if (!isMergeCommand(argv)) return { decision: "allow", advisory: [] };
-
+export function dependencies(pr: GatedPr): Dependencies {
   const parsed = parseStateBlock(pr.body);
-  if (parsed === null) return { decision: "allow", advisory: [] };
-  if (!parsed.ok) {
+  if (parsed === null) return { ok: true, refs: [] };
+  if (!parsed.ok)
     return {
-      decision: "deny",
-      reasons: [`PR #${pr.number}: malformed state block (${parsed.detail})`],
-      advisory: [],
+      ok: false,
+      reason: `PR #${pr.number}: malformed state block (${parsed.detail})`,
     };
-  }
-  // The parser drops a bad ref and keeps the rest; the gate must not read that as "no dependency".
-  const badRef = parsed.warnings.find((w) => w.field === "depends-on");
-  if (badRef) {
+  const bad = parsed.warnings.find((w) => w.field === "depends-on");
+  if (bad)
     return {
-      decision: "deny",
-      reasons: [`PR #${pr.number}: bad depends-on ref ${badRef.value}`],
-      advisory: [],
+      ok: false,
+      reason: `PR #${pr.number}: bad depends-on ref ${bad.value}`,
     };
-  }
-
-  const reasons: string[] = [];
-  const advisory: string[] = [];
+  const refs: DependencyRef[] = [];
   for (const ref of parsed.state.dependsOn) {
-    const cross = CROSS_REPO_REF.exec(ref);
-    const refRepo = cross?.[1];
-    if (
-      refRepo !== undefined &&
-      refRepo.toLowerCase() !== pr.repo.toLowerCase()
-    ) {
-      advisory.push(`depends-on ${ref} is in another repo; not enforced`);
-      continue;
-    }
-    const number = Number(cross?.[2] ?? ref.slice(1));
-    const dep = deps.find((d) => d.number === number);
-    if (dep === undefined) {
-      reasons.push(`depends-on #${number}: state unknown`);
-    } else if (!dep.merged) {
-      reasons.push(`depends-on #${number} is not merged`);
+    const m = REF.exec(ref);
+    if (!m)
+      return {
+        ok: false,
+        reason: `PR #${pr.number}: bad depends-on ref ${ref}`,
+      };
+    const dep = {
+      repo: (m[1] ?? pr.repo).toLowerCase(),
+      number: Number(m[2]),
+    };
+    if (!refs.some((r) => key(r) === key(dep))) refs.push(dep);
+  }
+  return { ok: true, refs };
+}
+
+const label = (pr: GatedPr, dep: DependencyRef): string =>
+  dep.repo === pr.repo.toLowerCase() ? `#${dep.number}` : key(dep);
+
+/**
+ * Decide whether `pr` may merge now. `states` holds what the caller read for
+ * each dependency; a dependency with no state is unknown, and unknown denies
+ * (fail closed). Same-repo and cross-repo dependencies are enforced alike.
+ */
+export function gate(
+  pr: GatedPr,
+  states: readonly DependencyState[],
+): GateDecision {
+  const deps = dependencies(pr);
+  if (!deps.ok) return { decision: "deny", reasons: [deps.reason] };
+  const byKey = new Map(
+    states.map((s) => [
+      key({ repo: s.repo.toLowerCase(), number: s.number }),
+      s.state,
+    ]),
+  );
+  const reasons: string[] = [];
+  for (const dep of deps.refs) {
+    const name = label(pr, dep);
+    switch (byKey.get(key(dep))) {
+      case "merged":
+        break;
+      case "open":
+        reasons.push(`depends-on ${name} is not merged`);
+        break;
+      case "closed":
+        reasons.push(`depends-on ${name}: dependency closed without merge`);
+        break;
+      default:
+        reasons.push(`depends-on ${name}: state unknown`);
     }
   }
   return reasons.length > 0
-    ? { decision: "deny", reasons, advisory }
-    : { decision: "allow", advisory };
+    ? { decision: "deny", reasons }
+    : { decision: "allow" };
 }

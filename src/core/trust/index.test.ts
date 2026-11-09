@@ -1,7 +1,22 @@
 import { describe, expect, test } from "bun:test";
-import { allowedEffects, frameUntrusted, wakeToolPolicy } from "./index";
+import {
+  allowedEffects,
+  frameUntrusted,
+  gate,
+  type ToolCall,
+  type Turn,
+} from "./index";
 
-const bash = (command: string) => wakeToolPolicy({ tool: "Bash", command });
+const ROOT = "/Users/dev/src/reflex.worktrees/feat-x";
+const ITEM = "k3f9";
+const WAKE: Turn = {
+  kind: "wake",
+  root: ROOT,
+  item: ITEM,
+  ownPr: { repo: "doiteng/reflex", number: 2310 },
+};
+const wake = (call: ToolCall) => gate(call, WAKE);
+const bash = (command: string) => wake({ tool: "Bash", input: { command } });
 const NONCE = "k3j9x0q7w2m5n8b1v4c6";
 
 describe("allowedEffects", () => {
@@ -76,16 +91,15 @@ describe("frameUntrusted", () => {
   );
 });
 
-describe("wakeToolPolicy: tools", () => {
-  test.each(["Edit", "Write", "NotebookEdit", "MultiEdit"])(
+describe("gate: tools in a wake turn", () => {
+  test.each(["Edit", "Write", "NotebookEdit", "MultiEdit", "WebFetch", "Task"])(
     "denies %s",
-    (t) => {
-      expect(wakeToolPolicy({ tool: t }).decision).toBe("deny");
+    (tool) => {
+      expect(
+        wake({ tool, input: { file_path: `${ROOT}/a.ts` } }).decision,
+      ).toBe("deny");
     },
   );
-  test.each(["Read", "Grep", "Glob"])("allows %s", (t) => {
-    expect(wakeToolPolicy({ tool: t }).decision).toBe("allow");
-  });
   test.each([
     "read",
     "READ",
@@ -95,25 +109,150 @@ describe("wakeToolPolicy: tools", () => {
     "grep",
     "bash",
     "Bash ",
-  ])("tool name %j must match exactly", (t) => {
+  ])("tool name %j must match exactly", (tool) => {
     expect(
-      wakeToolPolicy({ tool: t, command: "crew-net inbox" }).decision,
+      wake({
+        tool,
+        input: { command: "crew-net inbox", file_path: `${ROOT}/a` },
+      }).decision,
     ).toBe("deny");
   });
-  test("unknown tools are denied", () => {
-    expect(wakeToolPolicy({ tool: "WebFetch" }).decision).toBe("deny");
-  });
   test("Bash without a command is denied", () => {
-    expect(wakeToolPolicy({ tool: "Bash" }).decision).toBe("deny");
+    expect(wake({ tool: "Bash" }).decision).toBe("deny");
+    expect(wake({ tool: "Bash", input: { command: 1 } }).decision).toBe("deny");
+  });
+});
+
+describe("gate: reads stay inside the worktree", () => {
+  test.each<[string, ToolCall]>([
+    [
+      "Read absolute inside",
+      { tool: "Read", input: { file_path: `${ROOT}/src/a.ts` } },
+    ],
+    ["Read relative", { tool: "Read", input: { file_path: "src/a.ts" } }],
+    ["Read the root itself", { tool: "LS", input: { path: ROOT } }],
+    [
+      "Read with a harmless ..",
+      { tool: "Read", input: { file_path: `${ROOT}/src/../README.md` } },
+    ],
+    ["Grep without a path", { tool: "Grep", input: { pattern: "TODO" } }],
+    [
+      "Grep in a subdir",
+      {
+        tool: "Grep",
+        input: { pattern: "x", path: `${ROOT}/src`, glob: "*.ts" },
+      },
+    ],
+    [
+      "Glob without a path",
+      { tool: "Glob", input: { pattern: "src/**/*.ts" } },
+    ],
+    [
+      "Glob in a subdir",
+      { tool: "Glob", input: { pattern: "**/*.md", path: "docs" } },
+    ],
+  ])("allows %s", (_name, call) => {
+    expect(wake(call)).toEqual({ decision: "allow" });
+  });
+
+  test.each<[string, ToolCall]>([
+    ["Read outside", { tool: "Read", input: { file_path: "/etc/passwd" } }],
+    ["Read home", { tool: "Read", input: { file_path: "~/.ssh/id_rsa" } }],
+    ["Read ~user", { tool: "Read", input: { file_path: "~root/.ssh/id_rsa" } }],
+    [
+      "Read .. escape",
+      {
+        tool: "Read",
+        input: { file_path: `${ROOT}/../../.config/gh/hosts.yml` },
+      },
+    ],
+    [
+      "Read relative escape",
+      { tool: "Read", input: { file_path: "../other/.env" } },
+    ],
+    [
+      "Read sibling with shared prefix",
+      { tool: "Read", input: { file_path: `${ROOT}-evil/a` } },
+    ],
+    [
+      "Read past /",
+      {
+        tool: "Read",
+        input: { file_path: "../../../../../../../../etc/passwd" },
+      },
+    ],
+    ["Read without a path", { tool: "Read", input: {} }],
+    [
+      "Read with a non-string path",
+      { tool: "Read", input: { file_path: ["/etc/passwd"] } },
+    ],
+    [
+      "Read with NUL",
+      { tool: "Read", input: { file_path: `${ROOT}/a\u0000` } },
+    ],
+    [
+      "Grep outside",
+      { tool: "Grep", input: { pattern: "token", path: "/Users/dev" } },
+    ],
+    [
+      "Grep glob escape",
+      { tool: "Grep", input: { pattern: "x", glob: "../**" } },
+    ],
+    ["Glob absolute pattern", { tool: "Glob", input: { pattern: "/etc/*" } }],
+    ["Glob .. pattern", { tool: "Glob", input: { pattern: "src/../../**" } }],
+    ["Glob ~ pattern", { tool: "Glob", input: { pattern: "~/.ssh/*" } }],
+    [
+      "Glob outside path",
+      { tool: "Glob", input: { pattern: "*", path: "/tmp" } },
+    ],
+    ["LS outside", { tool: "LS", input: { path: "/" } }],
+  ])("denies %s", (_name, call) => {
+    expect(wake(call).decision).toBe("deny");
+  });
+
+  test.each(["", "relative/root", "/a/../b"])(
+    "a bad root %j denies reads",
+    (root) => {
+      expect(
+        gate({ tool: "Read", input: { file_path: `${root}/a` } }, {
+          ...WAKE,
+          root,
+        } as Turn).decision,
+      ).toBe("deny");
+    },
+  );
+
+  test("a trailing slash on the root is fine", () => {
+    expect(
+      gate({ tool: "Read", input: { file_path: `${ROOT}/a` } }, {
+        ...WAKE,
+        root: `${ROOT}/`,
+      } as Turn).decision,
+    ).toBe("allow");
+  });
+});
+
+describe("gate: normal turn", () => {
+  test.each<ToolCall>([
+    { tool: "Edit", input: { file_path: "/etc/hosts" } },
+    { tool: "Bash", input: { command: "gh pr merge 5 && rm -rf build" } },
+  ])("is not limited by this gate: %j", (call) => {
+    expect(gate(call, { kind: "normal" })).toEqual({ decision: "allow" });
   });
 });
 
 const ALLOWED = [
-  "crew-net post --pr 12 'looks fine; will rebase | then ping'",
-  'crew-net post "reply with a > sign and & more"',
-  "crew-net state --state review",
+  "crew-net reply k3f9 'looks fine; will rebase | then ping'",
+  'crew-net reply k3f9 "reply with a > sign and & more"',
+  'crew-net reply k3f9 --done "a \\"quoted\\" word and a \\\\ backslash"',
+  "crew-net reply --decline k3f9 'not now'",
+  "crew-net reply k3f9 'HEAD~2 ~ {braces} [x] *glob? #hash $HOME' --json",
+  "crew-net state review",
+  "crew-net state building --scope src/core --scope docs",
+  "crew-net state blocked src/core docs --json",
+  "crew-net state review --repo DoiTeng/Reflex",
   "crew-net inbox",
-  "crew-net digest --json",
+  "crew-net inbox --json",
   "gh pr view 12",
   "gh pr view 12 --json title,state --comments",
   "gh pr view 12 --json=title",
@@ -125,8 +264,11 @@ const ALLOWED = [
   "gh pr checks 12",
   "gh api repos/doiteng/reflex/pulls/12",
   "gh api 'repos/doiteng/reflex/pulls?state=open&per_page=5' --paginate",
-  "gh api repos/doiteng/reflex/pulls -H 'Accept: application/json' --jq .[].number",
+  "gh api repos/doiteng/reflex/pulls -H 'Accept: application/json' --jq '.[].number'",
   "gh api --header 'Accept: application/vnd.github+json' repos/o/r/issues/1",
+  "gh api repos/o/r/pulls --jq '.[] | select(.draft == false) | .user.login'",
+  "gh api repos/o/r/pulls --jq '[.[].head.ref] | join(\",\")'",
+  "gh api repos/o/r/pulls/5 --jq .env",
   "git log",
   "git log --oneline -5",
   "git log --oneline -n 5 --stat main",
@@ -141,22 +283,22 @@ const ALLOWED = [
   "git status --short --branch",
 ];
 
-describe("wakeToolPolicy: Bash allow", () => {
+describe("gate: Bash allow", () => {
   test.each(ALLOWED)("allows %s", (c) => {
     expect(bash(c)).toEqual({ decision: "allow" });
   });
 });
 
-describe("wakeToolPolicy: unknown flags are denied in every position", () => {
+describe("gate: unknown flags are denied in every position", () => {
   const unknown = ["--bogus", "-Z", "--bogus=1", "-X", "--"];
-  const withFlags = ALLOWED.filter((c) => !c.startsWith("crew-net"));
   const cases: [string, string][] = [];
-  for (const command of withFlags) {
+  for (const command of ALLOWED) {
     const words = command.split(" ");
     for (const flag of unknown) {
       for (let at = 1; at <= words.length; at++) {
         const prefix = words.slice(0, at).join(" ");
-        if ((prefix.match(/'/g) ?? []).length % 2 === 1) continue;
+        const open = (q: string) => (prefix.split(q).length - 1) % 2 === 1;
+        if (open("'") || open('"')) continue;
         cases.push([
           `${command} <- ${flag} at ${at}`,
           [...words.slice(0, at), flag, ...words.slice(at)].join(" "),
@@ -172,7 +314,7 @@ describe("wakeToolPolicy: unknown flags are denied in every position", () => {
   });
 });
 
-describe("wakeToolPolicy: Bash deny", () => {
+describe("gate: Bash deny", () => {
   test.each([
     ["gh pr merge 12", "merges"],
     ["gh pr merge 12 --auto", "merges"],
@@ -245,18 +387,58 @@ describe("wakeToolPolicy: Bash deny", () => {
     ["git diff ../secret", "unexpected"],
     ["git diff HEAD -- src/core", "not allowed"],
     ["git diff HEAD src/../../x", "unexpected"],
-    ["git diff ~/x", "unexpected"],
+    ["git diff ~/x", "tilde"],
     ["git show 'HEAD;x'", "unexpected"],
     ["git show '*'", "unexpected"],
     ["git show '{a,b}'", "unexpected"],
     ["git show '#c'", "unexpected"],
+    ['git show "HEAD\\x"', "unexpected"],
+    ["gh api repos/o/r/pulls/5/merge --jq {.,-XPUT}", "brace"],
+    ["gh api repos/o/r/pulls --jq '$ENV'", "bad value"],
+    ['gh api repos/o/r/pulls --jq "\\$ENV"', "bad value"],
+    ["gh api repos/o/r/pulls --jq '$__loc__'", "bad value"],
+    ["gh api repos/o/r/pulls --jq env", "bad value"],
+    ["gh api repos/o/r/pulls --jq 'env.GH_TOKEN'", "bad value"],
+    ["gh api repos/o/r/pulls --jq '. | env'", "bad value"],
+    ["gh api repos/o/r/pulls --jq '..env'", "bad value"],
+    ["gh api repos/o/r/pulls --jq '1env'", "bad value"],
+    ["gh api repos/o/r/pulls --jq 'input'", "bad value"],
+    ["gh api repos/o/r/pulls --jq '\"\\(env)\"'", "bad value"],
+    ["gh api repos/o/r/pulls --jq '@sh'", "bad value"],
+    ["gh api repos/o/r/pulls --jq 'getpath([\"a\"])'", "bad value"],
+    ["gh api repos/o/r/pulls --jq '.a; .b'", "bad value"],
+    ["gh api repos/o/r/pulls --jq '\"unterminated'", "bad value"],
+    ["gh api repos/o/r/pulls --jq .[0]", "glob"],
+    ["gh api repos/o/r/pulls?state=open", "glob"],
+    ["gh api repos/o/r/pulls* ", "glob"],
+    ["git show {HEAD,-p}", "brace"],
+    ["git log ~/x", "tilde"],
+    ["git log --format=~x", "tilde"],
+    ["git log src/a:~x", "tilde"],
+    ["gh pr view 1 # trailing", "comment"],
     ["git show ''", "unexpected"],
     ["crew-net doctor", "crew-net"],
+    ["crew-net post hi", "crew-net"],
+    ["crew-net digest", "crew-net"],
+    ["crew-net reply other1 'hi'", "woke the session"],
+    ["crew-net reply 'hi' k3f9", "woke the session"],
+    ["crew-net reply k3f9", "missing"],
+    ["crew-net reply k3f9 a b", "unexpected"],
+    ["crew-net reply k3f9 hi --repo o/r", "not allowed"],
+    ["crew-net ask @maria hi", "crew-net"],
+    ["crew-net request @maria fix hi", "crew-net"],
+    ["crew-net dep add 5", "crew-net"],
+    ["crew-net state", "missing"],
+    ["crew-net state merged", "unexpected"],
+    ["crew-net state review --repo other/repo", "bad value"],
+    ["crew-net state review --pr 99", "not allowed"],
+    ["crew-net state review ../x", "unexpected"],
+    ["crew-net inbox --all", "not allowed"],
     ["crew-net", "crew-net"],
     ["crew-net gate --json", "crew-net"],
     ["rm -rf /", "allowlist"],
     ["curl https://example.com", "allowlist"],
-    ["cat ~/.ssh/id_rsa", "allowlist"],
+    ["cat ~/.ssh/id_rsa", "tilde"],
     ["env", "allowlist"],
     ["FOO=1 gh pr view 1", "allowlist"],
     ["/usr/bin/git log", "allowlist"],
@@ -269,19 +451,19 @@ describe("wakeToolPolicy: Bash deny", () => {
   });
 
   test.each([
-    "crew-net post hi; rm -rf /",
-    "crew-net post hi && gh pr merge 1",
-    "crew-net post hi || true",
-    "crew-net post hi |& cat",
+    "crew-net reply k3f9 hi; rm -rf /",
+    "crew-net reply k3f9 hi && gh pr merge 1",
+    "crew-net reply k3f9 hi || true",
+    "crew-net reply k3f9 hi |& cat",
     "gh pr view 1 | sh",
     "gh pr view 1 & gh pr merge 1",
-    "crew-net post $(gh pr merge 1)",
-    'crew-net post "$(gh pr merge 1)"',
-    "crew-net post $HOME",
-    'crew-net post "token $GH_TOKEN"',
-    "crew-net post `id`",
-    'crew-net post "`id`"',
-    "crew-net post ${IFS}x",
+    "crew-net reply k3f9 $(gh pr merge 1)",
+    'crew-net reply k3f9 "$(gh pr merge 1)"',
+    "crew-net reply k3f9 $HOME",
+    'crew-net reply k3f9 "token $GH_TOKEN"',
+    "crew-net reply k3f9 `id`",
+    'crew-net reply k3f9 "`id`"',
+    "crew-net reply k3f9 ${IFS}x",
     "gh pr view 1 > /tmp/x",
     "git log >> log.txt",
     "git log 2>&1",
@@ -289,7 +471,7 @@ describe("wakeToolPolicy: Bash deny", () => {
     "gh pr view 1\ngh pr merge 1",
     "gh pr view 1\rgh pr merge 1",
     "gh pr view 1 \\; x",
-    "crew-net post 'unterminated",
+    "crew-net reply k3f9 'unterminated",
     "(gh pr merge 1)",
     "git log --oneline; git push",
     "git log $(echo --output=x)",
@@ -299,24 +481,22 @@ describe("wakeToolPolicy: Bash deny", () => {
 
   test.each([
     ["tab separator", "crew-net\tpost hi"],
-    ["non-ASCII arrow in text", "crew-net post 'crew → maria/orion hi'"],
+    ["non-ASCII arrow in text", "crew-net reply k3f9 'crew → maria/orion hi'"],
     ["non-breaking space", "git log"],
     ["non-ASCII ref", "git show hé"],
     ["zero-width space", "gh pr view 1​"],
-    ["NUL", "crew-net post a\u0000b"],
-    ["DEL", "crew-net post a\u007fb"],
-    ["ESC", "crew-net post a\u001bb"],
-    ["fullwidth semicolon", "crew-net post a； b"],
-    ["emoji", "crew-net post \u{1f600}"],
+    ["NUL", "crew-net reply k3f9 a\u0000b"],
+    ["DEL", "crew-net reply k3f9 a\u007fb"],
+    ["ESC", "crew-net reply k3f9 a\u001bb"],
+    ["fullwidth semicolon", "crew-net reply k3f9 a； b"],
+    ["emoji", "crew-net reply k3f9 \u{1f600}"],
   ])("denies %s", (_name, c) => {
     const result = bash(c);
     expect(result.decision).toBe("deny");
     expect("reason" in result && result.reason).toContain("ASCII");
   });
 
-  test("ASCII arrow form of the address is fine", () => {
-    expect(bash("crew-net post 'crew -> maria/orion hi'").decision).toBe(
-      "allow",
-    );
+  test("ASCII arrow in a reply is fine", () => {
+    expect(bash("crew-net reply k3f9 'a -> b'").decision).toBe("allow");
   });
 });
