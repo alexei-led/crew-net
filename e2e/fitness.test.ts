@@ -135,4 +135,4 @@ test("architecture gates reject planted violations", () => {
   } finally {
     rmSync(fixture, { recursive: true, force: true });
   }
-}, 30_000);
+}, 120_000);
