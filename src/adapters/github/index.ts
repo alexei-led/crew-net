@@ -628,6 +628,10 @@ export class GitHubAdapter implements GitHubPort {
     return result;
   }
 
+  async viewer(): Promise<string> {
+    return login((await this.request(`${this.rest}/user`)).body);
+  }
+
   async getPull(repo: string, number: number): Promise<PullRequest> {
     return pull(
       (

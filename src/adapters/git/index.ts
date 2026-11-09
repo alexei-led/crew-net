@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import type {
   GitPort,
+  LandedCommit,
   MergeTreeResult,
   RemoteBranch,
   WorktreeBranch,
@@ -95,6 +96,10 @@ export class GitCommandError extends Error {
 
 const NOREPLY =
   /^(?:\d+\+)?([A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)@users\.noreply\./i;
+
+/** `git show` stderr when the ref or the path is absent, as opposed to a broken repo. */
+const MISSING_OBJECT =
+  /does not exist|exists on disk, but not in|unknown revision|bad revision|invalid object name|not a valid object name/i;
 
 export class GitAdapter implements GitPort {
   constructor(
@@ -221,5 +226,54 @@ export class GitAdapter implements GitPort {
       "--",
     ]);
     return stdout.split("\0").filter(Boolean);
+  }
+
+  async showFile(ref: string, path: string): Promise<string | undefined> {
+    const result = await this.run(
+      ["show", "--end-of-options", `${ref}:${path}`],
+      [0, 128],
+    );
+    if (result.exitCode === 0) return result.stdout;
+    if (MISSING_OBJECT.test(result.stderr)) return undefined;
+    throw new GitCommandError(
+      ["show", `${ref}:${path}`],
+      result.stderr,
+      result.exitCode,
+    );
+  }
+
+  async landed(from: string, to: string): Promise<LandedCommit[]> {
+    // \x01 starts a record and \x02 splits its fields; neither can appear in
+    // an email or a one-line subject. A path holding \x01 would only add a
+    // bogus record to the radar's input.
+    const { stdout } = await this.run([
+      "log",
+      "--first-parent",
+      "-m",
+      "--no-renames",
+      "--name-only",
+      "-z",
+      "--max-count=100",
+      "--format=%x01%H%x02%ae%x02%s",
+      "--end-of-options",
+      `${from}..${to}`,
+      "--",
+    ]);
+    const result: LandedCommit[] = [];
+    for (const record of stdout.split("\x01").slice(1)) {
+      const end = record.indexOf("\0");
+      const head = end === -1 ? record : record.slice(0, end);
+      const rest = end === -1 ? "" : record.slice(end + 1).replace(/^\n/, "");
+      const [sha, authorEmail = "", subject = ""] = head.split("\x02");
+      if (!sha) continue;
+      result.push({
+        sha,
+        subject,
+        authorEmail,
+        loginHint: authorEmail.match(NOREPLY)?.[1] ?? null,
+        paths: rest.split("\0").filter(Boolean),
+      });
+    }
+    return result;
   }
 }

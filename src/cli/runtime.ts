@@ -1,10 +1,22 @@
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
+import { join } from "node:path";
 import { EnvAdapter } from "../adapters/env/index";
 import { GitAdapter } from "../adapters/git/index";
 import { GitHubAdapter } from "../adapters/github/index";
 import { defaultStateDir, FileStoreAdapter } from "../adapters/store/index";
 import type { AppPorts } from "../app/ports";
+import { parseSettings } from "../app/settings";
 import type { Runtime } from "./command";
+
+function readConfigFile(dir: string): string | undefined {
+  try {
+    return readFileSync(join(dir, "config.json"), "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+}
 
 /** The composition root: real adapters, built on first use. */
 export function createRuntime(
@@ -25,10 +37,15 @@ export function createRuntime(
       );
       const gitByDir = new Map<string, GitAdapter>();
       const githubByHost = new Map<string, GitHubAdapter>();
+      const { settings, problems } = parseSettings(
+        readConfigFile(envPort.configDir()),
+      );
       built = {
         store,
         clock,
         env: envPort,
+        settings,
+        settingsProblems: problems,
         git(dir) {
           let git = gitByDir.get(dir);
           if (!git) {

@@ -20,6 +20,16 @@ export interface ItemEvent extends Tagged<"item"> {
   addressed: boolean;
   /** GitHub login of the sender, for messages. */
   from?: string;
+  /** `owner/repo` of the thread the item sits on. Optional: older builds omit it. */
+  repo?: string;
+  /** Issue or PR number of that thread. */
+  thread?: number;
+  /**
+   * What happened, for the digest and the inbox: a message kind (`ask`,
+   * `review`, `fix`, `bug`, `info`, `reply`), `comment`, `review-comment`,
+   * `unblocked`, `dependency-closed`, `waits-on-you` or a finding kind.
+   */
+  event?: string;
 }
 
 export interface StatusEvent extends Tagged<"status"> {
@@ -132,8 +142,13 @@ export function decodeEvent(line: string): DecodeEventResult {
   for (const [name, check] of Object.entries(shape)) {
     if (!check(fields[name])) return malformed(`bad ${name}`);
   }
-  if (type === "item" && fields.from !== undefined && !isString(fields.from)) {
-    return malformed("bad from");
+  if (type === "item") {
+    for (const name of ["from", "repo", "event"]) {
+      if (fields[name] !== undefined && !isString(fields[name]))
+        return malformed(`bad ${name}`);
+    }
+    if (fields.thread !== undefined && !isInt(fields.thread))
+      return malformed("bad thread");
   }
   if (type === "hello") {
     for (const name of ["repo", "branch"]) {

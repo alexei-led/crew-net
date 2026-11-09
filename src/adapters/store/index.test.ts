@@ -551,6 +551,18 @@ describe("jobs", () => {
 });
 
 describe("events", () => {
+  test("read returns the rotated file then the current one and skips bad lines", async () => {
+    const store = open();
+    const path = join(dir, "events.ndjson");
+    writeFileSync(`${path}.1`, '{"n":1}\n');
+    writeFileSync(path, '{"n":2}\nnot json\n[3]\n"s"\n\n{"n":4}\n');
+    expect(await store.events.read()).toEqual([{ n: 1 }, { n: 2 }, { n: 4 }]);
+  });
+
+  test("read of a store without events is empty", async () => {
+    expect(await open().events.read()).toEqual([]);
+  });
+
   test("append writes one JSON line each", async () => {
     const store = open();
     await store.events.append({ type: "sync", ms: 12 });

@@ -20,6 +20,7 @@ Every repo method takes `owner/repo`; anything else is rejected before a request
 
 | Method                               | Request                                                                                                                        |
 | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
+| `viewer()`                           | `GET /user`: the login of the token's user, revalidated with the ETag                                                          |
 | `notifications(since)`               | `GET /notifications?all=true&since=…&per_page=50`                                                                              |
 | `listOpenPulls(repo)`                | `GET /repos/{repo}/pulls?state=open&per_page=100`                                                                              |
 | `listMergedPulls(repo, since)`       | `GET /repos/{repo}/pulls?state=closed&sort=updated&direction=desc`, stops at the first pull updated before `since`, at most 50 |

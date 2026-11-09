@@ -196,6 +196,24 @@ describe("notifications", () => {
   });
 });
 
+describe("viewer", () => {
+  test("reads the token user's login from /user and revalidates with the ETag", async () => {
+    const { adapter, calls } = setup([
+      json({ login: "alexei-led", id: 1 }, { etag: '"u1"' }),
+      new Response(null, { status: 304 }),
+    ]);
+    expect(await adapter.viewer()).toBe("alexei-led");
+    expect(await adapter.viewer()).toBe("alexei-led");
+    expect(calls[0]?.url).toBe(`${API}/user`);
+    expect(header(calls[1], "if-none-match")).toBe('"u1"');
+  });
+
+  test("a response without a login is rejected", async () => {
+    const { adapter } = setup([json({ id: 1 })]);
+    await expect(adapter.viewer()).rejects.toThrow();
+  });
+});
+
 describe("pulls, comments and reviews", () => {
   test("recorded merged and closed pulls carry state, merged and branches", async () => {
     const { adapter, calls } = setup([

@@ -689,6 +689,34 @@ export class FileStoreAdapter implements StorePort {
       // One O_APPEND write per line: concurrent appenders do not interleave.
       appendFileSync(path, `${JSON.stringify(event)}\n`, { mode: 0o600 });
     },
+    read: async (): Promise<JsonObject[]> => {
+      const path = this.path("events.ndjson");
+      const events: JsonObject[] = [];
+      for (const file of [`${path}.1`, path]) {
+        let text: string;
+        try {
+          text = readFileSync(file, "utf8");
+        } catch (error) {
+          if (isCode(error, "ENOENT")) continue;
+          throw error;
+        }
+        for (const line of text.split("\n")) {
+          if (!line) continue;
+          try {
+            const value: unknown = JSON.parse(line);
+            if (
+              typeof value === "object" &&
+              value !== null &&
+              !Array.isArray(value)
+            )
+              events.push(value as JsonObject);
+          } catch {
+            // A torn or foreign line must not hide the rest of the log.
+          }
+        }
+      }
+      return events;
+    },
   };
 
   // ---- maintenance ----
