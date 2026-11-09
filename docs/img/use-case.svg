@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="560" viewBox="0 0 1200 560" role="img" aria-labelledby="title desc">
+  <title id="title">Two laptops. Shared work. Early coordination.</title>
+  <desc id="desc">Alice and Maria each have an agent editing users.yaml on separate laptops and branches. Without crew-net, they discover the overlap late through a merge conflict, red CI, or an out-of-order deploy. With crew-net, both agents see a collision warning, coordinate through GitHub PR comments, and declare that the client depends on the API so the API merges first. GitHub is the only transport; there is no server.</desc>
+  <defs>
+    <marker id="arrow-green" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto-start-reverse">
+      <path d="m1 1 5 3-5 3" fill="none" stroke="#70e1b5" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <style>
+      text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; }
+      .label { font-size: 20px; font-weight: 650; fill: #f4f7fc; }
+      .small { font-size: 16px; fill: #aebbd0; }
+      .code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 16px; fill: #d5dfef; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="560" fill="#0d1523"/>
+  <text x="36" y="52" font-size="32" font-weight="700" fill="#f4f7fc">Two laptops. Shared work.</text>
+  <text x="36" y="81" font-size="18" fill="#aebbd0">Alice + Maria · two agents editing users.yaml</text>
+  <rect x="948" y="30" width="216" height="48" rx="24" fill="#1c2a3b"/>
+  <text x="1056" y="60" text-anchor="middle" font-size="18" fill="#d5dfef">GitHub only · no server</text>
+
+  <!-- Late discovery: independent work converges only at integration. -->
+  <rect x="28" y="108" width="394" height="424" rx="18" fill="#1e202e" stroke="#42313e"/>
+  <text x="52" y="147" font-size="25" font-weight="700" fill="#ffb6ae">Without crew-net</text>
+  <text x="52" y="175" font-size="18" fill="#c0afbc">Work apart. Meet late.</text>
+
+  <text x="133" y="214" text-anchor="middle" class="label">Alice</text>
+  <text x="317" y="214" text-anchor="middle" class="label">Maria</text>
+  <g stroke="#8291a8" stroke-width="2" fill="#101927">
+    <rect x="62" y="229" width="142" height="103" rx="8"/>
+    <path d="M54 333h158l-8 9H62Z" fill="#334052"/>
+    <rect x="246" y="229" width="142" height="103" rx="8"/>
+    <path d="M238 333h158l-8 9H246Z" fill="#334052"/>
+  </g>
+  <g text-anchor="middle">
+    <text x="133" y="257" class="code">agent &gt;_</text>
+    <text x="133" y="284" class="code">users.yaml</text>
+    <text x="133" y="311" class="small">feat/api</text>
+    <text x="317" y="257" class="code">agent &gt;_</text>
+    <text x="317" y="284" class="code">users.yaml</text>
+    <text x="317" y="311" class="small">feat/client</text>
+  </g>
+  <path d="M133 351v15q0 12 12 12h68M317 351v15q0 12-12 12h-68" fill="none" stroke="#8291a8" stroke-width="2"/>
+  <circle cx="225" cy="378" r="15" fill="#ffb6ae"/>
+  <path d="m220 373 10 10m0-10-10 10" stroke="#462433" stroke-width="2.5" stroke-linecap="round"/>
+  <text x="225" y="421" text-anchor="middle" font-size="22" font-weight="650" fill="#ffb6ae">Merge conflict</text>
+  <text x="225" y="453" text-anchor="middle" font-size="20" fill="#e4bdc4">Red CI</text>
+  <text x="225" y="485" text-anchor="middle" font-size="20" fill="#e4bdc4">Out-of-order deploy</text>
+
+  <!-- Early awareness and messages travel through GitHub. -->
+  <rect x="438" y="108" width="734" height="424" rx="18" fill="#14282b" stroke="#2c4b47"/>
+  <text x="462" y="147" font-size="25" font-weight="700" fill="#70e1b5">With crew-net</text>
+  <text x="462" y="175" font-size="18" fill="#afccc6">See overlap. Ask early. Merge in order.</text>
+
+  <text x="564" y="214" text-anchor="middle" class="label">Alice</text>
+  <text x="1046" y="214" text-anchor="middle" class="label">Maria</text>
+  <g stroke="#779d98" stroke-width="2" fill="#101e29">
+    <rect x="476" y="229" width="176" height="116" rx="8"/>
+    <path d="M468 346h192l-8 9H476Z" fill="#304b4a"/>
+    <rect x="958" y="229" width="176" height="116" rx="8"/>
+    <path d="M950 346h192l-8 9H958Z" fill="#304b4a"/>
+  </g>
+  <g text-anchor="middle">
+    <text x="564" y="256" class="code">agent · feat/api</text>
+    <text x="1046" y="256" class="code">agent · client</text>
+    <text x="564" y="284" class="code">users.yaml</text>
+    <text x="1046" y="284" class="code">users.yaml</text>
+  </g>
+  <rect x="484" y="300" width="160" height="32" rx="5" fill="#f5d785"/>
+  <rect x="966" y="300" width="160" height="32" rx="5" fill="#f5d785"/>
+  <g text-anchor="middle" font-size="16" font-weight="700" fill="#3b3017">
+    <text x="564" y="321">! shared file</text>
+    <text x="1046" y="321">! shared file</text>
+  </g>
+  <path d="M668 275h63m148 0h63" fill="none" stroke="#70e1b5" stroke-width="2" marker-start="url(#arrow-green)" marker-end="url(#arrow-green)"/>
+  <rect x="744" y="237" width="122" height="76" rx="14" fill="#203b3b" stroke="#70e1b5" stroke-width="1.5"/>
+  <text x="805" y="270" text-anchor="middle" font-size="23" font-weight="700" fill="#f4f7fc">GitHub</text>
+  <text x="805" y="296" text-anchor="middle" class="small">PRs + fetch</text>
+
+  <rect x="476" y="375" width="658" height="53" rx="10" fill="#203b3b"/>
+  <text x="496" y="408" font-size="20" fill="#f4f7fc">“API first?” → “Yes.”</text>
+  <text x="1114" y="407" text-anchor="end" font-size="17" fill="#afccc6">PR comments + @mentions</text>
+
+  <!-- A declared dependency gives the merge sequence. -->
+  <rect x="476" y="451" width="215" height="55" rx="10" fill="#234b42"/>
+  <text x="583" y="485" text-anchor="middle" font-size="20" font-weight="650" fill="#b0f4d9">1 · API merges</text>
+  <path d="M707 485h196" fill="none" stroke="#70e1b5" stroke-width="2" marker-end="url(#arrow-green)"/>
+  <text x="805" y="468" text-anchor="middle" class="code">depends-on</text>
+  <rect x="919" y="451" width="215" height="55" rx="10" fill="#234b42"/>
+  <text x="1026" y="485" text-anchor="middle" font-size="20" font-weight="650" fill="#b0f4d9">2 · Client merges</text>
+</svg>
