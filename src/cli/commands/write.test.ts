@@ -46,6 +46,9 @@ function world(
   const runtime: Runtime = {
     cwd: DIR,
     now: () => 5,
+    detach: () => {
+      throw new Error("nothing may detach");
+    },
     ports: () => {
       built = true;
       return ports;
