@@ -8,7 +8,7 @@
   "plugins": [
     {
       "name": "crew-net",
-      "version": "0.1.1",
+      "version": "0.2.0",
       "description": "Digest at session start, collision radar, requests between developers' agents, guarded wake turns, and a depends-on merge gate.",
       "source": "./plugin"
     }
