@@ -196,6 +196,52 @@ describe("notifications", () => {
   });
 });
 
+describe("viewer", () => {
+  test("reads the token user's login from /user and revalidates with the ETag", async () => {
+    const { adapter, calls } = setup([
+      json({ login: "alexei-led", id: 1 }, { etag: '"u1"' }),
+      new Response(null, { status: 304 }),
+    ]);
+    expect(await adapter.viewer()).toBe("alexei-led");
+    expect(await adapter.viewer()).toBe("alexei-led");
+    expect(calls[0]?.url).toBe(`${API}/user`);
+    expect(header(calls[1], "if-none-match")).toBe('"u1"');
+  });
+
+  test("a response without a login is rejected", async () => {
+    const { adapter } = setup([json({ id: 1 })]);
+    await expect(adapter.viewer()).rejects.toThrow();
+  });
+});
+
+describe("head repo", () => {
+  test("names the head repo of a fork; a deleted fork is empty", async () => {
+    const base = {
+      number: 5,
+      node_id: "PR_5",
+      title: "t",
+      user: { login: "alice" },
+      base: { ref: "main" },
+      state: "open",
+      draft: false,
+      body: null,
+      updated_at: "2026-11-09T10:00:00Z",
+      auto_merge: null,
+    };
+    const { adapter } = setup([
+      json([
+        {
+          ...base,
+          head: { ref: "dev", sha: "a", repo: { full_name: "alice/r" } },
+        },
+        { ...base, number: 6, head: { ref: "x", sha: "b", repo: null } },
+      ]),
+    ]);
+    const pulls = await adapter.listOpenPulls(REPO);
+    expect(pulls.map((p) => p.headRepo)).toEqual(["alice/r", ""]);
+  });
+});
+
 describe("pulls, comments and reviews", () => {
   test("recorded merged and closed pulls carry state, merged and branches", async () => {
     const { adapter, calls } = setup([

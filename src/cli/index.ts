@@ -1,5 +1,9 @@
-if (process.argv.slice(2).includes("--version")) {
-  console.log("0.1.0-dev");
-}
+import { main } from "./main";
+import { createRuntime } from "./runtime";
 
-export {};
+// Composition root of the `crew-net` binary (dist/crew-net.js).
+const code = await main(process.argv.slice(2), createRuntime(process.cwd()), {
+  out: (text) => process.stdout.write(text),
+  err: (text) => process.stderr.write(text),
+});
+process.exitCode = code;

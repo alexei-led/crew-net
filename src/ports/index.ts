@@ -8,6 +8,8 @@ export interface PullRequest {
   author: string;
   headRef: string;
   headSha: string;
+  /** `owner/repo` of the head branch; "" when its fork was deleted. Absent when unknown. */
+  headRepo?: string;
   baseRef: string;
   state: "open" | "closed";
   draft: boolean;
@@ -93,6 +95,8 @@ export interface CommentCursor {
  * Adapters are per host; the token and any GHES base URL belong to the adapter.
  */
 export interface GitHubPort {
+  /** Login of the user the token belongs to (`GET /user`), as GitHub spells it. */
+  viewer(): Promise<string>;
   /** Notification threads updated after `since`, filtered to crew-net reasons. */
   notifications(since: string): Promise<NotificationPage>;
   listOpenPulls(repo: string): Promise<PullRequest[]>;
@@ -136,6 +140,17 @@ export interface RemoteBranch {
   loginHint: string | null;
 }
 
+/** A commit on a base branch after some point, with the paths it changed. */
+export interface LandedCommit {
+  sha: string;
+  subject: string;
+  authorEmail: string;
+  /** GitHub login from a users.noreply.github.com address, else null. */
+  loginHint: string | null;
+  /** Paths changed against the first parent. */
+  paths: string[];
+}
+
 /** Git operations used by the application. */
 export interface GitPort {
   /** Fetch and prune remote refs. */
@@ -150,6 +165,10 @@ export interface GitPort {
   mergeTree(a: string, b: string): Promise<MergeTreeResult>;
   /** Paths changed on head since it forked from base. */
   changedFiles(base: string, head: string): Promise<string[]>;
+  /** Text of `path` at `ref`, or undefined when the ref or the path does not exist. */
+  showFile(ref: string, path: string): Promise<string | undefined>;
+  /** First-parent commits reachable from `to` and not from `from`, newest first, at most 100. */
+  landed(from: string, to: string): Promise<LandedCommit[]>;
 }
 
 export type JsonValue =
@@ -289,6 +308,8 @@ export interface StorePort {
   events: {
     /** Append one line to events.ndjson. */
     append(event: JsonObject): Promise<void>;
+    /** Every logged event, oldest first (the rotated file, then the current one). Lines that are not JSON objects are skipped. */
+    read(): Promise<JsonObject[]>;
   };
   /** Remove items delivered 14 days ago, session files older than 14 days, stale recovery markers and orphan temp files. */
   prune(): Promise<void>;

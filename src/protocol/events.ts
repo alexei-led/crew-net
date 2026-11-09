@@ -20,6 +20,22 @@ export interface ItemEvent extends Tagged<"item"> {
   addressed: boolean;
   /** GitHub login of the sender, for messages. */
   from?: string;
+  /** `owner/repo` of the thread the item sits on. Optional: older builds omit it. */
+  repo?: string;
+  /** Issue or PR number of that thread. */
+  thread?: number;
+  /**
+   * What happened, for the digest and the inbox: a message kind (`ask`,
+   * `review`, `fix`, `bug`, `info`, `reply`), `comment`, `review-comment`,
+   * `unblocked`, `dependency-closed`, `waits-on-you` or a finding kind.
+   */
+  event?: string;
+  /** Marker `id` of a crew request, for `crew-net reply` to answer with `re=`. */
+  msgId?: string;
+  /** From routing: false when the session got the item only because no session is in its repo. Never wake without it. */
+  wakeable?: boolean;
+  /** The receiving session's branch has an open PR (a wake turn may update its state). */
+  ownPr?: boolean;
 }
 
 export interface StatusEvent extends Tagged<"status"> {
@@ -132,8 +148,17 @@ export function decodeEvent(line: string): DecodeEventResult {
   for (const [name, check] of Object.entries(shape)) {
     if (!check(fields[name])) return malformed(`bad ${name}`);
   }
-  if (type === "item" && fields.from !== undefined && !isString(fields.from)) {
-    return malformed("bad from");
+  if (type === "item") {
+    for (const name of ["from", "repo", "event", "msgId"]) {
+      if (fields[name] !== undefined && !isString(fields[name]))
+        return malformed(`bad ${name}`);
+    }
+    if (fields.thread !== undefined && !isInt(fields.thread))
+      return malformed("bad thread");
+    for (const name of ["wakeable", "ownPr"]) {
+      if (fields[name] !== undefined && !isBoolean(fields[name]))
+        return malformed(`bad ${name}`);
+    }
   }
   if (type === "hello") {
     for (const name of ["repo", "branch"]) {

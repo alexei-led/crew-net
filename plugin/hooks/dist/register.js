@@ -53,8 +53,17 @@ function decodeEvent(line) {
     if (!check(fields[name]))
       return malformed(`bad ${name}`);
   }
-  if (type === "item" && fields.from !== undefined && !isString(fields.from)) {
-    return malformed("bad from");
+  if (type === "item") {
+    for (const name of ["from", "repo", "event", "msgId"]) {
+      if (fields[name] !== undefined && !isString(fields[name]))
+        return malformed(`bad ${name}`);
+    }
+    if (fields.thread !== undefined && !isInt(fields.thread))
+      return malformed("bad thread");
+    for (const name of ["wakeable", "ownPr"]) {
+      if (fields[name] !== undefined && !isBoolean(fields[name]))
+        return malformed(`bad ${name}`);
+    }
   }
   if (type === "hello") {
     for (const name of ["repo", "branch"]) {

@@ -64,6 +64,21 @@ describe("decodeEvent", () => {
     expect(decodeEvent(line)).toMatchObject({ ok: true });
   });
 
+  test("accepts an item with repo, thread and event", () => {
+    const line =
+      '{"type":"item","id":"1","kind":"message","text":"t","addressed":true,"repo":"o/r","thread":7,"event":"ask","wakeable":true,"msgId":"k3f9"}';
+    expect(decodeEvent(line)).toMatchObject({
+      ok: true,
+      event: {
+        repo: "o/r",
+        thread: 7,
+        event: "ask",
+        wakeable: true,
+        msgId: "k3f9",
+      },
+    });
+  });
+
   test.each([1, 2, "7"])("does not reject on a v field: %p", (v) => {
     const line = JSON.stringify({ v, type: "ack", id: "x", outcome: "band" });
     expect(decodeEvent(line)).toMatchObject({ ok: true });
@@ -115,6 +130,26 @@ describe("decodeEvent", () => {
     [
       "item with non-string sender",
       '{"type":"item","id":"1","kind":"message","text":"t","addressed":true,"from":3}',
+    ],
+    [
+      "item with non-string repo",
+      '{"type":"item","id":"1","kind":"message","text":"t","addressed":true,"repo":3}',
+    ],
+    [
+      "item with non-string event",
+      '{"type":"item","id":"1","kind":"message","text":"t","addressed":true,"event":3}',
+    ],
+    [
+      "item with string ownPr",
+      '{"type":"item","id":"1","kind":"message","text":"t","addressed":true,"ownPr":1}',
+    ],
+    [
+      "item with string wakeable",
+      '{"type":"item","id":"1","kind":"message","text":"t","addressed":true,"wakeable":"yes"}',
+    ],
+    [
+      "item with fractional thread",
+      '{"type":"item","id":"1","kind":"message","text":"t","addressed":true,"thread":1.5}',
     ],
     ["ack with unknown outcome", '{"type":"ack","id":"1","outcome":"maybe"}'],
     ["hello with string pid", HELLO({ pid: "1" })],

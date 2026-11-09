@@ -15,6 +15,8 @@ PullRequest has number, nodeId, title, author, headRef, headSha, baseRef,
 state (`open`/`closed`), draft, body, updatedAt, autoMerge, merged. Null bodies
 become empty strings; merged is definitive on getPull and false in lists.
 
+`viewer()` returns the login of the token's user (`GET /user`).
+
 `notifications(since)` returns threads with a crew-net reason, `modified` and
 `pollIntervalMs`. `listThreadComments(repo, n, after)` returns comments strictly
 after a `CommentCursor` `(updatedAt, id)`.

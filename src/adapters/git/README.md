@@ -10,6 +10,8 @@ Git 2.38 or later is required for `merge-tree --write-tree`.
 | `remoteBranches()`         | `git for-each-ref refs/remotes/origin/` → `{ name, lastCommitAt, authorEmail, loginHint }`                          |
 | `mergeBase(a, b)`          | `git merge-base`; `undefined` when the refs share no history                                                        |
 | `mergeTree(a, b)`          | `git merge-tree --write-tree --name-only --no-messages -z`                                                          |
+| `showFile(ref, path)`      | `git show <ref>:<path>`; `undefined` when the ref or path is missing, an error otherwise                            |
+| `landed(from, to)`         | `git log --first-parent -m --name-only -z --max-count=100 from..to`: newest first, with paths and `loginHint`       |
 | `changedFiles(base, head)` | `git diff --name-only -z --no-ext-diff --no-textconv --no-renames <base>...<head>`: a rename lists old and new path |
 
 - `remoteBranches` skips the `origin/HEAD` symref. `loginHint` is the login in

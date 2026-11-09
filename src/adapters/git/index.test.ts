@@ -7,7 +7,7 @@ import {
   test,
 } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -208,6 +208,66 @@ describe("real git", () => {
     git("push", "origin", ":refs/heads/old");
     await adapter.fetch();
     expect(git("branch", "-r")).not.toContain("origin/old");
+  });
+});
+
+describe("showFile and landed", () => {
+  test("showFile reads a file at a ref and answers undefined for a missing path or ref", async () => {
+    mkdirSync(join(repo, ".github"));
+    writeFileSync(join(repo, ".github", "crew-net.yml"), "bots: [x]\n");
+    commit("config");
+    expect(await adapter.showFile("main", ".github/crew-net.yml")).toBe(
+      "bots: [x]\n",
+    );
+    expect(await adapter.showFile("main", ".github/none.yml")).toBeUndefined();
+    expect(
+      await adapter.showFile("origin/nothing", ".github/crew-net.yml"),
+    ).toBeUndefined();
+  });
+
+  test("showFile throws outside a repository", async () => {
+    const outside = new GitAdapter(root);
+    await expect(outside.showFile("main", "x")).rejects.toBeInstanceOf(
+      GitCommandError,
+    );
+  });
+
+  test("landed lists first-parent commits with their paths, newest first", async () => {
+    git("tag", "fork");
+    mkdirSync(join(repo, "d"));
+    writeFileSync(join(repo, "d", "b c.txt"), "x\n");
+    writeFileSync(join(repo, "shared.txt"), "changed\n");
+    git("config", "user.email", "12+maria@users.noreply.github.com");
+    commit("feat: one (#12)");
+    git("rm", "-q", "d/b c.txt");
+    writeFileSync(join(repo, "e.txt"), "y\n");
+    commit("two");
+    const landed = await adapter.landed("fork", "main");
+    expect(landed.map((c) => c.subject)).toEqual(["two", "feat: one (#12)"]);
+    expect(landed[0]?.paths.sort()).toEqual(["d/b c.txt", "e.txt"]);
+    expect(landed[1]).toMatchObject({
+      paths: ["d/b c.txt", "shared.txt"],
+      authorEmail: "12+maria@users.noreply.github.com",
+      loginHint: "maria",
+    });
+    expect(await adapter.landed("main", "main")).toEqual([]);
+  });
+
+  test("landed lists the files of a merge commit against its first parent", async () => {
+    git("tag", "fork");
+    git("switch", "-c", "side");
+    writeFileSync(join(repo, "side.txt"), "s\n");
+    commit("side work");
+    git("switch", "main");
+    writeFileSync(join(repo, "main.txt"), "m\n");
+    commit("main work");
+    git("merge", "--no-ff", "-m", "Merge pull request #7 from o/side", "side");
+    const landed = await adapter.landed("fork", "main");
+    expect(landed.map((c) => c.subject)).toEqual([
+      "Merge pull request #7 from o/side",
+      "main work",
+    ]);
+    expect(landed[0]?.paths).toEqual(["side.txt"]);
   });
 });
 
