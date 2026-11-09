@@ -5,10 +5,10 @@ on shared GitHub repos, catch collisions early, ask each other for things, and
 merge in the right order. GitHub is the only transport: PRs, comments,
 notifications and `git fetch`. There is no server, no VPN and no daemon.
 
-Status: design, 2026-11-09. This document replaces the earlier `design.md`,
-`architecture.md` and `plans/v0.1.0.md`, and the open questions in
-`HANDOVER.md`. Code already on `main` is reused where it fits; see
-[Reuse](#reuse-of-existing-code) and the plan in [plan.md](plan.md).
+Status: describes release 0.1.0 (2026-11-09). Parts marked **later** are not
+built. This document replaced the earlier `design.md`, `architecture.md` and
+`plans/v0.1.0.md`, and the open questions in `HANDOVER.md`. The plan is in
+[plan.md](plan.md); how to use it is in the [user guide](user-guide.md).
 
 ## 1. Problem
 
@@ -126,17 +126,23 @@ can use it directly. `crew-net` alone prints the digest.
 
 | Command                                                             | Does                                                                                    |
 | ------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `crew-net`                                                          | Digest for the current repo                                                             |
+| `crew-net [--refresh]`                                              | Digest for the current repo; `--refresh` waits for a sync first                         |
 | `crew-net who [paths…]`                                             | Open work in watched repos that touches these paths. Run it before starting work        |
 | `crew-net inbox`                                                    | Unread items and open requests, both directions                                         |
-| `crew-net ask <@login\|PR> "<text>"`                                | Post a question; tracked until answered                                                 |
-| `crew-net request <@login\|PR> review\|fix\|bug "<text>"`           | Post a request for work; tracked until accepted, declined or done                       |
-| `crew-net reply <item> [--done\|--decline] "<text>"`                | Answer an item                                                                          |
-| `crew-net state <planning\|building\|review\|blocked> [--scope p…]` | Update the state block on the current branch's PR                                       |
-| `crew-net dep add\|rm <PR ref>`                                     | Declare or drop a dependency of the current PR                                          |
+| `crew-net ask <@login\|PR> [--on PR] "<text>"`                      | Post a question; tracked until answered                                                 |
+| `crew-net request <@login\|PR> review\|fix\|bug [--on PR] "<text>"` | Post a request for work; tracked until accepted, declined or done                       |
+| `crew-net reply <item> [--accept\|--done\|--decline] "<text>"`      | Answer an item                                                                          |
+| `crew-net state <planning\|building\|review\|blocked> [--scope p…]` | Update the state block on the current branch's PR (`--pr` for another of mine)          |
+| `crew-net dep add\|rm <PR ref>`                                     | Declare or drop a dependency of the current PR (`--pr` for another of mine)             |
 | `crew-net doctor`                                                   | Check `gh`, token, hooks policy, plugin and repo setup; name the next step              |
-| `crew-net init`                                                     | Write the optional repo files (config, draft gate, deps check) for review. Never pushes |
+| `crew-net init [--deps] [--force]`                                  | Write `.github/crew-net.yml` (with `--deps` the crew-deps check) for review. Never pushes |
 | `crew-net stats`                                                    | What crew-net found and delivered, per repo and week                                    |
+
+Plumbing for the adapters: `crew-net sync [--detach]` (one pass),
+`crew-net gate -- <command>` (the merge gate), `crew-net session beat|end`
+(heartbeats), `crew-net inbox --session <id> --claim` (items for one
+session), `crew-net watch` and `crew-net watch send` (the mod's watcher and
+its acks).
 
 Every command takes `--json` and `--repo owner/name`. In Claude Code the plugin
 adds `/crew` (digest) and a `crew-net` skill that tells the model when to use
@@ -248,8 +254,11 @@ body.
 request ──► open ──┬─ reply answered | done ─────────────────────► closed
                    ├─ reply accepted ──► in progress ── reply done ─► closed
                    ├─ reply declined ─────────────────────────────► closed
-                   └─ thread closed or merged, or sender closes it ─► closed
+                   └─ thread closed or merged ─────────────────────► closed
 ```
+
+A sender-side close command comes **later**. The thread check runs in the
+repo job, so a request in a repo that is not watched does not close by itself.
 
 Both sides see open requests with their age in `crew-net inbox` and in the
 digest. A request open for more than 1 h is listed first. crew-net never
@@ -294,6 +303,7 @@ re-pings by itself; the sender's agent may follow up.
 | Fetch and radar | each active repo                                        | 5 min                          | `git fetch --prune origin`, then the radar                             |
 | Dependencies    | each PR named in a `depends-on` of mine, or naming mine | 5 min; 60 s while I am blocked | `GET /repos/{o}/{r}/pulls/{n}` with ETag                               |
 | Watched repos   | each watched repo not active                            | 15 min                         | `GET …/pulls?state=open` with ETag, for `who` and cross-repo contracts |
+| Store prune     | the local store                                         | 24 h                           | none: removes delivered items after 14 days, dead sessions, stale locks |
 
 Each job takes a lock file (`O_EXCL`, holder pid, expiry) and checks when it
 last ran. If any session ran it within its interval, the job exits at once.
@@ -306,8 +316,9 @@ Triggers:
   session is open. The `SessionStart` and `UserPromptSubmit` hooks start a
   detached `crew-net sync` when data is stale and never wait for it.
 - Pi: the extension's timer, like the Claude Code watcher.
-- Codex and plain CLI use: hooks and commands start a sync when data is stale.
-  There is no background tick, so nothing arrives while such a session is idle.
+- Codex and plain CLI use: `crew-net` (the digest) starts a sync when data is
+  stale. There is no background tick, so nothing arrives while such a session
+  is idle. The Pi timer and Codex hooks come **later** (§16).
 
 When no session is open, nothing runs.
 
@@ -329,21 +340,28 @@ the new comments. Checked on 2026-11-09: the endpoint returns `ETag`,
 
 ```text
 crew-net/
-  inbox/<item-id>.json        one per inbound item: comment, review, finding, event
-  delivered/<item-id>         claim file: the session that delivered the item (O_EXCL)
+  inbox/<h>.json              one per inbound item: comment, review, finding, event
+  delivered/<h>               claim: the session that delivered the item (first writer wins)
   outbox.json                 my open requests and their status
-  sessions/<session-id>.json  heartbeat: pid, harness, repo, worktree, branch, role, last prompt
+  sessions/<h>.json           heartbeat: pid, harness, repo, worktree, clone, branch, role, last prompt
   repos/<host>/<owner>/<repo>/
-    snapshot.json             open PRs with parsed state blocks, ETags, branches
-    radar.json                current findings
-  cursors.json                notification cursor, last run per job
-  locks/<job>.lock
-  events.ndjson               append-only log for `crew-net stats`, rotated at 10 MB
+    snapshot.json             open PRs with parsed state blocks, branches
+    radar.json                current findings and compared work
+  cursors.json                notification and thread cursors, last run per job
+  kv/<h>.json                 HTTP cache entries (ETags), viewer, write budget, sync status
+  locks/<h>.lock              job locks and mutexes: pid, token, expiry
+  locks/recovery-<token>      marker of the one process allowed to reap a stale lock
+  events.ndjson               append-only log for `crew-net stats`; events.ndjson.1 after 10 MB
 ```
+
+`<h>` is the SHA-256 of the item id, key or lock name, so no peer-supplied id
+reaches a path. Directories are 0700, files 0600. Details:
+[store adapter](../src/adapters/store/README.md).
 
 - Sync writes an inbox item before it moves a cursor. A killed sync re-reads
   from the old cursor and dedupes by comment id.
-- Delivered items are pruned after 14 days.
+- Delivered items are pruned after 14 days (the daily prune job). Cursors,
+  not the inbox, keep pruned comments and reviews from arriving again.
 - No GitHub token on disk. Sync reads `gh auth token` at start and once more
   after a `401`.
 
@@ -396,7 +414,8 @@ among this developer's live lead sessions:
 
 The session claims an item by creating `delivered/<item-id>`. Other sessions
 skip claimed items. A worker session (`CREW_NET_ROLE=worker`, set by pi-crew or
-by hand) is never a target and never posts; its lead speaks for it.
+by hand) is never a target; `ask`, `request` and `reply` refuse to run in it,
+and its lead speaks for it. `dep` and `state` still edit its own PR body.
 
 ### 9.4 Delivery policy
 
@@ -422,8 +441,9 @@ Deterministic. Runs after each fetch, per active repo.
 Mine: the branch of each local session and each worker worktree in this clone,
 plus my other local branches with open PRs. Theirs: every open PR by someone
 else, plus every remote branch by someone else pushed in the last 3 days
-without a PR. Two work items are compared only when they target the same base
-branch.
+without a PR, unless its changes already read the same on the default branch
+(squash- or rebase-merged and not deleted). Two work items are compared only
+when they target the same base branch.
 
 | Finding    | Rule                                                                               | Shown as                                                   |
 | ---------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------- |
@@ -457,9 +477,12 @@ contracts:
 - A consumer pattern with an `owner/repo:` prefix is in another repo. That repo
   must be watched for the finding to appear. This is how order risk across
   repos is found.
-- Without a config the defaults apply inside one repo: producers
-  `**/migrations/**`, `**/*migration*`, `api/openapi/**`, `**/*.proto`;
-  consumers: any other path.
+- Without a config the built-in contract `schema` applies inside one repo:
+  producers `**/migrations/**`, `**/*migration*`, `api/openapi/**`,
+  `**/*.proto`; consumers: any other path.
+- The other repo's work comes from its snapshot, so it must be watched (a
+  session there in the last 14 days, or `watch` in the developer config).
+  No local clone is needed: the snapshot is read from GitHub.
 
 ## 11. Order
 
@@ -555,10 +578,13 @@ Two optional files:
 
 | File                                | Owner     | Holds                                                                                                 |
 | ----------------------------------- | --------- | ----------------------------------------------------------------------------------------------------- |
-| `.github/crew-net.yml` in each repo | the team  | `contracts`, deploy branches, extra bots, `early-drafts`, `agents-merge` default                      |
-| `~/.config/crew-net/config.json`    | developer | `autoWake` (`reply` or `off`), `agentsMerge` override, idle minutes, extra watched repos, muted repos |
+| `.github/crew-net.yml` in each repo | the team  | `contracts`, `deploy-branches`, `bots`, `early-drafts`, `agents-merge` default                        |
+| `~/.config/crew-net/config.json`    | developer | `watch` (extra watched repos), `mute` (repos sync ignores), `agentsMerge` override                    |
+| Claude Code plugin settings         | developer | `autoWake` (`reply` or `off`), `idleMinutes`                                                          |
 
-With neither file, a developer gets every client feature.
+With neither file, a developer gets every client feature. `agents-merge` and
+`agentsMerge` are read but used **later**: merging stays behind the harness's
+own permission prompt and the order gate.
 
 The repo config is YAML because teams edit it by hand next to workflows. Only
 the small subset above is read, with a minimal parser in `protocol`; no YAML
@@ -570,7 +596,7 @@ library.
 | ----- | ---------------------- | --------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
 | 0     | One developer          | `claude plugin marketplace add alexei-led/crew-net`, then `claude plugin install crew-net@crew-net` | Digest, `who`, radar, comments on own PRs, client gate           |
 | 1     | Two or more developers | The same on each laptop                                                                             | Requests and replies, wake, unblock items, dependency visibility |
-| 2     | Repo admin             | `crew-net init`, review, commit: `crew-net.yml` and the CI draft gate                               | Contracts, early drafts: intent visible from the first push      |
+| 2     | Repo admin             | `crew-net init`, review, commit `crew-net.yml`; add the CI draft gate by hand                       | Contracts, early drafts: intent visible from the first push      |
 | 3     | Repo admin             | Make `crew-deps` from the repo kit a required check                                                 | Order guaranteed on the server for same-repo dependencies        |
 
 Early drafts: a draft PR at the first push shows intent and scope for the whole
@@ -578,14 +604,23 @@ working time (reflex: median 55 min instead of 12). Drafts run full CI by
 default (reflex: 29 check runs per push). So the agent opens a draft at the
 first push only when the repo config says `early-drafts: true`, which
 `crew-net init` sets together with the job-level
-`if: github.event.pull_request.draft == false` gate. Without it, the radar still
+`if: github.event.pull_request.draft == false` gate. `crew-net init` writes
+`early-drafts: false`; the admin adds the gate and sets it to `true`. Without it, the radar still
 sees pushed branches, and the agent opens the PR when the work is ready.
 
-`crew-net doctor` checks each level and names the next step.
+`crew-net doctor` checks each level and names the next step: level 0 needs a
+token, GitHub access, the plugin and hooks allowed by MDM; level 1 a message
+from a peer in the inbox; level 2 a valid `crew-net.yml` and a workflow with
+the draft gate; level 3 the `crew-deps` workflow (it cannot see branch
+protection, so "required" is the admin's step).
 
 ## 16. Harness adapters
 
-| Capability         | Claude Code                      | Pi                        | Codex CLI                           |
+Release 0.1.0 ships the Claude Code column. Pi and Codex get the CLI and an
+`AGENTS.md` snippet ([harnesses.md](harnesses.md)); their adapters below come
+**later**.
+
+| Capability         | Claude Code                      | Pi (later)                | Codex CLI (later)                   |
 | ------------------ | -------------------------------- | ------------------------- | ----------------------------------- |
 | Digest at start    | `SessionStart` hook, context     | extension, on start       | `SessionStart` hook (to verify)     |
 | Inject with prompt | `UserPromptSubmit` hook, context | extension                 | `UserPromptSubmit` hook (to verify) |
@@ -604,7 +639,9 @@ still works by hand.
 
 The mod's watcher is a child process, `crew-net watch --session <id>`. It runs
 sync ticks, watches the store and writes NDJSON events to the mod (`item`,
-`status`, `error`); the mod answers `ack`. This is the pi-crew bridge pattern
+`status`, `error`); the mod sends `ack` and `bye` through a short
+`crew-net watch send --session <id>`, because the engine closes the watcher's
+stdin after `hello`. This is the pi-crew bridge pattern
 (supervisor, `seen` dedupe, replay on restart), copied and adapted rather than
 shared: colleagues install one plugin, the two products release independently,
 and the delivery policy differs. The watcher keeps no state of its own, so
@@ -658,12 +695,13 @@ src/
   core/       radar, routing, delivery, trust, order, digest                                    pure
   app/        sync jobs and commands; depends on ports only
   ports/      GitHubPort, GitPort, StorePort, ClockPort, EnvPort
-  adapters/   github, git, store, env
+  adapters/   github, git, store, env, files
   cli/        crew-net commands; composition root
   watch/      crew-net watch; composition root
 plugin/       Claude Code: hooks.json, mod (register.ts), skill, /crew command
-pi/           Pi extension
+pi/           Pi extension (later)
 repo-kit/     crew-deps workflows, draft-gate snippet, crew-net.yml template
+e2e/          architecture gates, release checks, two-laptop scenario scripts
 ```
 
 Dependency rules, checked by dependency-cruiser in CI:
@@ -718,13 +756,14 @@ reviewed change, read tolerantly because two laptops may run different builds.
   `XDG_STATE_HOME`, `CLAUDE_CONFIG_DIR`, `GH_CONFIG_DIR`) against the sandbox
   repo `alexei-led/crew-net-sandbox`. Cross-developer scenarios need a second
   GitHub account: GitHub creates no notifications for your own comments.
+  Scripts and the 0.1.0 results: [e2e/README.md](../e2e/README.md).
 
 ## 21. Measurement
 
 Every finding, item, delivery, wake turn, gate decision and request outcome is
-appended to `events.ndjson`. `crew-net stats` prints, per repo and week:
-findings by kind and whether the PR changed afterwards, requests and median time
-to answer, wake turns, blocked merges. The live run with the first 2-3
+appended to `events.ndjson`. `crew-net stats` prints, per repo and week: findings
+by kind, items, deliveries, wake turns and blocked merges (the gate logs only
+decisions that check a PR). Requests and median time to answer are **later**. The live run with the first 2-3
 developers uses it to tune intervals, idle time and radar noise, and to decide
 what to change next. A one-off backtest on repo history is
 optional: it can estimate radar hit rates, but history is mostly one developer
@@ -750,6 +789,9 @@ and cannot measure messaging.
 
 - Codex hooks: which of `SessionStart`, `UserPromptSubmit` and `PreToolUse` the
   current Codex CLI supports. Not checked.
+- Request budget, measured 2026-11-09: two sessions in two repos made about
+  120 primary requests an hour (half the polls returned `304`), against the
+  300 estimated in §17.
 - Time from a comment to its notification. Measure in a spike with two
   accounts before building requests.
 - Whether `mention` and `review_requested` notifications appear in the API when
