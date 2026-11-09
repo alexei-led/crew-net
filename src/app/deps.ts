@@ -22,7 +22,7 @@ export async function anyBlocked(store: StorePort): Promise<boolean> {
 }
 
 /**
- * The dependency job (design §11): read each dependency of my open PRs from
+ * The dependency job (design: Order): read each dependency of my open PRs from
  * GitHub, and tell me when a PR is unblocked, a dependency closed unmerged,
  * or someone else's PR started waiting on mine. Auto-merge is turned off on
  * my PR while a dependency is open, or it would merge on the server where no

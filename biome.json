@@ -62,7 +62,7 @@
                 "patterns": [
                   {
                     "group": ["**", "!./**"],
-                    "message": "protocol-is-independent: protocol imports nothing outside protocol (design §19 rule 1)."
+                    "message": "protocol-is-independent: protocol imports nothing outside protocol (design: Code structure)."
                   }
                 ]
               }
@@ -82,7 +82,7 @@
                 "patterns": [
                   {
                     "group": ["**", "!./**", "!../**"],
-                    "message": "core-only-depends-on-core-and-protocol: no packages and no node: modules (design §19 rule 2)."
+                    "message": "core-only-depends-on-core-and-protocol: no packages and no node: modules (design: Code structure)."
                   },
                   {
                     "group": [
@@ -101,7 +101,7 @@
                       "**/repo-kit/**",
                       "**/scripts/**"
                     ],
-                    "message": "core-only-depends-on-core-and-protocol (design §19 rule 2)."
+                    "message": "core-only-depends-on-core-and-protocol (design: Code structure)."
                   }
                 ]
               }
@@ -121,7 +121,7 @@
                 "patterns": [
                   {
                     "group": ["**", "!./**", "!../**"],
-                    "message": "app-only-depends-on-core-protocol-ports: no packages and no node: modules (design §19 rule 3)."
+                    "message": "app-only-depends-on-core-protocol-ports: no packages and no node: modules (design: Code structure)."
                   },
                   {
                     "group": [
@@ -136,7 +136,7 @@
                       "**/repo-kit/**",
                       "**/scripts/**"
                     ],
-                    "message": "app-only-depends-on-core-protocol-ports (design §19 rule 3)."
+                    "message": "app-only-depends-on-core-protocol-ports (design: Code structure)."
                   }
                 ]
               }
@@ -165,7 +165,7 @@
                       "!**/protocol",
                       "!**/protocol/**"
                     ],
-                    "message": "adapters-only-depend-on-ports-protocol-and-self (design §19 rule 4)."
+                    "message": "adapters-only-depend-on-ports-protocol-and-self (design: Code structure)."
                   },
                   {
                     "group": [
@@ -181,7 +181,7 @@
                       "**/adapters/**",
                       "**/plugin/**"
                     ],
-                    "message": "adapters-only-depend-on-ports-protocol-and-self: never app, core, composition roots or another adapter (design §19 rule 4)."
+                    "message": "adapters-only-depend-on-ports-protocol-and-self: never app, core, composition roots or another adapter (design: Code structure)."
                   }
                 ]
               }
@@ -209,7 +209,7 @@
                       "!claude-code",
                       "!claude-code/**"
                     ],
-                    "message": "plugin-only-depends-on-core-and-protocol: no packages (design §19 rule 6)."
+                    "message": "plugin-only-depends-on-core-and-protocol: no packages (design: Code structure)."
                   },
                   {
                     "group": [
@@ -227,7 +227,7 @@
                       "**/repo-kit/**",
                       "**/scripts/**"
                     ],
-                    "message": "plugin-only-depends-on-core-and-protocol: the plugin reaches GitHub, git and the store only through crew-net processes (design §19 rule 6)."
+                    "message": "plugin-only-depends-on-core-and-protocol: the plugin reaches GitHub, git and the store only through crew-net processes (design: Code structure)."
                   }
                 ]
               }
@@ -247,7 +247,7 @@
                 "patterns": [
                   {
                     "group": ["node:*", "node:*/**", "bun:*"],
-                    "message": "mod-has-no-node: the mod runs inside Claude Code without Node built-ins (design §19 rule 6)."
+                    "message": "mod-has-no-node: the mod runs inside Claude Code without Node built-ins (design: Code structure)."
                   },
                   {
                     "group": [
@@ -257,7 +257,7 @@
                       "!claude-code",
                       "!claude-code/**"
                     ],
-                    "message": "plugin-only-depends-on-core-and-protocol: no packages (design §19 rule 6)."
+                    "message": "plugin-only-depends-on-core-and-protocol: no packages (design: Code structure)."
                   },
                   {
                     "group": [
@@ -275,7 +275,7 @@
                       "**/repo-kit/**",
                       "**/scripts/**"
                     ],
-                    "message": "plugin-only-depends-on-core-and-protocol: the plugin reaches GitHub, git and the store only through crew-net processes (design §19 rule 6)."
+                    "message": "plugin-only-depends-on-core-and-protocol: the plugin reaches GitHub, git and the store only through crew-net processes (design: Code structure)."
                   }
                 ]
               }

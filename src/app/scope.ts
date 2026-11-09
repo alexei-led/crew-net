@@ -29,7 +29,7 @@ export interface Here {
 }
 
 /**
- * Which repos this sync pass covers (design §6, §8.2). Active: a live
+ * Which repos this sync pass covers (design: Overview, Sync). Active: a live
  * session's repo, plus the command's own. Watched: a session in the last 14
  * days, plus `watch` from config.json. Muted repos are left out.
  */

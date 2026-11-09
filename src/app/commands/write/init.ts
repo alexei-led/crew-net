@@ -31,7 +31,7 @@ export interface InitResult {
 
 export const CONFIG_PATH = ".github/crew-net.yml";
 
-/** `crew-net init [--deps] [--force]` (design §15). Writes files for review; never commits or pushes. */
+/** `crew-net init [--deps] [--force]` (design: user guide). Writes files for review; never commits or pushes. */
 export async function init(
   ctx: WriteContext,
   args: InitArgs,

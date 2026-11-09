@@ -67,7 +67,7 @@ function sender(item: Item): string {
 }
 
 /**
- * Peer text for the model (design §9.4): a header naming sender and thread,
+ * Peer text for the model (design: Delivery): a header naming sender and thread,
  * then the text inside a nonce-bounded untrusted frame (core/trust).
  */
 export function frame(item: Item, nonce: string): string {

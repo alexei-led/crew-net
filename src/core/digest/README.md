@@ -1,10 +1,10 @@
 # digest
 
-The session-start digest (design §5.1). Pure.
+The session-start digest (design: user guide). Pure.
 
 `compose(input, nowMs) → Digest` (the model, for `--json`) and
 `renderText(digest) → string` (the band, the terminal and the model). The text
-form is shown in [design §5.1](../../../docs/design.md#51-session-start).
+form is shown in [user guide: Session start](../../../docs/user-guide.md#session-start).
 
 | Section | Source                                                                                                                                       |
 | ------- | -------------------------------------------------------------------------------------------------------------------------------------------- |

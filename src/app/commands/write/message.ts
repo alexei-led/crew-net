@@ -92,7 +92,7 @@ type Thread =
   | { kind: "existing"; ref: ThreadRef; to: string }
   | { kind: "new-issue"; repo: string; to: string };
 
-/** Pick the thread for a message (design §7.2). */
+/** Pick the thread for a message (design: Protocol on GitHub). */
 async function pickThread(
   ctx: WriteContext,
   kind: SendResult["kind"],

@@ -17,7 +17,7 @@ export interface Check {
 
 export interface DoctorReport {
   checks: Check[];
-  /** Adoption level reached (design §15), or null when level 0 is not. */
+  /** Adoption level reached (design: user guide), or null when level 0 is not. */
   level: number | null;
   next: string;
 }
@@ -40,7 +40,7 @@ const message = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
 /**
- * `crew-net doctor` (design §15, §18): `gh` and token, SSO, the managed
+ * `crew-net doctor` (design: user guide, Failure and recovery): `gh` and token, SSO, the managed
  * hooks policy, the plugin and therefore the merge gate, the repo config
  * and CI files; the adoption level reached and the next step. A missing
  * gate is a failure, never a pass.

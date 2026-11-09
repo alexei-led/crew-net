@@ -227,7 +227,7 @@ function reasonsOf(answer: Record<string, unknown>): string {
 }
 
 /**
- * The client merge gate (design §11). Commands that cannot merge pass with no
+ * The client merge gate (design: Order). Commands that cannot merge pass with no
  * output, so the normal permission flow runs. A possible merge goes to
  * `crew-net gate` in the Bash call's cwd. Any doubt denies (fail closed).
  * An allow writes nothing: printing `allow` would skip the permission prompt.

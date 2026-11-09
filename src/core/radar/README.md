@@ -1,6 +1,6 @@
 # radar
 
-Turns git facts into findings (design §10). Deterministic, no LLM. Pure.
+Turns git facts into findings (design: Radar). Deterministic, no LLM. Pure.
 
 - `classify(pair, config) → Finding[]`: my work item against someone else's
   (an open PR or a bare pushed branch).

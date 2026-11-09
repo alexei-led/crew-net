@@ -14,7 +14,7 @@ export interface Parsed {
 
 export class UsageError extends Error {}
 
-/** Flags every command accepts (design §5.3). */
+/** Flags every command accepts (design: user guide). */
 export const GLOBAL_FLAGS: FlagSpec = {
   values: ["--repo"],
   switches: ["--json", "--help"],

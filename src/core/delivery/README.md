@@ -1,6 +1,6 @@
 # delivery
 
-Decides what to do with one inbound item now (design §9.4). Pure; adapters bundle it.
+Decides what to do with one inbound item now (design: Delivery). Pure; adapters bundle it.
 
 `decide(item, signals, settings, nowMs) → Action[]`
 

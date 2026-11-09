@@ -220,7 +220,7 @@ function parseCursors(value: unknown): Cursors | undefined {
 }
 
 /**
- * The local store of design §8.3 on one host's filesystem. Every file is
+ * The local store of design: Local store on one host's filesystem. Every file is
  * written atomically (temp, fsync, rename, fsync dir); reads fail closed with
  * StoreFormatError on data they cannot validate.
  */

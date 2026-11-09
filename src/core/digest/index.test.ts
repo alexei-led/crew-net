@@ -55,7 +55,7 @@ const other = (owner: string, over: Partial<OtherWork> = {}): OtherWork => ({
   ...over,
 });
 
-describe("renderText: design §5.1", () => {
+describe("renderText: design: user guide", () => {
   test("golden digest", () => {
     const mine = work(
       "alexei",

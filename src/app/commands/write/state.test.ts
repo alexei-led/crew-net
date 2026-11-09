@@ -39,7 +39,7 @@ const block = (h: ReturnType<typeof harness>, n = 10) => {
   return parsed.state;
 };
 
-describe("state (design §7.1)", () => {
+describe("state (design: Protocol on GitHub)", () => {
   test("appends a block to a PR without one", async () => {
     const h = mine("Adds users.tier.");
     const result = await state(h.ctx, { state: "building", scope: ["api/"] });
@@ -153,7 +153,7 @@ describe("state (design §7.1)", () => {
   });
 });
 
-describe("dep (design §11)", () => {
+describe("dep (design: Order)", () => {
   test.each([
     ["#6", "#6"],
     ["acme/app#6", "#6"],

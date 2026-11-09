@@ -5,7 +5,7 @@ import type { AppPorts } from "./ports";
 import { repoKey, repoSlug } from "./repo";
 
 /**
- * Repo state job (design §8.2): open PRs with their parsed state blocks.
+ * Repo state job (design: Sync): open PRs with their parsed state blocks.
  * ETags make an unchanged list free. Then closes my requests whose thread
  * closed or merged.
  */
@@ -29,7 +29,7 @@ const WHY = {
 } as const;
 
 /**
- * A request is closed when its thread is closed or merged (design §7.3).
+ * A request is closed when its thread is closed or merged (design: Protocol on GitHub).
  * Only threads that are not open PRs are read. The item that tells me is
  * written before the request leaves the outbox; it shows in the digest until
  * a session delivers it. A thread that cannot be read is retried next pass.

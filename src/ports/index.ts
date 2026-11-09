@@ -36,7 +36,7 @@ export interface RequestStats {
   rateLimitRemaining: number | null;
 }
 
-/** Reasons that make a notification a crew-net inbound candidate (design §8.2). */
+/** Reasons that make a notification a crew-net inbound candidate (design: Sync). */
 export type NotificationReason =
   | "mention"
   | "team_mention"
@@ -63,7 +63,7 @@ export interface NotificationPage {
   pollIntervalMs: number | null;
   /**
    * Org ids whose threads GitHub left out because the token lacks SSO
-   * authorization (`X-GitHub-SSO: partial-results`). Show the fix (design §18).
+   * authorization (`X-GitHub-SSO: partial-results`). Show the fix (design: Failure and recovery).
    */
   ssoPartialOrgs: string[];
 }
@@ -228,7 +228,7 @@ export type JsonObject = { [key: string]: JsonValue };
 /** Lifecycle of a request I sent, until a reply or thread close removes it. */
 export type RequestStatus = "open" | "in-progress";
 
-/** A crew request I sent and still track (design §7.3). */
+/** A crew request I sent and still track (design: Protocol on GitHub). */
 export interface OutboundRequest {
   /** Marker id, unique per sender. */
   id: string;
@@ -270,7 +270,7 @@ export interface SessionHeartbeat {
   harness: string;
   role: SessionRole;
   worktree: string;
-  /** Root of the clone the worktree belongs to; routing matches worktrees of one clone (design §9.3). */
+  /** Root of the clone the worktree belongs to; routing matches worktrees of one clone (design: Delivery). */
   clone?: string;
   /** host/owner/repo of the origin remote, when the worktree has one. */
   repo?: string;
@@ -295,7 +295,7 @@ export type RepoFile = "snapshot" | "radar";
 /** ran: fn ran; fresh: it ran within the interval; busy: another process runs it. */
 export type JobOutcome = "ran" | "fresh" | "busy";
 
-/** Durable local state shared by sync and every session on this laptop (design §8.3). */
+/** Durable local state shared by sync and every session on this laptop (design: Local store). */
 export interface StorePort {
   inbox: {
     /** Write or refresh an item. Keeps the first receivedAtMs. */

@@ -22,7 +22,7 @@ import type { AppPorts } from "./ports";
 import { isRecord, refFromKey, repoSlug } from "./repo";
 import { SYNC_STATUS_KEY } from "./sync";
 
-/** Older than this, the digest starts a sync in the background (design §8.2). */
+/** Older than this, the digest starts a sync in the background (design: Sync). */
 export const STALE_MS = 3 * 60_000;
 
 export interface DigestView {
@@ -40,7 +40,7 @@ const slugOfKey = (key: string): string => {
   return ref ? repoSlug(ref) : key;
 };
 
-/** The digest of design §5.1, from the store only: no network, no git. */
+/** The digest of design: user guide, from the store only: no network, no git. */
 export async function buildDigest(
   ports: AppPorts,
   ref: RepoRef,

@@ -24,7 +24,7 @@ const DEPS_FILES = [
   ".github/scripts/crew-deps.mjs",
 ];
 
-describe("init (design §15)", () => {
+describe("init (design: user guide)", () => {
   test("writes the repo config into the working tree, nothing else", async () => {
     const h = harness({ cwd: `${ROOT}/src/api` });
     const result = await init(h.ctx, { kit: KIT });

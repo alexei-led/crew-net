@@ -27,7 +27,7 @@ import type { AppPorts } from "./ports";
 import { isRecord, repoKey, repoSlug, sameRepo } from "./repo";
 import type { ActiveRepo } from "./scope";
 
-/** Bare branches older than this are not someone's current work (design §10). */
+/** Bare branches older than this are not someone's current work (design: Radar). */
 export const BARE_BRANCH_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000;
 
 export const REPO_CONFIG_PATH = ".github/crew-net.yml";
@@ -147,10 +147,10 @@ async function changed(
 }
 
 /**
- * Fetch and radar for one active repo (design §10): my work items against
+ * Fetch and radar for one active repo (design: Radar): my work items against
  * everyone else's open PRs and recent bare branches with the same base, and
  * against others' PRs in the watched repos (`repos`) this repo's contracts
- * name as consumers (§10.1). New findings are written as inbox items before
+ * name as consumers ("Radar"). New findings are written as inbox items before
  * radar.json, which is the record of what was already reported.
  */
 export async function radarJob(
@@ -336,7 +336,7 @@ export async function radarJob(
 
 /**
  * Others' open PRs in the watched repos that this repo's contracts name as
- * consumers (`owner/repo:glob`, design §10.1), read only for contracts whose
+ * consumers (`owner/repo:glob`, design: Radar), read only for contracts whose
  * producer paths I change. There is no clone of those repos here, so their
  * files come from GitHub; they are kept by head sha in kv
  * `pull-files:<host/o/r>` (open PRs only), so an unchanged PR is read once.

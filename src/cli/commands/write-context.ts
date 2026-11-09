@@ -20,7 +20,7 @@ export function newId(): string {
 }
 
 /**
- * A worker session never posts; its lead speaks for it (design §9.3).
+ * A worker session never posts; its lead speaks for it (design: Delivery).
  * The role comes from CREW_NET_ROLE, as for heartbeats.
  */
 export function leadOnly(): void {

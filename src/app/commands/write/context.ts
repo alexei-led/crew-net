@@ -108,7 +108,7 @@ export function parseTarget(text: string, home: Home): Target {
 export const label = (ref: ThreadRef, home: string): string =>
   same(ref.repo, home) ? `#${ref.number}` : `${ref.repo}#${ref.number}`;
 
-/** Refuse text that holds a closing keyword (design §7.1). Names each match. */
+/** Refuse text that holds a closing keyword (design: Protocol on GitHub). Names each match. */
 export function guardKeywords(what: string, text: string): void {
   const matches = findClosingKeywords(text);
   if (matches.length === 0) return;

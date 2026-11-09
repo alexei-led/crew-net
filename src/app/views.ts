@@ -32,7 +32,7 @@ export function touches(asked: string, path: string): boolean {
 
 /**
  * `crew-net who [paths…]`: other people's open work in these repos that
- * touches the paths (design §5.3). Paths come from state-block scopes and,
+ * touches the paths (design: user guide). Paths come from state-block scopes and,
  * in active repos, from the radar's diffs. From the store only.
  */
 export async function who(
@@ -255,7 +255,7 @@ const median = (values: number[]): number | null => {
     : ((sorted[mid - 1] ?? 0) + (sorted[mid] ?? 0)) / 2;
 };
 
-/** `crew-net stats` (design §21): what crew-net found and delivered, per repo and week. */
+/** `crew-net stats` (design: Sync): what crew-net found and delivered, per repo and week. */
 export function stats(events: readonly JsonObject[]): StatsRow[] {
   const rows = new Map<string, StatsRow & { answers: number[] }>();
   for (const e of events) {
@@ -317,7 +317,7 @@ export function renderStats(rows: readonly StatsRow[]): string {
 }
 
 /**
- * New items as hook context (design §9.4): framed, peer text cleaned and
+ * New items as hook context (design: Delivery): framed, peer text cleaned and
  * quoted so it reads as information. Empty when there is nothing new.
  */
 export function itemsContext(items: readonly ItemEvent[]): string {

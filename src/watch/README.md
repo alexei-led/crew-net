@@ -1,7 +1,6 @@
 # watch
 
-`crew-net watch --session <id>`: the Claude Code mod's child process (design
-§16). It is a composition root, like `cli`; the logic is `Watcher` in
+`crew-net watch --session <id>`: the Claude Code mod's child process (design: Harness adapters). It is a composition root, like `cli`; the logic is `Watcher` in
 [app/watch.ts](../app/watch.ts).
 
 Protocol: NDJSON on stdin and stdout, the events of

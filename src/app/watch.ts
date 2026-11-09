@@ -37,7 +37,7 @@ export interface DeliverOptions {
 }
 
 /**
- * Route each unclaimed item with `core/routing` (design §9.3), claim the
+ * Route each unclaimed item with `core/routing` (design: Delivery), claim the
  * ones that go to `sessionId` (first claim wins across sessions) and return
  * them, oldest first, with `wakeable` from the route and `ownPr` when the
  * session's branch has an open PR. `addressed` stays true only on a
@@ -117,7 +117,7 @@ export async function deliverTo(
 }
 
 /**
- * The watcher of one session (design §16): heartbeat, sync tick, route
+ * The watcher of one session (design: Harness adapters): heartbeat, sync tick, route
  * inbox items to this session and claim them, emit them to the mod. It
  * keeps no durable state: claims are in the store, and `emitted` only
  * avoids sending an item twice in one process.

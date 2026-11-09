@@ -1,7 +1,7 @@
 # Write commands
 
 The commands that write to GitHub or to the working tree: `ask`, `request`,
-`reply`, `state`, `dep`, `gate` and `init` (design §5.3, §7, §9.1, §11, §15).
+`reply`, `state`, `dep`, `gate` and `init` (design: user guide, Protocol on GitHub, Sync, Order, user guide).
 Each handler is `(ctx: WriteContext, args) → Promise<result>`; the CLI
 (`src/cli/commands/<name>.ts`) parses argv, builds the context and prints the
 result (`render*`, or JSON with `--json`). Handlers use ports only.
@@ -17,7 +17,7 @@ GitHub adapter) propagate with their own messages.
 `crew-net ask <@login|PR> [--on #N] "<text>"`,
 `crew-net request <@login|PR> review|fix|bug [--on #N] "<text>"`.
 
-The thread (design §7.2), first match:
+The thread (design: Protocol on GitHub), first match:
 
 | Target                    | Thread                                                                                                     |
 | ------------------------- | ---------------------------------------------------------------------------------------------------------- |
@@ -45,7 +45,7 @@ is refused. The comment is:
   outbox write fails, the error says the message was posted.
 - If an Issue was opened but its report could not be posted, the error names
   the Issue so a retry uses `--on #N`.
-- The write budget (20 a minute, 200 an hour, design §9.1) is the GitHub
+- The write budget (20 a minute, 200 an hour, design: Sync) is the GitHub
   adapter's persisted counter in the store's KV. When it is spent the post
   fails with `BudgetError` and nothing is tracked.
 
@@ -76,26 +76,25 @@ host, so a `ghe.corp` URL must never resolve to a `github.com` PR.
 `crew-net dep add|rm <#N|owner/repo#N|URL> [--pr #N]`.
 
 - The PR is my open PR for the current branch, or `--pr`. Another author's PR
-  and a closed PR are refused (design §13).
+  and a closed PR are refused (design: Trust and autonomy).
 - The block is rewritten with `replaceStateBlock`: unknown fields are kept,
   `lead` is dropped. An unreadable block, or a `depends-on` entry the parser
   skipped, is refused: rewriting it would drop a dependency the author meant.
-- Nothing is written unless `state`, `scope` or `depends-on` changes (design
-  §7.1: no heartbeats). A format-only difference, such as the old `v1` tag,
+- Nothing is written unless `state`, `scope` or `depends-on` changes (design: Protocol on GitHub: no heartbeats). A format-only difference, such as the old `v1` tag,
   is not a change.
 - `--scope` replaces the scope; without it the scope is kept.
 - `dep add` stores `#N` for the PR's own repo and `owner/repo#N` otherwise,
   reads the dependency first (missing: `not-found`; closed without merge:
   refused) and refuses the PR itself. If the PR has auto-merge on and the
   dependency is not merged, it turns auto-merge off before writing the body
-  (design §11), so a failed body write leaves nothing unguarded.
+  (design: Order), so a failed body write leaves nothing unguarded.
 - Limits: the body is read, then written; an edit by someone else in between
   is lost. `depends-on` must not change while the PR is in a merge queue; the
   command cannot see the queue.
 
 ## gate
 
-`crew-net gate [--json] -- <command>` (design §11). The command is one
+`crew-net gate [--json] -- <command>` (design: Order). The command is one
 argument with the whole Bash line, or its words.
 
 1. `mayMerge` runs `core/order` `detectMerge`. No merge: `allow`, without

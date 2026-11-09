@@ -1,5 +1,5 @@
 // The crew-net mod: the band, the watcher child, delivery and wake turns for
-// one Claude Code session (design §9.4, §13, §16). Decisions are core's
+// one Claude Code session (design: Delivery, Trust and autonomy, Harness adapters). Decisions are core's
 // (delivery.decide, trust.gate); this file turns engine events into their
 // inputs and their answers into engine calls. The essentials (digest, prompt
 // context, merge gate) are command hooks and work without this mod.
@@ -226,7 +226,7 @@ async function wake($: Engine, p: CrewNetPending): Promise<boolean> {
   return true;
 }
 
-/** Re-decides held requests (design §9.4: an ask held by a running turn or the cooldown wakes once those clear). */
+/** Re-decides held requests (design: Delivery: an ask held by a running turn or the cooldown wakes once those clear). */
 async function recheck($: Engine, r: Run): Promise<void> {
   const s = await readSession($);
   const candidates = s.pending.filter((p) => p.wakeable);
@@ -536,7 +536,7 @@ export function register(on: On, options: PluginOptions): void {
     return done;
   });
 
-  // The wake tool gate (design §13). Fails closed: a gate that throws denies.
+  // The wake tool gate (design: Trust and autonomy). Fails closed: a gate that throws denies.
   on("tool.call", async ($, e, next) => {
     const s = await readSession($);
     const ownTurn = s.turnId !== null && s.ownTurnId === s.turnId;

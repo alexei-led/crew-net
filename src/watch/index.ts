@@ -2,7 +2,7 @@ import type { AppPorts } from "../app/ports";
 import { Watcher } from "../app/watch";
 import { decodeEvent, encodeEvent, type HelperEvent } from "../protocol/index";
 
-/** Design §8.2: the watcher runs a sync tick every 30 s while the session is open. */
+/** Design "Sync": the watcher runs a sync tick every 30 s while the session is open. */
 export const TICK_MS = 30_000;
 
 export interface WatchIo {
@@ -17,7 +17,7 @@ export interface WatchIo {
 }
 
 /**
- * `crew-net watch --session <id>` (design §16): the mod's child. Writes
+ * `crew-net watch --session <id>` (design: Harness adapters): the mod's child. Writes
  * `ready`, reads `hello` (and possibly `ack`/`bye`) from stdin, then ticks
  * every `tickMs`. stdin closing after `hello` is normal: the engine closes
  * it once the input is written. Runs until `bye`, a stop signal or the

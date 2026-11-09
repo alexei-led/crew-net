@@ -7,7 +7,7 @@ The app maps adapter facts into core input types.
 ## GitHub
 
 `GitHubPort` is one adapter per host; every repo argument is `owner/repo`
-(design §12). It returns plain facts: `PullRequest`, `IssueComment`,
+(design: Order). It returns plain facts: `PullRequest`, `IssueComment`,
 `PullReview`, `NotificationThread`, `MergedPull`, `RequestStats`. Author fields
 are GitHub logins from the API, never comment text.
 
@@ -30,7 +30,7 @@ log and rate-limit backoff in `StorePort.kv`, so they survive across processes.
 
 ## Store
 
-`StorePort` is the local store of design §8.3, shared by sync and every
+`StorePort` is the local store of design: Local store, shared by sync and every
 session on the laptop: inbox items with delivery claims, the outbox of my open
 requests, session heartbeats, per-repo snapshot and radar JSON, named cursors,
 `jobs.run` (lock plus freshness check), a small KV for the HTTP cache and write

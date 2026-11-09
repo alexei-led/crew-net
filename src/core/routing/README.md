@@ -1,6 +1,6 @@
 # routing
 
-Picks exactly one local session for an inbound item, or none (design §9.3). Pure.
+Picks exactly one local session for an inbound item, or none (design: Delivery). Pure.
 
 `route(item, sessions) → { session, step, wakeable } | { session: null, step: "none", wakeable: false }`
 

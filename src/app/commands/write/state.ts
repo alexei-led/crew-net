@@ -62,7 +62,7 @@ async function targetPr(
       `--pr expects #N, owner/repo#N or a URL, got ${JSON.stringify(args.pr)}`,
     );
   const pr = await readPull(ctx, ref);
-  // Changing another developer's PR is theirs to confirm (design §13).
+  // Changing another developer's PR is theirs to confirm (design: Trust and autonomy).
   if (!same(pr.author, me))
     throw new CommandError(
       "refused",
@@ -97,7 +97,7 @@ const sameList = (a: readonly string[], b: readonly string[]): boolean =>
   a.length === b.length && a.every((x, i) => x === b[i]);
 
 /**
- * Write `next` into the PR body when a field changed (design §7.1: no heartbeats).
+ * Write `next` into the PR body when a field changed (design: Protocol on GitHub: no heartbeats).
  * `before` runs in every case, after the new body is checked and before it is
  * written: it may switch auto-merge off, which is a write in its own right.
  */
@@ -233,7 +233,7 @@ export async function dep(
         ...current,
         dependsOn: [...current.dependsOn, blockRef(depRef, ref.repo)],
       };
-  // Auto-merge would complete on the server, past every client gate (design §11).
+  // Auto-merge would complete on the server, past every client gate (design: Order).
   // Off first: if the body write then fails, nothing is left unguarded.
   return write(ctx, pr, ref, current, next, async () => {
     if (!pr.autoMerge || target.merged || target.state === "closed")

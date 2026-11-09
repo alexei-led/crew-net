@@ -1,6 +1,6 @@
 import { isRecord } from "./repo";
 
-/** `~/.config/crew-net/config.json`, the developer's own settings (design §14). */
+/** `~/.config/crew-net/config.json`, the developer's own settings (design: user guide). */
 export interface Settings {
   /** `reply`: an idle session wakes to answer a direct request. `off`: never. */
   autoWake: "reply" | "off";

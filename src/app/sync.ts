@@ -7,7 +7,7 @@ import { repoKey } from "./repo";
 import { type Here, syncScope } from "./scope";
 import { snapshotJob } from "./snapshot";
 
-/** Job intervals of design §8.2, in milliseconds. */
+/** Job intervals of design: Sync, in milliseconds. */
 export const INTERVALS = {
   inbox: 60_000,
   repoActive: 60_000,
@@ -48,7 +48,7 @@ function notice(error: unknown, nowMs: number): string | undefined {
 }
 
 /**
- * One sync pass (design §8.2): every job that is due, each under its own
+ * One sync pass (design: Sync): every job that is due, each under its own
  * lock. A job that ran within its interval on this laptop, from any process,
  * is `fresh`; one another process runs is `busy`. A failing job is logged
  * and the rest still run; on a 401 or SSO error the host's other GitHub
@@ -123,7 +123,7 @@ export async function runSync(
     ? INTERVALS.depsBlocked
     : INTERVALS.deps;
   await run("deps", undefined, depsInterval, () => depsJob(ports, repos));
-  // Delivered items, dead sessions, lock markers and temp files (design §8.3).
+  // Delivered items, dead sessions, lock markers and temp files (design: Local store).
   await run("prune", undefined, INTERVALS.prune, () => store.prune());
 
   const failed = jobs.filter((j) => j.outcome === "failed");

@@ -249,7 +249,7 @@ Every key is optional:
 - **Requests:** about 120 primary GitHub requests an hour for two sessions in two
   repos. This figure is extrapolated from a 19.5 minute run. About half the polls
   return `304`, which does not count against the limit. See
-  [design §17](design.md#17-budget) and [§23](design.md#23-open-questions-and-unverified-facts).
+  [design: Sync](design.md#sync) and the [e2e results](../e2e/README.md).
 
 ## Failure modes
 
