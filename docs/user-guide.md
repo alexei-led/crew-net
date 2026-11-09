@@ -187,8 +187,9 @@ options are "not yet set" after install; the defaults apply.
 | `idleMinutes` | `10`    | Minutes without typing or a prompt before a session is idle             |
 
 `CREW_NET_ROLE=worker` in a session's environment marks a worker (for example
-a pi-crew worker): it is never routed to and never posts; its lead speaks for
-it.
+a pi-crew worker): it is never routed to, and `ask`, `request` and `reply`
+refuse to run in it; its lead speaks for it. `dep` and `state` still edit the
+worker's own PR body.
 
 ### Developer config
 
@@ -275,10 +276,10 @@ Every key is optional:
 - **Requests in unwatched repos never close** on their own: the repo job that
   notices a closed thread only polls watched repos. Add the repo to `watch`.
 - **Cross-repo `order` findings need a watched consumer repo.** The other
-  repo must be watched (a session there in the last 14 days, or `watch` in
-  config.json); a consumer repo you have never cloned gives no finding.
-- **Owners of bare branches** come from the commit email. A
-  `…@users.noreply.github.com` address names the login; any other address
-  shows as `someone`.
+  repo must be watched: a session there in the last 14 days, or `watch` in
+  config.json. Watched repos are read from GitHub, so a clone is not needed.
+- **Bare branches need a GitHub noreply commit email.** The owner is read from
+  a `…@users.noreply.github.com` address on the branch's newest commit. A
+  branch whose commits use any other address is not compared at all.
 - `agents-merge` and `agentsMerge` are read but not used yet.
 - Pi and Codex: see [harnesses.md](harnesses.md).

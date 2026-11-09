@@ -414,7 +414,8 @@ among this developer's live lead sessions:
 
 The session claims an item by creating `delivered/<item-id>`. Other sessions
 skip claimed items. A worker session (`CREW_NET_ROLE=worker`, set by pi-crew or
-by hand) is never a target and never posts; its lead speaks for it.
+by hand) is never a target; `ask`, `request` and `reply` refuse to run in it,
+and its lead speaks for it. `dep` and `state` still edit its own PR body.
 
 ### 9.4 Delivery policy
 
@@ -481,7 +482,7 @@ contracts:
   `**/*.proto`; consumers: any other path.
 - The other repo's work comes from its snapshot, so it must be watched (a
   session there in the last 14 days, or `watch` in the developer config).
-  Finding consumers in a repo with no local clone or session comes **later**.
+  No local clone is needed: the snapshot is read from GitHub.
 
 ## 11. Order
 
@@ -595,7 +596,7 @@ library.
 | ----- | ---------------------- | --------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
 | 0     | One developer          | `claude plugin marketplace add alexei-led/crew-net`, then `claude plugin install crew-net@crew-net` | Digest, `who`, radar, comments on own PRs, client gate           |
 | 1     | Two or more developers | The same on each laptop                                                                             | Requests and replies, wake, unblock items, dependency visibility |
-| 2     | Repo admin             | `crew-net init`, review, commit: `crew-net.yml` and the CI draft gate                               | Contracts, early drafts: intent visible from the first push      |
+| 2     | Repo admin             | `crew-net init`, review, commit `crew-net.yml`; add the CI draft gate by hand                       | Contracts, early drafts: intent visible from the first push      |
 | 3     | Repo admin             | Make `crew-deps` from the repo kit a required check                                                 | Order guaranteed on the server for same-repo dependencies        |
 
 Early drafts: a draft PR at the first push shows intent and scope for the whole
@@ -603,7 +604,8 @@ working time (reflex: median 55 min instead of 12). Drafts run full CI by
 default (reflex: 29 check runs per push). So the agent opens a draft at the
 first push only when the repo config says `early-drafts: true`, which
 `crew-net init` sets together with the job-level
-`if: github.event.pull_request.draft == false` gate. Without it, the radar still
+`if: github.event.pull_request.draft == false` gate. `crew-net init` writes
+`early-drafts: false`; the admin adds the gate and sets it to `true`. Without it, the radar still
 sees pushed branches, and the agent opens the PR when the work is ready.
 
 `crew-net doctor` checks each level and names the next step: level 0 needs a
@@ -759,9 +761,9 @@ reviewed change, read tolerantly because two laptops may run different builds.
 ## 21. Measurement
 
 Every finding, item, delivery, wake turn, gate decision and request outcome is
-appended to `events.ndjson`. `crew-net stats` prints, per repo and week:
-findings by kind and whether the PR changed afterwards, requests and median time
-to answer, wake turns, blocked merges. The live run with the first 2-3
+appended to `events.ndjson`. `crew-net stats` prints, per repo and week: findings
+by kind, items, deliveries, wake turns and blocked merges (the gate logs only
+decisions that check a PR). Requests and median time to answer are **later**. The live run with the first 2-3
 developers uses it to tune intervals, idle time and radar noise, and to decide
 what to change next. A one-off backtest on repo history is
 optional: it can estimate radar hit rates, but history is mostly one developer

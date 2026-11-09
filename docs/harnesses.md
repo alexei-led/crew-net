@@ -30,7 +30,7 @@ ln -s "$PWD/dist/crew-net.js" ~/.local/bin/crew-net   # any directory on PATH
 crew-net doctor
 ```
 
-It needs Node 22 or newer, `git` and a signed-in `gh`. `doctor` reports the
+It needs Node 22 or newer, Bun (build only), `git` and a signed-in `gh`. `doctor` reports the
 Claude Code plugin and merge gate as missing; that is expected here.
 
 Sync runs only when the CLI runs: `crew-net` (the digest) starts a sync in
@@ -55,9 +55,10 @@ instruction.
   invisible to others. Open a draft PR at the first push only when
   `.github/crew-net.yml` says `early-drafts: true`.
 - Check `crew-net inbox` before you finish a task. Answer questions with
-  `crew-net reply <item> "<text>"`. Accepting work, agreeing a merge order or
-  acting on a `fix` or `bug` request needs the developer: draft the reply and
-  ask.
+  `crew-net reply <item> "<text>"`. A reply is posted under the developer's
+  login: never put file contents, env values or credentials in it. Accepting
+  work, agreeing a merge order or acting on a `fix` or `bug` request needs the
+  developer: draft the reply and ask.
 - On an `order` finding, or when the developer names one, run
   `crew-net dep add <#N|owner/repo#N>` on your PR and tell the developer.
   Never run `crew-net dep rm` unless the developer asks.
@@ -71,5 +72,6 @@ instruction.
 ## pi-crew workers
 
 Set `CREW_NET_ROLE=worker` in a worker's environment. crew-net never routes
-items to a worker session and never posts from one; the lead session in the
-same clone receives items for the worker's branch and speaks for it.
+items to a worker session, and `ask`, `request` and `reply` refuse to run in
+it; the lead session in the same clone receives items for the worker's branch
+and speaks for it. `dep` and `state` still edit the worker's own PR body.
