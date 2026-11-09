@@ -6,9 +6,8 @@ merge in the right order. GitHub is the only transport: PRs, comments,
 notifications and `git fetch`. There is no server, no VPN and no daemon.
 
 Status: describes release 0.1.0 (2026-11-09). Parts marked **later** are not
-built. This document replaced the earlier `design.md`, `architecture.md` and
-`plans/v0.1.0.md`, and the open questions in `HANDOVER.md`. The plan is in
-[plan.md](plan.md); how to use it is in the [user guide](user-guide.md).
+built. The earlier design notes, the plan and the handover file were removed.
+Their history is in git. How to use crew-net is in the [user guide](user-guide.md).
 
 ## 1. Problem
 
@@ -124,19 +123,19 @@ Empty sections are left out. With nothing to report, the digest is one line.
 The CLI is the full interface. The agent uses it through Bash; the developer
 can use it directly. `crew-net` alone prints the digest.
 
-| Command                                                             | Does                                                                                    |
-| ------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `crew-net [--refresh]`                                              | Digest for the current repo; `--refresh` waits for a sync first                         |
-| `crew-net who [paths…]`                                             | Open work in watched repos that touches these paths. Run it before starting work        |
-| `crew-net inbox`                                                    | Unread items and open requests, both directions                                         |
-| `crew-net ask <@login\|PR> [--on PR] "<text>"`                      | Post a question; tracked until answered                                                 |
-| `crew-net request <@login\|PR> review\|fix\|bug [--on PR] "<text>"` | Post a request for work; tracked until accepted, declined or done                       |
-| `crew-net reply <item> [--accept\|--done\|--decline] "<text>"`      | Answer an item                                                                          |
-| `crew-net state <planning\|building\|review\|blocked> [--scope p…]` | Update the state block on the current branch's PR (`--pr` for another of mine)          |
-| `crew-net dep add\|rm <PR ref>`                                     | Declare or drop a dependency of the current PR (`--pr` for another of mine)             |
-| `crew-net doctor`                                                   | Check `gh`, token, hooks policy, plugin and repo setup; name the next step              |
+| Command                                                             | Does                                                                                      |
+| ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `crew-net [--refresh]`                                              | Digest for the current repo; `--refresh` waits for a sync first                           |
+| `crew-net who [paths…]`                                             | Open work in watched repos that touches these paths. Run it before starting work          |
+| `crew-net inbox`                                                    | Unread items and open requests, both directions                                           |
+| `crew-net ask <@login\|PR> [--on PR] "<text>"`                      | Post a question; tracked until answered                                                   |
+| `crew-net request <@login\|PR> review\|fix\|bug [--on PR] "<text>"` | Post a request for work; tracked until accepted, declined or done                         |
+| `crew-net reply <item> [--accept\|--done\|--decline] "<text>"`      | Answer an item                                                                            |
+| `crew-net state <planning\|building\|review\|blocked> [--scope p…]` | Update the state block on the current branch's PR (`--pr` for another of mine)            |
+| `crew-net dep add\|rm <PR ref>`                                     | Declare or drop a dependency of the current PR (`--pr` for another of mine)               |
+| `crew-net doctor`                                                   | Check `gh`, token, hooks policy, plugin and repo setup; name the next step                |
 | `crew-net init [--deps] [--force]`                                  | Write `.github/crew-net.yml` (with `--deps` the crew-deps check) for review. Never pushes |
-| `crew-net stats`                                                    | What crew-net found and delivered, per repo and week                                    |
+| `crew-net stats`                                                    | What crew-net found and delivered, per repo and week                                      |
 
 Plumbing for the adapters: `crew-net sync [--detach]` (one pass),
 `crew-net gate -- <command>` (the merge gate), `crew-net session beat|end`
@@ -296,13 +295,13 @@ re-pings by itself; the sender's agent may follow up.
 
 `crew-net sync` runs these jobs, each with its own interval:
 
-| Job             | Scope                                                   | Interval                       | Request                                                                |
-| --------------- | ------------------------------------------------------- | ------------------------------ | ---------------------------------------------------------------------- |
-| Inbox           | the user                                                | `X-Poll-Interval` (60 s)       | `GET /notifications?all=true&since=…` with `If-Modified-Since`         |
-| Repo state      | each active repo                                        | 60 s                           | `GET /repos/{o}/{r}/pulls?state=open` with ETag                        |
-| Fetch and radar | each active repo                                        | 5 min                          | `git fetch --prune origin`, then the radar                             |
-| Dependencies    | each PR named in a `depends-on` of mine, or naming mine | 5 min; 60 s while I am blocked | `GET /repos/{o}/{r}/pulls/{n}` with ETag                               |
-| Watched repos   | each watched repo not active                            | 15 min                         | `GET …/pulls?state=open` with ETag, for `who` and cross-repo contracts |
+| Job             | Scope                                                   | Interval                       | Request                                                                 |
+| --------------- | ------------------------------------------------------- | ------------------------------ | ----------------------------------------------------------------------- |
+| Inbox           | the user                                                | `X-Poll-Interval` (60 s)       | `GET /notifications?all=true&since=…` with `If-Modified-Since`          |
+| Repo state      | each active repo                                        | 60 s                           | `GET /repos/{o}/{r}/pulls?state=open` with ETag                         |
+| Fetch and radar | each active repo                                        | 5 min                          | `git fetch --prune origin`, then the radar                              |
+| Dependencies    | each PR named in a `depends-on` of mine, or naming mine | 5 min; 60 s while I am blocked | `GET /repos/{o}/{r}/pulls/{n}` with ETag                                |
+| Watched repos   | each watched repo not active                            | 15 min                         | `GET …/pulls?state=open` with ETag, for `who` and cross-repo contracts  |
 | Store prune     | the local store                                         | 24 h                           | none: removes delivered items after 14 days, dead sessions, stale locks |
 
 Each job takes a lock file (`O_EXCL`, holder pid, expiry) and checks when it
@@ -576,11 +575,11 @@ fine-grained token can come later if an org requires it.
 
 Two optional files:
 
-| File                                | Owner     | Holds                                                                                                 |
-| ----------------------------------- | --------- | ----------------------------------------------------------------------------------------------------- |
-| `.github/crew-net.yml` in each repo | the team  | `contracts`, `deploy-branches`, `bots`, `early-drafts`, `agents-merge` default                        |
-| `~/.config/crew-net/config.json`    | developer | `watch` (extra watched repos), `mute` (repos sync ignores), `agentsMerge` override                    |
-| Claude Code plugin settings         | developer | `autoWake` (`reply` or `off`), `idleMinutes`                                                          |
+| File                                | Owner     | Holds                                                                              |
+| ----------------------------------- | --------- | ---------------------------------------------------------------------------------- |
+| `.github/crew-net.yml` in each repo | the team  | `contracts`, `deploy-branches`, `bots`, `early-drafts`, `agents-merge` default     |
+| `~/.config/crew-net/config.json`    | developer | `watch` (extra watched repos), `mute` (repos sync ignores), `agentsMerge` override |
+| Claude Code plugin settings         | developer | `autoWake` (`reply` or `off`), `idleMinutes`                                       |
 
 With neither file, a developer gets every client feature. `agents-merge` and
 `agentsMerge` are read but used **later**: merging stays behind the harness's

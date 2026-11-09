@@ -7,19 +7,21 @@ registry and the watcher. Depends on `core`, `protocol` and `ports` only;
 ## Sync (design §8.2)
 
 `runSync(ports, here?)` runs every due job once, each through
-`store.jobs.run(name, interval, fn)`: a job another process runs is `busy`,
-one that ran within its interval on this laptop is `fresh`. A failing job is
+`store.jobs.run(name, interval, fn)`. The intervals are in
+[design §8.2](../../docs/design.md#82-sync-without-a-daemon). A job another
+process runs is `busy`. A job that ran within its interval on this laptop is
+`fresh`. A failing job is
 logged (`sync-error` in `events.ndjson`) and the others still run; after a
 401 or SSO error the host's other GitHub jobs are skipped. A rate limit
 becomes the notice `crew-net: rate-limited until HH:MM` in `sync:status`.
 
-| Job             | Name               | Interval                       | Does                                                                                                                   |
-| --------------- | ------------------ | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
-| Inbox           | `inbox:<host>`     | 60 s, or `X-Poll-Interval`     | Notifications since the cursor; each kept thread's new comments (and reviews on PRs) become items                      |
-| Repo state      | `repo:<host/o/r>`  | 60 s active, 15 min watched    | Open PRs with parsed state blocks → `snapshot.json`; closes my requests whose thread closed or merged                  |
-| Fetch and radar | `radar:<host/o/r>` | 5 min, active only             | `git fetch`, my work vs others' PRs and bare branches (same base) → findings; new ones become items, then `radar.json` |
-| Dependencies    | `deps`             | 5 min; 60 s while I am blocked | Reads each dependency of my PRs; `auto-merge-off`, `dependency-closed`, `unblocked`, `waits-on-you` items              |
-| Store prune     | `prune`            | 24 h                           | Removes items delivered 14 days ago, dead session files, stale lock markers and orphan temp files                      |
+| Job             | Name               | Does                                                                                                                   |
+| --------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| Inbox           | `inbox:<host>`     | Notifications since the cursor; each kept thread's new comments (and reviews on PRs) become items                      |
+| Repo state      | `repo:<host/o/r>`  | Open PRs with parsed state blocks → `snapshot.json`; closes my requests whose thread closed or merged                  |
+| Fetch and radar | `radar:<host/o/r>` | `git fetch`, my work vs others' PRs and bare branches (same base) → findings; new ones become items, then `radar.json` |
+| Dependencies    | `deps`             | Reads each dependency of my PRs; `auto-merge-off`, `dependency-closed`, `unblocked`, `waits-on-you` items              |
+| Store prune     | `prune`            | Removes items delivered 14 days ago, dead session files, stale lock markers and orphan temp files                      |
 
 - **Scope.** Active: the repo of a live session heartbeat, plus the
   command's own working copy. Watched: a session there in the last 14 days
