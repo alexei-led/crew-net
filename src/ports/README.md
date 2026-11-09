@@ -19,13 +19,13 @@ Stats fields are requests, notModified, writes and rateLimitRemaining.
 
 ## Store
 
-Inbox put/list use protocol `ItemEvent`. Acknowledgement removes only the id.
-Outbox adds put/ack around open; `OutboundRequest` carries id, issueNumber, to,
-body and createdAt. The app decides when a request is answered.
-
-Lease claim/renew take `(name, holder, nowMs)`, release takes `(name, holder)`,
-and holder takes `(name, nowMs)`. Holder ids are strings, not helper PIDs.
-See [store semantics](../adapters/store/README.md).
+`StorePort` is the local store of design §8.3, shared by sync and every
+session on the laptop: inbox items with delivery claims, the outbox of my open
+requests, session heartbeats, per-repo snapshot and radar JSON, named cursors,
+`jobs.run` (lock plus freshness check), a small KV for the HTTP cache and write
+budget, the `events.ndjson` log and `prune`. Times are epoch milliseconds from
+the `ClockPort` the adapter is given. Snapshot and radar are `JsonValue`; their
+schema belongs to the app. See [store semantics](../adapters/store/README.md).
 
 ## Environment
 
@@ -33,4 +33,4 @@ repoIdentity remains an owner/repo string. managedHooksOnly returns the
 `ManagedHooksPolicy` union: `{status:"known",enabled:boolean}` or
 `{status:"unknown",reason:string}`. Callers must not treat unknown as false.
 
-GitPort and ClockPort are unchanged.
+GitPort and ClockPort are unchanged; the store adapter takes a ClockPort.

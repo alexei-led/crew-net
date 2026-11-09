@@ -62,38 +62,146 @@ export interface GitPort {
   changedPaths(a: string, base: string): Promise<string[]>;
 }
 
-/** An addressed request awaiting a reply or explicit acknowledgement. */
+export type JsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
+export type JsonObject = { [key: string]: JsonValue };
+
+/** Lifecycle of a request I sent, until a reply or thread close removes it. */
+export type RequestStatus = "open" | "in-progress";
+
+/** A crew request I sent and still track (design §7.3). */
 export interface OutboundRequest {
+  /** Marker id, unique per sender. */
   id: string;
-  issueNumber: number;
+  /** host/owner/repo of the thread. */
+  repo: string;
+  /** Issue or PR number of the thread. */
+  number: number;
+  /** GitHub login of the recipient. */
   to: string;
-  body: string;
-  createdAt: string;
+  /** Marker kind: ask, review, fix, bug or info. */
+  kind: string;
+  /** Short summary shown in the inbox and digest. */
+  text: string;
+  createdAtMs: number;
+  status: RequestStatus;
 }
 
-/** Durable local coordination state. */
+/** An inbound item as stored, with the time sync first wrote it. */
+export interface InboxEntry {
+  item: ItemEvent;
+  receivedAtMs: number;
+  /** Set once a session has claimed delivery. */
+  delivered?: DeliveryClaim;
+}
+
+/** Which session delivered an item, and when. */
+export interface DeliveryClaim {
+  sessionId: string;
+  atMs: number;
+}
+
+export type SessionRole = "lead" | "worker";
+
+/** What a session writes about itself on every heartbeat. */
+export interface SessionHeartbeat {
+  sessionId: string;
+  pid: number;
+  /** claude, pi, codex or cli. */
+  harness: string;
+  role: SessionRole;
+  worktree: string;
+  /** host/owner/repo of the origin remote, when the worktree has one. */
+  repo?: string;
+  branch?: string;
+  lastPromptAtMs?: number;
+}
+
+/** A heartbeat with the time it was written. */
+export interface SessionRecord extends SessionHeartbeat {
+  seenAtMs: number;
+}
+
+/** A repository directory under repos/. Each part is a plain path segment. */
+export interface RepoRef {
+  host: string;
+  owner: string;
+  name: string;
+}
+
+export type RepoFile = "snapshot" | "radar";
+
+/** ran: fn ran; fresh: it ran within the interval; busy: another process runs it. */
+export type JobOutcome = "ran" | "fresh" | "busy";
+
+/** Durable local state shared by sync and every session on this laptop (design §8.3). */
 export interface StorePort {
-  cursor: {
-    get(): Promise<string | undefined>;
-    set(value: string): Promise<void>;
-  };
   inbox: {
-    put(id: string, item: ItemEvent): Promise<void>;
-    list(): Promise<ItemEvent[]>;
-    ack(id: string): Promise<void>;
+    /** Write or refresh an item. Keeps the first receivedAtMs. */
+    put(item: ItemEvent): Promise<void>;
+    get(id: string): Promise<InboxEntry | undefined>;
+    /** All items, oldest first, with their delivery claim if any. */
+    list(): Promise<InboxEntry[]>;
+  };
+  delivered: {
+    /** Claim delivery. True when this session holds the claim, also on a repeat. */
+    claim(id: string, sessionId: string): Promise<boolean>;
+    get(id: string): Promise<DeliveryClaim | undefined>;
   };
   outbox: {
-    put(id: string, request: OutboundRequest): Promise<void>;
-    open(): Promise<OutboundRequest[]>;
-    ack(id: string): Promise<void>;
+    put(request: OutboundRequest): Promise<void>;
+    list(): Promise<OutboundRequest[]>;
+    remove(id: string): Promise<void>;
   };
-  leases: {
-    claim(name: string, holder: string, nowMs: number): Promise<boolean>;
-    renew(name: string, holder: string, nowMs: number): Promise<boolean>;
-    release(name: string, holder: string): Promise<void>;
-    holder(name: string, nowMs: number): Promise<string | undefined>;
+  sessions: {
+    /** Write my heartbeat; the store stamps seenAtMs. */
+    beat(session: SessionHeartbeat): Promise<void>;
+    /** Sessions with a heartbeat younger than 3 minutes. */
+    live(): Promise<SessionRecord[]>;
+    remove(sessionId: string): Promise<void>;
   };
-  seen: { has(id: string): Promise<boolean>; add(id: string): Promise<void> };
+  repos: {
+    read(repo: RepoRef, file: RepoFile): Promise<JsonValue | undefined>;
+    write(repo: RepoRef, file: RepoFile, value: JsonValue): Promise<void>;
+  };
+  cursors: {
+    get(name: string): Promise<string | undefined>;
+    set(name: string, value: string): Promise<void>;
+  };
+  jobs: {
+    /**
+     * Take the job lock, skip if the job ran within intervalMs, run fn,
+     * record the start time as the last run, release the lock.
+     */
+    run(
+      name: string,
+      intervalMs: number,
+      fn: () => Promise<void>,
+    ): Promise<JobOutcome>;
+    lastRun(name: string): Promise<number | undefined>;
+  };
+  /** Small values that must survive across processes: HTTP cache, write budget. */
+  kv: {
+    get(key: string): Promise<JsonValue | undefined>;
+    set(key: string, value: JsonValue): Promise<void>;
+    /** Read-modify-write under a lock. fn must not do I/O. */
+    update(
+      key: string,
+      fn: (current: JsonValue | undefined) => JsonValue,
+    ): Promise<JsonValue>;
+  };
+  events: {
+    /** Append one line to events.ndjson. */
+    append(event: JsonObject): Promise<void>;
+  };
+  /** Remove items delivered 14 days ago, session files older than 14 days, stale recovery markers and orphan temp files. */
+  prune(): Promise<void>;
 }
 
 export interface ClockPort {
