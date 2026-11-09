@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FileStoreAdapter } from "../adapters/store/index";
 import type { StorePort } from "../ports/index";
+import { buildDigest } from "./digest";
 import { readDeps, readRadar, readSnapshot } from "./files";
 import { comment, pull } from "./fixtures/fakes";
 import { world as makeWorld, REF, REPO, START } from "./fixtures/world";
@@ -365,6 +366,78 @@ describe("repo state and scope", () => {
   });
 });
 
+describe("request lifecycle", () => {
+  const request = (id: string, number: number, repo = "github.com/o/r") => ({
+    id,
+    repo,
+    number,
+    to: "maria",
+    kind: "review",
+    text: "please review",
+    createdAtMs: START - 60_000,
+    status: "open" as const,
+  });
+
+  test.each([
+    ["merged", "#2 merged"],
+    ["closed", "#2 was closed"],
+  ] as const)(
+    "a request whose thread is %s leaves the outbox and shows once in the digest",
+    async (state, why) => {
+      const w = world();
+      await w.store.outbox.put(request("k1", 2));
+      w.github.states.set(`${REPO}#2`, state);
+      await w.sync();
+      expect(await w.store.outbox.list()).toEqual([]);
+      const id = "request-closed:github.com/o/r#2:k1";
+      expect(await w.items()).toEqual([
+        expect.objectContaining({
+          id,
+          kind: "message",
+          event: "request-closed",
+          repo: REPO,
+          thread: 2,
+          text: `your review to maria on #2 is closed: ${why}`,
+        }),
+      ]);
+      expect(
+        (await w.store.events.read()).find((e) => e.type === "request"),
+      ).toMatchObject({ id: "k1", outcome: `thread-${state}`, openMs: 60_000 });
+      const shown = async () =>
+        (await buildDigest(w.ports, REF, "main")).text.includes("is closed:");
+      expect(await shown()).toBe(true);
+      await w.store.delivered.claim(id, "s1");
+      expect(await shown()).toBe(false);
+    },
+  );
+
+  test("only threads that are not open PRs are read; open ones and other repos' keep their requests", async () => {
+    const w = world();
+    w.github.open.set(REPO, [pull(2, "maria", "feat/x")]);
+    await w.store.outbox.put(request("k1", 2));
+    await w.store.outbox.put(request("k2", 5));
+    await w.store.outbox.put(request("k3", 1, "github.com/o/web"));
+    await w.sync();
+    expect((await w.store.outbox.list()).map((r) => r.id).sort()).toEqual([
+      "k1",
+      "k2",
+      "k3",
+    ]);
+    expect(w.github.calls.filter((c) => c.startsWith("threadState"))).toEqual([
+      "threadState o/r#5",
+    ]);
+  });
+
+  test("a thread that cannot be read keeps its request and the snapshot", async () => {
+    const w = world();
+    await w.store.outbox.put(request("k1", 5));
+    w.github.failing.set("threadState", new Error("410 Gone"));
+    await w.sync();
+    expect(await w.store.outbox.list()).toHaveLength(1);
+    expect(await readSnapshot(w.store, REF)).toBeDefined();
+  });
+});
+
 describe("fetch and radar", () => {
   async function seeded() {
     const w = world();
@@ -482,6 +555,47 @@ describe("fetch and radar", () => {
     );
   });
 
+  test("bare branches are diffed against the default branch GitHub names, read once a day", async () => {
+    const w = world();
+    w.github.defaults.set(REPO, "dev");
+    w.git.local("feat/mine", ["web/a.ts"], "dev");
+    w.git.remote("dmitri/x", ["web/a.ts"], {
+      loginHint: "dmitri",
+      base: "dev",
+    });
+    await w.sync();
+    expect(
+      (await readRadar(w.store, REF))?.findings.map(
+        (f) => `${f.kind} ${f.other.branch} ${f.mine.branch}`,
+      ),
+    ).toEqual(["overlap dmitri/x feat/mine"]);
+    w.advance(INTERVALS.radar);
+    await w.sync();
+    expect(w.github.calls.filter((c) => c.startsWith("defaultBranch"))).toEqual(
+      ["defaultBranch o/r"],
+    );
+  });
+
+  test("a bare branch I merged main into is still its author's work", async () => {
+    const w = world();
+    w.git.local("feat/mine", ["web/a.ts"]);
+    // The tip is my merge commit; the branch's own commits are maria's.
+    w.git.remote("maria/x", ["web/a.ts"], {
+      authorEmail: "9+me@users.noreply.github.com",
+      loginHint: "me",
+    });
+    w.git.authors.set("origin/main..refs/remotes/origin/maria/x", {
+      authorEmail: "5+maria@users.noreply.github.com",
+      loginHint: "maria",
+    });
+    await w.sync();
+    expect(
+      (await readRadar(w.store, REF))?.findings.map(
+        (f) => `${f.kind} ${f.other.owner}`,
+      ),
+    ).toEqual(["overlap maria"]);
+  });
+
   test("a PR merged after my fork point that touches my files is stale", async () => {
     const w = world();
     w.git.local("feat/mine", ["api/server.ts"]);
@@ -527,6 +641,59 @@ describe("fetch and radar", () => {
         producer: "other",
       }),
     ]);
+  });
+});
+
+describe("cross-repo contracts", () => {
+  const CONFIG =
+    'contracts:\n  - name: api\n    producer: [api/openapi/**]\n    consumers: ["o/web:clients/r/**"]\n';
+
+  async function producing() {
+    const w = world();
+    w.git.files.set("origin/HEAD:.github/crew-net.yml", CONFIG);
+    w.git.local("feat/mine", ["api/openapi/users.yaml"]);
+    w.github.open.set(REPO, [pull(7, "me", "feat/mine")]);
+    w.github.open.set("o/web", [
+      pull(3, "dmitri", "feat/client"),
+      pull(4, "olga", "docs"),
+      pull(5, "me", "feat/mine-web"),
+    ]);
+    w.github.files.set("o/web#3", ["clients/r/users.ts"]);
+    w.github.files.set("o/web#4", ["docs/x.md"]);
+    return w;
+  }
+
+  test("my producer change and a consumer PR in a watched repo without a clone make an order finding", async () => {
+    const w = await producing();
+    await w.store.kv.set("watched", { "github.com/o/web": START });
+    await w.sync();
+    expect((await readRadar(w.store, REF))?.findings).toEqual([
+      expect.objectContaining({
+        kind: "order",
+        contract: "api",
+        producer: "mine",
+        mine: expect.objectContaining({ repo: REPO, pr: 7 }),
+        other: expect.objectContaining({
+          repo: "o/web",
+          owner: "dmitri",
+          pr: 3,
+        }),
+        paths: ["api/openapi/users.yaml", "clients/r/users.ts"],
+      }),
+    ]);
+    expect((await w.items()).map((i) => i.text)).toEqual([
+      "order: #7 changes api, dmitri o/web#3 uses it. Add depends-on?",
+    ]);
+    expect(
+      w.github.calls.filter((c) => c.startsWith("listPullFiles")).sort(),
+    ).toEqual(["listPullFiles o/web#3", "listPullFiles o/web#4"]);
+  });
+
+  test("a consumer repo that is not watched is never read", async () => {
+    const w = await producing();
+    await w.sync();
+    expect((await readRadar(w.store, REF))?.findings).toEqual([]);
+    expect(w.github.calls.filter((c) => c.includes("o/web"))).toEqual([]);
   });
 });
 

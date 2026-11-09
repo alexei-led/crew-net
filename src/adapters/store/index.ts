@@ -176,6 +176,7 @@ function parseSession(value: unknown): SessionRecord | undefined {
     (raw.role !== "lead" && raw.role !== "worker") ||
     !isString(raw.worktree) ||
     !isTime(raw.seenAtMs) ||
+    (raw.clone !== undefined && !isString(raw.clone)) ||
     (raw.repo !== undefined && !isString(raw.repo)) ||
     (raw.branch !== undefined && !isString(raw.branch)) ||
     (raw.lastPromptAtMs !== undefined && !isTime(raw.lastPromptAtMs))
@@ -189,6 +190,7 @@ function parseSession(value: unknown): SessionRecord | undefined {
     worktree: raw.worktree,
     seenAtMs: raw.seenAtMs,
   };
+  if (raw.clone !== undefined) session.clone = raw.clone;
   if (raw.repo !== undefined) session.repo = raw.repo;
   if (raw.branch !== undefined) session.branch = raw.branch;
   if (raw.lastPromptAtMs !== undefined)

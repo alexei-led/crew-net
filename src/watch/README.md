@@ -17,7 +17,7 @@ Protocol: NDJSON on stdin and stdout, the events of
 | mod → watch | `ack`    | What the mod did with an item; logged to `events.ndjson`             |
 | mod → watch | `bye`    | The session ends: its heartbeat is removed and the watcher exits     |
 
-- Every 30 s while started: heartbeat (repo and branch of the worktree),
+- Every 30 s while started: heartbeat (repo, branch and clone of the worktree),
   `crew-net sync` jobs that are due, then delivery. Delivery routes each
   unclaimed item with `core/routing`, claims it with `delivered/<id>`, and
   emits it. `addressed` is true only for a request to this developer on a
@@ -27,5 +27,5 @@ Protocol: NDJSON on stdin and stdout, the events of
 - stdin EOF after `hello` is normal. Exits after `bye`, on SIGTERM or
   SIGINT, or when its parent process is gone (ppid changed or 1, or
   `kill(ppid, 0)` fails). stdin closed before any `hello`: exit 1.
-- Heartbeats carry no clone root, so routing step 2 (`clone`) does not
-  match; a worker's branch reaches its lead through step 3 (`repo`).
+- Heartbeats carry the clone root, so routing step 2 (`clone`) sends a
+  worker's branch to the lead in the same clone.

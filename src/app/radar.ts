@@ -7,7 +7,7 @@ import {
   stale,
   type WorkFacts,
 } from "../core/radar/index";
-import type { GitPort, StorePort } from "../ports/index";
+import type { GitPort, RepoRef, StorePort } from "../ports/index";
 import {
   DEFAULT_REPO_CONFIG,
   parseRepoConfig,
@@ -22,7 +22,7 @@ import {
 } from "./files";
 import { putItem, sameLogin } from "./items";
 import type { AppPorts } from "./ports";
-import { repoSlug } from "./repo";
+import { isRecord, repoKey, repoSlug, sameRepo } from "./repo";
 import type { ActiveRepo } from "./scope";
 
 /** Bare branches older than this are not someone's current work (design §10). */
@@ -50,6 +50,41 @@ export async function readRepoConfig(
   return { config: DEFAULT_REPO_CONFIG };
 }
 
+const DEFAULT_BRANCH_TTL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The repo's default branch as GitHub names it, read once a day. When GitHub
+ * cannot be read, the last known one; with none known the radar waits.
+ */
+export async function defaultBranchOf(
+  ports: AppPorts,
+  ref: RepoRef,
+): Promise<string> {
+  const { store, clock } = ports;
+  const key = `default-branch:${repoKey(ref)}`;
+  const cached = await store.kv.get(key);
+  const known =
+    isRecord(cached) && typeof cached.branch === "string"
+      ? cached.branch
+      : undefined;
+  const nowMs = clock.now();
+  if (
+    known &&
+    isRecord(cached) &&
+    typeof cached.atMs === "number" &&
+    nowMs - cached.atMs < DEFAULT_BRANCH_TTL_MS
+  )
+    return known;
+  try {
+    const branch = await ports.github(ref.host).defaultBranch(repoSlug(ref));
+    await store.kv.set(key, { branch, atMs: nowMs });
+    return branch;
+  } catch (error) {
+    if (known) return known;
+    throw error;
+  }
+}
+
 interface Work {
   facts: RadarWork;
   /** The git ref of the work's tip. */
@@ -74,7 +109,8 @@ function pathsText(paths: readonly string[]): string {
 
 /** One line for the band and the inbox. The digest renders findings itself. */
 export function findingText(f: Finding): string {
-  const other = f.other.pr ? `#${f.other.pr}` : (f.other.branch ?? "");
+  const here = sameRepo(f.other.repo, f.mine.repo) ? "" : f.other.repo;
+  const other = f.other.pr ? `${here}#${f.other.pr}` : (f.other.branch ?? "");
   const theirs = `${f.other.owner} ${other}`.trim();
   const mine = f.mine.pr ? `#${f.mine.pr}` : (f.mine.branch ?? "your branch");
   switch (f.kind) {
@@ -103,13 +139,15 @@ async function changed(
 
 /**
  * Fetch and radar for one active repo (design §10): my work items against
- * everyone else's open PRs and recent bare branches with the same base. New
- * findings are written as inbox items before radar.json, which is the
- * record of what was already reported.
+ * everyone else's open PRs and recent bare branches with the same base, and
+ * against others' PRs in the watched repos (`repos`) this repo's contracts
+ * name as consumers (§10.1). New findings are written as inbox items before
+ * radar.json, which is the record of what was already reported.
  */
 export async function radarJob(
   ports: AppPorts,
   active: ActiveRepo,
+  repos: readonly RepoRef[],
 ): Promise<void> {
   const { store, clock } = ports;
   const git = ports.git(active.dir);
@@ -130,8 +168,7 @@ export async function radarJob(
   const remotes = await git.remoteBranches();
   const remoteNames = new Set(remotes.map((r) => r.name));
   const deploy = new Set(config.deployBranches);
-  const defaultBase =
-    config.deployBranches.find((b) => remoteNames.has(b)) ?? "main";
+  const defaultBase = await defaultBranchOf(ports, active.ref);
   // Fork PRs have no branch on origin; a same-named origin branch is other work.
   const sameRepoPulls = snapshot.pulls.filter((p) => !p.fork);
   const byHead = new Map(sameRepoPulls.map((p) => [p.headRef, p]));
@@ -207,14 +244,18 @@ export async function radarJob(
   }
   const nowMs = clock.now();
   for (const branch of remotes) {
-    const owner = branch.loginHint;
-    if (!owner || sameLogin(owner, me) || isBot(owner, bots)) continue;
     if (byHead.has(branch.name) || deploy.has(branch.name)) continue;
     if (mineBranches.has(branch.name)) continue;
     if (branch.name === defaultBase) continue;
     const pushedAtMs = Date.parse(branch.lastCommitAt);
     if (!(nowMs - pushedAtMs <= BARE_BRANCH_MAX_AGE_MS)) continue;
     const ref = `refs/remotes/origin/${branch.name}`;
+    // The branch's own last author: a merge of main into it names the merger.
+    const author = await git
+      .branchAuthor(`origin/${defaultBase}`, ref)
+      .catch(() => undefined);
+    const owner = author?.loginHint;
+    if (!owner || sameLogin(owner, me) || isBot(owner, bots)) continue;
     const paths = await changed(git, `origin/${defaultBase}`, ref);
     if (!paths) continue;
     theirs.push({
@@ -230,6 +271,8 @@ export async function radarJob(
       },
     });
   }
+
+  const consumers = await consumerWork(ports, active.ref, repos, config, me);
 
   const radarConfig = { contracts: { [slug]: config.contracts }, bots };
   const findings = new Map<string, Finding>();
@@ -250,6 +293,14 @@ export async function radarJob(
         ),
       );
     }
+    // Deploy branches are per repo: a pair across repos compares no bases.
+    for (const t of consumers)
+      add(
+        classify(
+          { mine: m.facts, theirs: t, merge: { clean: true } },
+          radarConfig,
+        ),
+      );
     add(stale(m.facts, await landedOn(git, m.ref, m.facts), radarConfig));
   }
 
@@ -259,6 +310,49 @@ export async function radarJob(
     findings: [...findings.values()],
     work: [...mine, ...theirs].map((w) => w.facts),
   });
+}
+
+/**
+ * Others' open PRs in the watched repos that this repo's contracts name as
+ * consumers (`owner/repo:glob`, design §10.1). There is no clone of those
+ * repos here, so their files come from GitHub (ETag-cached). A PR whose
+ * files cannot be read is left out this pass.
+ */
+async function consumerWork(
+  ports: AppPorts,
+  home: RepoRef,
+  repos: readonly RepoRef[],
+  config: RepoConfig,
+  me: string,
+): Promise<WorkFacts[]> {
+  const named = new Set(
+    config.contracts.flatMap((c) =>
+      c.consumers.flatMap((x) => (x.repo ? [x.repo.toLowerCase()] : [])),
+    ),
+  );
+  const work: WorkFacts[] = [];
+  for (const ref of repos) {
+    const slug = repoSlug(ref);
+    if (ref.host !== home.host || slug === repoSlug(home) || !named.has(slug))
+      continue;
+    const github = ports.github(ref.host);
+    for (const pr of (await readSnapshot(ports.store, ref))?.pulls ?? []) {
+      if (sameLogin(pr.author, me) || isBot(pr.author, config.bots)) continue;
+      const paths = await github
+        .listPullFiles(slug, pr.number)
+        .catch(() => undefined);
+      if (!paths) continue;
+      work.push({
+        repo: slug,
+        owner: pr.author,
+        branch: pr.headRef,
+        base: pr.baseRef,
+        pr: pr.number,
+        changedPaths: paths,
+      });
+    }
+  }
+  return work;
 }
 
 /** A conflict needs a file both sides change, so merge-tree runs only then. */

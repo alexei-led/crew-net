@@ -1,5 +1,8 @@
 import { execFile } from "node:child_process";
+import { dirname } from "node:path";
 import type {
+  BranchAuthor,
+  Checkout,
   GitPort,
   LandedCommit,
   MergeTreeResult,
@@ -133,6 +136,28 @@ export class GitAdapter implements GitPort {
     await this.run(["fetch", "--prune", "origin"], [0], FETCH_TIMEOUT_MS);
   }
 
+  async checkout(): Promise<Checkout> {
+    const args = [
+      "rev-parse",
+      "--path-format=absolute",
+      "--show-toplevel",
+      "--git-common-dir",
+    ];
+    const { stdout } = await this.run(args);
+    const [root, common] = stdout.split("\n");
+    if (!root || !common) throw new GitCommandError(args, "", 0);
+    // Exit 1 on a detached HEAD; symbolic-ref also works on an unborn branch.
+    const head = await this.run(["symbolic-ref", "-q", "HEAD"], [0, 1]);
+    const ref = head.stdout.trim();
+    return {
+      root,
+      clone: dirname(common),
+      ...(ref.startsWith("refs/heads/")
+        ? { branch: ref.slice("refs/heads/".length) }
+        : {}),
+    };
+  }
+
   async worktreeBranches(): Promise<WorktreeBranch[]> {
     const { stdout } = await this.run([
       "worktree",
@@ -160,22 +185,16 @@ export class GitAdapter implements GitPort {
   async remoteBranches(): Promise<RemoteBranch[]> {
     const { stdout } = await this.run([
       "for-each-ref",
-      "--format=%(refname:lstrip=3)%00%(symref)%00%(committerdate:iso-strict)%00%(authoremail)",
+      "--format=%(refname:lstrip=3)%00%(symref)%00%(committerdate:iso-strict)",
       "refs/remotes/origin/",
     ]);
     const result: RemoteBranch[] = [];
     // Ref names cannot contain newlines or NUL, so one record per line is safe.
     for (const line of stdout.split("\n")) {
       if (!line) continue;
-      const [name, symref, lastCommitAt, email] = line.split("\0");
+      const [name, symref, lastCommitAt] = line.split("\0");
       if (!name || symref || !lastCommitAt) continue;
-      const authorEmail = (email ?? "").replace(/^<|>$/g, "");
-      result.push({
-        name,
-        lastCommitAt,
-        authorEmail,
-        loginHint: authorEmail.match(NOREPLY)?.[1] ?? null,
-      });
+      result.push({ name, lastCommitAt });
     }
     return result;
   }
@@ -240,6 +259,28 @@ export class GitAdapter implements GitPort {
       result.stderr,
       result.exitCode,
     );
+  }
+
+  async branchAuthor(
+    base: string,
+    tip: string,
+  ): Promise<BranchAuthor | undefined> {
+    const { stdout } = await this.run([
+      "log",
+      "--first-parent",
+      "--no-merges",
+      "--max-count=1",
+      "--format=%ae",
+      "--end-of-options",
+      `${base}..${tip}`,
+      "--",
+    ]);
+    const authorEmail = stdout.trim();
+    if (!authorEmail) return undefined;
+    return {
+      authorEmail,
+      loginHint: authorEmail.match(NOREPLY)?.[1] ?? null,
+    };
   }
 
   async landed(from: string, to: string): Promise<LandedCommit[]> {

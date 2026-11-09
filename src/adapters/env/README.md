@@ -4,7 +4,7 @@
 implements [EnvPort](../../ports/index.ts). The default runner uses `execFile`
 with argv, no shell, a 30 s timeout and a 1 MiB output limit.
 
-- `repoIdentity()` runs `git remote get-url origin` and returns
+- `repoIdentity(dir)` runs `git remote get-url origin` in `dir` and returns
   `{ host, repo }`. HTTPS, `ssh://` and SCP-style remotes are supported; the
   host is lowercased and the port dropped; `ssh.github.com` (SSH over 443)
   maps to `github.com`. Local paths and remotes without

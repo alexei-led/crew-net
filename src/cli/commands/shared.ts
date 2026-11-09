@@ -19,11 +19,11 @@ export async function locate(
   ports: AppPorts,
 ): Promise<Location> {
   const cwd = ctx.runtime.cwd;
-  const identity = await ports.env.repoIdentity().catch(() => undefined);
+  const identity = await ports.env.repoIdentity(cwd).catch(() => undefined);
   const cwdRef = identity
     ? refFromSlug(identity.host, identity.repo)
     : undefined;
-  const wt = await worktreeOf(ports.git(cwd), cwd);
+  const wt = await worktreeOf(ports.git(cwd));
   const branch = wt?.branch ?? "";
   if (ctx.repo !== undefined) {
     const ref = refFromSlug(cwdRef?.host ?? "github.com", ctx.repo);

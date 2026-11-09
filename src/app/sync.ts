@@ -112,12 +112,12 @@ export async function runSync(
       snapshotJob(ports, ref),
     );
   }
+  const repos = [...scope.active.map((a) => a.ref), ...scope.watched];
   for (const active of scope.active) {
     await run(`radar:${repoKey(active.ref)}`, undefined, INTERVALS.radar, () =>
-      radarJob(ports, active),
+      radarJob(ports, active, repos),
     );
   }
-  const repos = [...scope.active.map((a) => a.ref), ...scope.watched];
   const depsInterval = (await anyBlocked(store))
     ? INTERVALS.depsBlocked
     : INTERVALS.deps;

@@ -71,13 +71,13 @@ test("token and repository commands use argv, cwd, and no shell", async () => {
   };
   const env = new EnvAdapter({ repoDir: dir, runner });
   expect(await env.githubToken("github.example")).toBe("test-secret");
-  expect(await env.repoIdentity()).toEqual({
+  expect(await env.repoIdentity("/work/session/sub")).toEqual({
     host: "github.com",
     repo: "owner/repo",
   });
   expect(calls).toEqual([
     ["gh", ["auth", "token", "--hostname", "github.example"], dir],
-    ["git", ["remote", "get-url", "origin"], dir],
+    ["git", ["remote", "get-url", "origin"], "/work/session/sub"],
   ]);
 });
 

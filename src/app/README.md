@@ -16,7 +16,7 @@ becomes the notice `crew-net: rate-limited until HH:MM` in `sync:status`.
 | Job             | Name               | Interval                       | Does                                                                                                                   |
 | --------------- | ------------------ | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
 | Inbox           | `inbox:<host>`     | 60 s, or `X-Poll-Interval`     | Notifications since the cursor; each kept thread's new comments (and reviews on PRs) become items                      |
-| Repo state      | `repo:<host/o/r>`  | 60 s active, 15 min watched    | Open PRs with parsed state blocks → `snapshot.json`                                                                    |
+| Repo state      | `repo:<host/o/r>`  | 60 s active, 15 min watched    | Open PRs with parsed state blocks → `snapshot.json`; closes my requests whose thread closed or merged                  |
 | Fetch and radar | `radar:<host/o/r>` | 5 min, active only             | `git fetch`, my work vs others' PRs and bare branches (same base) → findings; new ones become items, then `radar.json` |
 | Dependencies    | `deps`             | 5 min; 60 s while I am blocked | Reads each dependency of my PRs; `auto-merge-off`, `dependency-closed`, `unblocked`, `waits-on-you` items              |
 
@@ -37,7 +37,12 @@ becomes the notice `crew-net: rate-limited until HH:MM` in `sync:status`.
 - **Messages.** A comment with a crew marker becomes `ask`, `review`, `fix`,
   `bug` or `info`; `addressed` when its first line mentions me. A `reply`
   to one of my outbox requests from its recipient moves the request
-  (`accepted` → in progress, else closed) after the item is stored. Other
+  (`accepted` → in progress, else closed) after the item is stored.
+- **Request lifecycle (§7.3).** The repo state job reads each of my
+  requests whose thread is not an open PR (`GET /issues/{n}`). Closed or
+  merged: a `request-closed` item, then the request leaves the outbox. The
+  item shows in the digest until a session delivers it. A sender-side close
+  command does not exist yet (design §5.3 has none). Other
   comments are `comment`, reviews `pr-review`. Requests carry `msgId`, the
   marker id `crew-net reply` answers with `re=`. My own comments, GitHub Apps
   (`*[bot]`) and the built-in bots are skipped.
@@ -49,12 +54,19 @@ becomes the notice `crew-net: rate-limited until HH:MM` in `sync:status`.
   branch I have checked out counts as mine only. `stale` comes from first-parent history since my fork
   point; a commit names its PR by `(#N)` or `Merge pull request #N`. The
   repo config is `.github/crew-net.yml` on `origin/HEAD` (else `main`,
-  `master`). Cross-repo `order` pairs are not built yet: they need the
-  changed files of PRs in repos without a clone. Bare branches are diffed
-  against the default base; a merge commit names whoever merged it.
+  `master`). Bare branches are diffed against the repo's default branch
+  from GitHub (`GET /repos/{o}/{r}`, kv `default-branch:<repo>`, read once a
+  day; the last known one when GitHub cannot be read). A bare branch's
+  owner is the author of its newest own non-merge commit, so merging main
+  into it does not make the merger its owner.
+- **Cross-repo contracts (§10.1).** A contract consumer `owner/repo:glob`
+  names another repo. When that repo is watched, others' open PRs there
+  (from its snapshot) are compared with my work for `order` only, whatever
+  their base; their files come from `GET /pulls/{n}/files` (ETag-cached),
+  as there is no clone here. They are not added to `radar.json` `work`.
 - **Item ids:** `comment:<host>/<o>/<r>#<n>:<id>`, `review:…`,
   `finding:<key>`, `automerge-off:…`, `dep-closed:…`, `unblocked:…`,
-  `waits:…`.
+  `waits:…`, `request-closed:<host>/<o>/<r>#<n>:<request id>`.
 
 ## Reads (no network)
 
@@ -73,9 +85,11 @@ minutes. `crew-net reply` sets kv `replied:<item-id>`; such a request leaves
 
 ## Sessions and watcher
 
-`beat` writes a heartbeat with the worktree root, branch and repo
-(`host/owner/repo`), keeps the last prompt time unless the beat is a prompt,
-and marks the repo watched. `end` removes it. `Watcher` (see
+`beat` writes a heartbeat with the worktree root, clone root, branch and
+repo (`host/owner/repo`) of the working copy that holds the session's
+directory, as git resolves it (a subdirectory or symlinked path works),
+keeps the last prompt time unless the beat is a prompt, and marks the repo
+watched. Routing matches the clone root for step 2 of design §9.3. `end` removes it. `Watcher` (see
 [watch](../watch/README.md)) heartbeats, syncs, routes unclaimed items with
 `core/routing`, claims them and emits them.
 

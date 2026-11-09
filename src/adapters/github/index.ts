@@ -11,6 +11,7 @@ import type {
   PullReview,
   RequestStats,
   StorePort,
+  ThreadState,
 } from "../../ports/index";
 
 /** GitHub allows 80/min and 500/h content writes per user; crew-net keeps well under (design §9.1). */
@@ -646,6 +647,47 @@ export class GitHubAdapter implements GitHubPort {
         )
       ).body,
     );
+  }
+
+  async listPullFiles(repo: string, number: number): Promise<string[]> {
+    const files = await this.list(
+      `${this.rest}${repoPath(repo)}/pulls/${integer(number)}/files?per_page=100`,
+      (value) => {
+        const raw = object(value);
+        // A rename lists its old path too, as the radar's git diff does.
+        return raw.previous_filename === undefined
+          ? [string(raw.filename)]
+          : [string(raw.filename), string(raw.previous_filename)];
+      },
+    );
+    return files.flat();
+  }
+
+  async defaultBranch(repo: string): Promise<string> {
+    const branch = string(
+      object((await this.request(`${this.rest}${repoPath(repo)}`)).body)
+        .default_branch,
+    );
+    if (branch === "") throw new Error("Invalid GitHub default branch");
+    return branch;
+  }
+
+  async threadState(repo: string, number: number): Promise<ThreadState> {
+    const raw = object(
+      (
+        await this.request(
+          `${this.rest}${repoPath(repo)}/issues/${integer(number)}`,
+        )
+      ).body,
+    );
+    const state = string(raw.state);
+    if (state === "open") return "open";
+    if (state !== "closed") throw new Error("Invalid GitHub issue state");
+    // The issues endpoint answers for PRs too; a merged PR has merged_at.
+    return raw.pull_request != null &&
+      object(raw.pull_request).merged_at != null
+      ? "merged"
+      : "closed";
   }
 
   async listThreadComments(

@@ -84,6 +84,8 @@ export interface MergedPull extends PullRequest {
   mergedAt: string;
 }
 
+export type ThreadState = "open" | "closed" | "merged";
+
 /** Position in a thread's comments: strictly after this (updatedAt, id) pair. */
 export interface CommentCursor {
   updatedAt: string;
@@ -103,6 +105,12 @@ export interface GitHubPort {
   /** Pulls merged at or after `sinceIso`, most recently updated first, at most 50. */
   listMergedPulls(repo: string, sinceIso: string): Promise<MergedPull[]>;
   getPull(repo: string, number: number): Promise<PullRequest>;
+  /** Paths a PR changes (`GET /pulls/{n}/files`, every page), for repos without a clone here. */
+  listPullFiles(repo: string, number: number): Promise<string[]>;
+  /** The repo's default branch (`GET /repos/{o}/{r}`). */
+  defaultBranch(repo: string): Promise<string>;
+  /** Whether an Issue or PR is open, closed or merged (`GET /issues/{n}`). */
+  threadState(repo: string, number: number): Promise<ThreadState>;
   /** Every comment on the issue or PR after `after`, ordered by (updatedAt, id). */
   listThreadComments(
     repo: string,
@@ -124,20 +132,34 @@ export interface MergeTreeResult {
   conflictedPaths: string[];
 }
 
+/** The working copy a directory belongs to. Paths are absolute, symlinks resolved. */
+export interface Checkout {
+  /** Root of the worktree. */
+  root: string;
+  /** Root of the clone: the parent of the git common dir, shared by all its worktrees. */
+  clone: string;
+  /** Branch checked out; absent on a detached HEAD. */
+  branch?: string;
+}
+
+/** The author of a branch's newest own commit. */
+export interface BranchAuthor {
+  authorEmail: string;
+  /** GitHub login from a users.noreply.github.com address, else null. */
+  loginHint: string | null;
+}
+
 export interface WorktreeBranch {
   path: string;
   branch: string;
 }
 
-/** A remote-tracking branch, with the facts a bare branch's owner is inferred from. */
+/** A remote-tracking branch. Its owner comes from `GitPort.branchAuthor`. */
 export interface RemoteBranch {
   /** Branch name without the remote prefix. */
   name: string;
   /** Committer date of the branch tip, ISO 8601. */
   lastCommitAt: string;
-  authorEmail: string;
-  /** GitHub login from a users.noreply.github.com address, else null. */
-  loginHint: string | null;
 }
 
 /** A commit on a base branch after some point, with the paths it changed. */
@@ -155,6 +177,8 @@ export interface LandedCommit {
 export interface GitPort {
   /** Fetch and prune remote refs. */
   fetch(): Promise<void>;
+  /** The worktree, clone and branch of the directory this port runs in. */
+  checkout(): Promise<Checkout>;
   /** Branches checked out in the main and linked worktrees, with their paths. */
   worktreeBranches(): Promise<WorktreeBranch[]>;
   /** Remote-tracking branches on origin. */
@@ -167,6 +191,12 @@ export interface GitPort {
   changedFiles(base: string, head: string): Promise<string[]>;
   /** Text of `path` at `ref`, or undefined when the ref or the path does not exist. */
   showFile(ref: string, path: string): Promise<string | undefined>;
+  /**
+   * Author of the newest non-merge commit on `tip`'s first-parent line that
+   * `base` does not have: who works on the branch, not who merged into it.
+   * Undefined when the branch has no such commit.
+   */
+  branchAuthor(base: string, tip: string): Promise<BranchAuthor | undefined>;
   /** First-parent commits reachable from `to` and not from `from`, newest first, at most 100. */
   landed(from: string, to: string): Promise<LandedCommit[]>;
 }
@@ -226,6 +256,8 @@ export interface SessionHeartbeat {
   harness: string;
   role: SessionRole;
   worktree: string;
+  /** Root of the clone the worktree belongs to; routing matches worktrees of one clone (design §9.3). */
+  clone?: string;
   /** host/owner/repo of the origin remote, when the worktree has one. */
   repo?: string;
   branch?: string;
@@ -342,7 +374,8 @@ export interface RepoIdentity {
 export interface EnvPort {
   /** Token for `host` from `gh auth token --hostname`. */
   githubToken(host: string): Promise<string>;
-  repoIdentity(): Promise<RepoIdentity>;
+  /** The origin remote of the working copy that contains `dir`. */
+  repoIdentity(dir: string): Promise<RepoIdentity>;
   managedHooksOnly(): Promise<ManagedHooksPolicy>;
   /** `${XDG_STATE_HOME:-~/.local/state}/crew-net`. */
   stateDir(): string;

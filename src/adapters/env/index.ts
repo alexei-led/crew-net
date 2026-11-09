@@ -173,10 +173,14 @@ export class EnvAdapter implements EnvPort {
     this.home = options.home ?? homedir();
   }
 
-  private async command(command: string, args: string[]): Promise<string> {
+  private async command(
+    command: string,
+    args: string[],
+    cwd = this.options.repoDir,
+  ): Promise<string> {
     let result: CommandResult;
     try {
-      result = await this.runner(command, args, this.options.repoDir);
+      result = await this.runner(command, args, cwd);
     } catch {
       throw new EnvCommandError(command);
     }
@@ -195,9 +199,9 @@ export class EnvAdapter implements EnvPort {
     return token;
   }
 
-  async repoIdentity(): Promise<RepoIdentity> {
+  async repoIdentity(dir: string): Promise<RepoIdentity> {
     return parseRepoIdentity(
-      await this.command("git", ["remote", "get-url", "origin"]),
+      await this.command("git", ["remote", "get-url", "origin"], dir),
     );
   }
 

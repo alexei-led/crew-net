@@ -27,7 +27,7 @@ export function world(makeStore: (clock: ClockPort) => StorePort) {
     settings: DEFAULT_SETTINGS,
     settingsProblems: [],
     github: () => github,
-    git: () => git,
+    git: (dir) => git.at(dir),
   };
   const here: Here = { ref: REF, dir: "/work/r" };
   return {
