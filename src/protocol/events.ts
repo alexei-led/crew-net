@@ -34,6 +34,8 @@ export interface ItemEvent extends Tagged<"item"> {
   wakeable?: boolean;
   /** Marker id of a crew request, so a reply can point at it. */
   msgId?: string;
+  /** The receiving session's branch has an open PR (a wake turn may update its state). */
+  ownPr?: boolean;
 }
 
 export interface StatusEvent extends Tagged<"status"> {
@@ -153,8 +155,10 @@ export function decodeEvent(line: string): DecodeEventResult {
     }
     if (fields.thread !== undefined && !isInt(fields.thread))
       return malformed("bad thread");
-    if (fields.wakeable !== undefined && !isBoolean(fields.wakeable))
-      return malformed("bad wakeable");
+    for (const name of ["wakeable", "ownPr"]) {
+      if (fields[name] !== undefined && !isBoolean(fields[name]))
+        return malformed(`bad ${name}`);
+    }
   }
   if (type === "hello") {
     for (const name of ["repo", "branch"]) {

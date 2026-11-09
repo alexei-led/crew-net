@@ -182,7 +182,7 @@ describe("watch", () => {
     await new Promise((r) => setTimeout(r, 80));
     expect(a.out.filter((e) => e.type === "item")).toEqual([]);
     expect(b.out.filter((e) => e.type === "item") as unknown[]).toEqual([
-      { ...ask, wakeable: true },
+      { ...ask, wakeable: true, ownPr: true },
     ]);
     expect((await w.store.delivered.get(ask.id))?.sessionId).toBe("sb");
     a.signal();

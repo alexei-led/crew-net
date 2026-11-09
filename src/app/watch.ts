@@ -1,5 +1,5 @@
 import { type LiveSession, route } from "../core/routing/index";
-import type { InboxEntry, SessionRecord } from "../ports/index";
+import type { SessionRecord } from "../ports/index";
 import type {
   AckEvent,
   HelloEvent,
@@ -30,6 +30,91 @@ function liveSession(s: SessionRecord): LiveSession {
   };
 }
 
+export interface DeliverOptions {
+  /** Ids this process already sent; skipped. */
+  sent?: ReadonlySet<string>;
+  /** Send again the items this session claimed within this many ms (0: never). */
+  replayMs: number;
+}
+
+/**
+ * Route each unclaimed item with `core/routing` (design §9.3), claim the
+ * ones that go to `sessionId` (first claim wins across sessions) and return
+ * them, oldest first, with `wakeable` from the route and `ownPr` when the
+ * session's branch has an open PR. `addressed` stays true only on a
+ * wakeable route. Also returns this session's recent claims for replay.
+ */
+export async function deliverTo(
+  ports: AppPorts,
+  sessionId: string,
+  options: DeliverOptions,
+): Promise<ItemEvent[]> {
+  const { store, clock } = ports;
+  const nowMs = clock.now();
+  const records = await store.sessions.live();
+  const sessions = records.map(liveSession);
+  const self = records.find((s) => s.sessionId === sessionId);
+  const selfRef = self?.repo ? refFromKey(self.repo) : undefined;
+  const host = selfRef?.host ?? "github.com";
+  const heads = new Map<string, Map<number, string>>();
+  const headsOf = async (slug: string): Promise<Map<number, string>> => {
+    let byNumber = heads.get(slug);
+    if (!byNumber) {
+      const ref = refFromSlug(host, slug);
+      const pulls = ref ? ((await readSnapshot(store, ref))?.pulls ?? []) : [];
+      byNumber = new Map(pulls.map((p) => [p.number, p.headRef]));
+      heads.set(slug, byNumber);
+    }
+    return byNumber;
+  };
+  const ownPr =
+    selfRef !== undefined &&
+    !!self?.branch &&
+    [...(await headsOf(repoSlug(selfRef))).values()].includes(self.branch);
+
+  const out: ItemEvent[] = [];
+  for (const entry of await store.inbox.list()) {
+    const { item } = entry;
+    if (options.sent?.has(item.id)) continue;
+    const claim = entry.delivered;
+    if (claim) {
+      if (claim.sessionId !== sessionId) continue;
+      if (nowMs - claim.atMs >= options.replayMs) continue;
+    }
+    const branch =
+      item.repo && item.thread !== undefined
+        ? (await headsOf(item.repo.toLowerCase())).get(item.thread)
+        : undefined;
+    const routed = route(
+      {
+        repo: item.repo ?? "",
+        ...(item.thread !== undefined ? { thread: item.thread } : {}),
+        ...(branch ? { branch } : {}),
+      },
+      sessions,
+    );
+    if (!claim) {
+      if (routed.session !== sessionId) continue;
+      if (!(await store.delivered.claim(item.id, sessionId))) continue;
+      await store.events.append({
+        type: "delivery",
+        id: item.id,
+        session: sessionId,
+        step: routed.step,
+        ...(item.repo ? { repo: item.repo } : {}),
+        atMs: nowMs,
+      });
+    }
+    out.push({
+      ...item,
+      addressed: item.addressed && routed.wakeable,
+      wakeable: routed.wakeable,
+      ownPr,
+    });
+  }
+  return out;
+}
+
 /**
  * The watcher of one session (design §16): heartbeat, sync tick, route
  * inbox items to this session and claim them, emit them to the mod. It
@@ -40,8 +125,6 @@ export class Watcher {
   private hello: HelloEvent | undefined;
   private readonly emitted = new Set<string>();
   private lastStatus = "";
-  /** GitHub host of the session's repo, from the last heartbeat. */
-  private host = "github.com";
 
   constructor(
     private readonly ports: AppPorts,
@@ -80,7 +163,6 @@ export class Watcher {
         dir: hello.worktree,
       });
       const ref = heartbeat.repo ? refFromKey(heartbeat.repo) : undefined;
-      if (ref) this.host = ref.host;
       notice = (
         await runSync(ports, ref ? { ref, dir: heartbeat.worktree } : undefined)
       ).notice;
@@ -106,75 +188,13 @@ export class Watcher {
   }
 
   private async deliver(): Promise<void> {
-    const { store, clock } = this.ports;
-    const nowMs = clock.now();
-    const sessions = (await store.sessions.live()).map(liveSession);
-    const heads = new Map<string, Map<number, string>>();
-    const branchOf = async (item: ItemEvent): Promise<string | undefined> => {
-      if (!item.repo || item.thread === undefined) return undefined;
-      const host = refFromKey(
-        (await store.sessions.live()).find(
-          (s) => s.sessionId === this.sessionId,
-        )?.repo ?? "github.com/x/x",
-      )?.host;
-      const ref = refFromSlug(host ?? "github.com", item.repo);
-      if (!ref) return undefined;
-      let byNumber = heads.get(item.repo);
-      if (!byNumber) {
-        byNumber = new Map(
-          ((await readSnapshot(store, ref))?.pulls ?? []).map((p) => [
-            p.number,
-            p.headRef,
-          ]),
-        );
-        heads.set(item.repo, byNumber);
-      }
-      return byNumber.get(item.thread);
-    };
-    for (const entry of await store.inbox.list()) {
-      const { item } = entry;
-      if (this.emitted.has(item.id)) continue;
-      if (!(await this.mine(entry, nowMs))) continue;
-      const branch = await branchOf(item);
-      const routed = route(
-        {
-          repo: item.repo ?? "",
-          ...(item.thread !== undefined ? { thread: item.thread } : {}),
-          ...(branch ? { branch } : {}),
-        },
-        sessions,
-      );
-      if (!entry.delivered) {
-        if (routed.session !== this.sessionId) continue;
-        if (!(await store.delivered.claim(item.id, this.sessionId))) continue;
-        await store.events.append({
-          type: "delivery",
-          id: item.id,
-          session: this.sessionId,
-          step: routed.step,
-          ...(item.repo ? { repo: item.repo } : {}),
-          atMs: nowMs,
-        });
-      }
+    for (const item of await deliverTo(this.ports, this.sessionId, {
+      sent: this.emitted,
+      replayMs: REPLAY_WINDOW_MS,
+    })) {
       this.emitted.add(item.id);
-      this.emit({
-        ...item,
-        addressed: item.addressed && routed.wakeable,
-        wakeable: routed.wakeable,
-      });
+      this.emit(item);
     }
-  }
-
-  /** Unclaimed items may be mine; claimed ones are mine to replay only if this session claimed them recently. */
-  private async mine(entry: InboxEntry, nowMs: number): Promise<boolean> {
-    const claim = entry.delivered;
-    if (!claim) return true;
-    if (claim.sessionId !== this.sessionId) return false;
-    if (nowMs - claim.atMs > REPLAY_WINDOW_MS) {
-      this.emitted.add(entry.item.id);
-      return false;
-    }
-    return true;
   }
 
   /** The mod reports what it did with an item; logged for `crew-net stats`. */

@@ -140,6 +140,10 @@ describe("decodeEvent", () => {
       '{"type":"item","id":"1","kind":"message","text":"t","addressed":true,"event":3}',
     ],
     [
+      "item with string ownPr",
+      '{"type":"item","id":"1","kind":"message","text":"t","addressed":true,"ownPr":1}',
+    ],
+    [
       "item with string wakeable",
       '{"type":"item","id":"1","kind":"message","text":"t","addressed":true,"wakeable":"yes"}',
     ],
