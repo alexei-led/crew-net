@@ -466,14 +466,14 @@ contracts:
 `depends-on` says: this PR must merge after those PRs. crew-net makes it cheap
 to declare, visible to both sides and hard to break.
 
-| Feature          | Behaviour                                                                                                  |
-| ---------------- | ---------------------------------------------------------------------------------------------------------- |
-| Declare          | `crew-net dep add #2301` or `owner/repo#N`. The radar's `order` finding suggests it; the agent proposes it |
-| Producer sees it | Digest: `#2310 (alexei) waits on your #2301`                                                               |
-| Unblocked        | When the last open dependency merges, the owner of the dependent PR gets an `unblocked` item               |
-| Abandoned        | A dependency closed without merge: the owner gets a `dependency closed` item, and the gate denies          |
-| Client gate      | Agents with the plugin cannot run `gh pr merge` (including `--auto`) while a dependency is open            |
-| Server gate      | Optional required check `crew-deps` from the repo kit                                                      |
+| Feature          | Behaviour                                                                                                                                                                                                                  |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Declare          | `crew-net dep add #2301` or `owner/repo#N`. On its own PR the agent adds a dependency alone, when the radar shows an `order` finding or the developer names one, and tells the developer. Dropping one needs the developer |
+| Producer sees it | Digest: `#2310 (alexei) waits on your #2301`                                                                                                                                                                               |
+| Unblocked        | When the last open dependency merges, the owner of the dependent PR gets an `unblocked` item                                                                                                                               |
+| Abandoned        | A dependency closed without merge: the owner gets a `dependency closed` item, and the gate denies                                                                                                                          |
+| Client gate      | Agents with the plugin cannot run `gh pr merge` (including `--auto`) while a dependency is open                                                                                                                            |
+| Server gate      | Optional required check `crew-deps` from the repo kit                                                                                                                                                                      |
 
 Client gate:
 
@@ -519,11 +519,16 @@ dependencies compare each PR against its own base.
 
 ## 13. Trust and autonomy
 
-The line is reversibility, and whose signature an action spends.
+The line is reversibility, and whose signature an action spends. A second rule
+follows from it: an agent may make its own merge conditions stricter alone
+(`dep add`), but loosening them (`dep rm`, dropping work) is the
+developer's call. Adding a dependency only delays the agent's own merge, and
+the developer can undo it with one command.
 
 | Action                                                                                          | Who decides                                                       |
 | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| Read, wait, rebase own branch, update own state block, `dep` on own PR                          | Agent alone                                                       |
+| Read, wait, rebase own branch, update own state block, `dep add` on own PR                      | Agent alone, and it tells the developer                           |
+| `dep rm` on own PR, or any `dep` change on another developer's PR                               | Developer. The agent may propose it                               |
 | Reply to an addressed question                                                                  | Agent alone, under the developer's login, wake turns included     |
 | Accept a request for work, agree an order with another developer, change another developer's PR | Agent drafts; developer confirms                                  |
 | Merge own PR when checks pass and the order gate allows                                         | Developer setting, default from repo config. Never in a wake turn |
@@ -535,7 +540,8 @@ Enforcement:
   framed as information ([§9.4](#94-delivery-policy)) and the skill says so.
 - During a wake turn the plugin's tool gate (`trust.gate`) allows only reads
   (`Read`, `Grep`, `Glob`, read-only `git` and `gh`), `crew-net reply`,
-  `crew-net inbox` and `crew-net state`. Everything else is denied.
+  `crew-net inbox` and `crew-net state`. Everything else is denied; `dep` is
+  never allowed in a wake turn.
 - Review labels, for orgs that require review, come later: `review:agent`
   lets an agent approve if the developer opted in; `review:human`, CODEOWNERS
   or contract paths force a person.
