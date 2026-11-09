@@ -4,7 +4,7 @@ import {
 } from "../../app/commands/write/index";
 import { single, UsageError } from "../args";
 import type { Command } from "../command";
-import { runWrite, textArg } from "./write-context";
+import { leadOnly, runWrite, textArg } from "./write-context";
 
 export const request: Command = {
   name: "request",
@@ -13,6 +13,7 @@ export const request: Command = {
     'Usage: crew-net request <@login|#N|owner/repo#N|URL> review|fix|bug [--on #N] "<text>"\n  bug with @login and no --on opens an Issue',
   spec: { values: ["--on"], switches: [] },
   run(ctx) {
+    leadOnly();
     const [target, kind, ...text] = ctx.args.positional;
     if (target === undefined || kind === undefined)
       throw new UsageError("who and what to request are missing");

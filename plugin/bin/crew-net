@@ -2272,6 +2272,10 @@ var OWNER_REPO = /^[\w.-]+\/[\w.-]+$/;
 function newId() {
   return Array.from(randomBytes(8), (b) => ID_ALPHABET[b % ID_ALPHABET.length]).join("");
 }
+function leadOnly() {
+  if (process.env.CREW_NET_ROLE === "worker")
+    throw new Error("a worker session does not post (CREW_NET_ROLE=worker); ask your lead session to send it");
+}
 async function writeContext(ctx) {
   if (ctx.repo !== undefined && !OWNER_REPO.test(ctx.repo))
     throw new UsageError("--repo expects owner/repo");
@@ -2336,6 +2340,7 @@ var ask2 = {
   --on #N  with @login: the PR or Issue to ask on`,
   spec: { values: ["--on"], switches: [] },
   run(ctx) {
+    leadOnly();
     const [target, ...text] = ctx.args.positional;
     if (target === undefined)
       throw new UsageError("who to ask is missing");
@@ -5154,6 +5159,7 @@ var reply2 = {
   Without a flag the reply is "answered".`,
   spec: { values: [], switches: Object.keys(STATUS_FLAGS) },
   run(ctx) {
+    leadOnly();
     const [item, ...text] = ctx.args.positional;
     if (item === undefined)
       throw new UsageError("the item id is missing");
@@ -5177,6 +5183,7 @@ var request2 = {
   bug with @login and no --on opens an Issue`,
   spec: { values: ["--on"], switches: [] },
   run(ctx) {
+    leadOnly();
     const [target, kind, ...text] = ctx.args.positional;
     if (target === undefined || kind === undefined)
       throw new UsageError("who and what to request are missing");
