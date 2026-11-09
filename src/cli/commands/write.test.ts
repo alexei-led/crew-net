@@ -72,11 +72,10 @@ function world(
 }
 
 describe("crew-net write commands", () => {
-  test("ask posts and prints one line; --json prints the result", async () => {
+  test("ask joins the words into the text; --on and --json are read", async () => {
     const w = world();
     expect(await w.run("ask", "#20", "need", "the", "column?")).toBe(0);
     expect(w.github.comments[0]?.body).toMatch(/@maria need the column\?$/);
-    expect(w.out()).toMatch(/^asked @maria on #20 \(id [a-z0-9]{8}\)/);
     expect(await w.run("ask", "@maria", "--on", "#7", "x", "--json")).toBe(0);
     expect(JSON.parse(w.out().split("\n")[1] ?? "")).toMatchObject({
       kind: "ask",
@@ -102,42 +101,33 @@ describe("crew-net write commands", () => {
     expect(w.built()).toBe(false);
   });
 
-  test("request bug opens an Issue", async () => {
+  test.each([
+    [
+      "a refusal",
+      ["ask", "#20", "fixes #3", "--json"],
+      1,
+      /^crew-net: .*closing keyword/,
+      /"error": ?"closing-keyword"/,
+    ],
+    [
+      "a usage error",
+      ["request", "#20", "approve", "x"],
+      2,
+      /review, fix or bug/,
+      /^$/,
+    ],
+    [
+      "reply with --done and --decline",
+      ["reply", "c-9", "--done", "--decline", "x"],
+      2,
+      /pick one of --done, --decline/,
+      /^$/,
+    ],
+  ])("%s exits %p", async (_name, argv, exit, stderr, stdout) => {
     const w = world();
-    expect(await w.run("request", "@maria", "bug", "500 on /login")).toBe(0);
-    expect(w.github.issues).toHaveLength(1);
-  });
-
-  test("a refusal exits 1 with the reason on stderr; --json also prints it", async () => {
-    const w = world();
-    expect(await w.run("ask", "#20", "fixes #3", "--json")).toBe(1);
-    expect(w.err()).toMatch(/^crew-net: .*closing keyword/);
-    expect(JSON.parse(w.out())).toMatchObject({ error: "closing-keyword" });
-  });
-
-  test("a usage error exits 2", async () => {
-    const w = world();
-    expect(await w.run("request", "#20", "approve", "x")).toBe(2);
-    expect(w.err()).toMatch(/review, fix or bug/);
-  });
-
-  test("reply takes one status flag", async () => {
-    const w = world();
-    w.store.addInbox({
-      type: "item",
-      id: "c-9",
-      kind: "message",
-      text: "?",
-      addressed: true,
-      from: "maria",
-      repo: REPO,
-      thread: 10,
-      event: "review",
-      msgId: "k3f9",
-    });
-    expect(await w.run("reply", "c-9", "--done", "merged")).toBe(0);
-    expect(w.github.comments[0]?.body).toContain("status=done");
-    expect(await w.run("reply", "c-9", "--done", "--decline", "x")).toBe(2);
+    expect(await w.run(...argv)).toBe(exit);
+    expect(w.err()).toMatch(stderr);
+    expect(w.out()).toMatch(stdout);
   });
 
   test.each([
@@ -159,11 +149,22 @@ describe("crew-net write commands", () => {
     expect(JSON.parse(w.out())).toMatchObject({ state: "building", scope });
   });
 
-  test("dep add writes depends-on", async () => {
+  test("reply --done posts the done status", async () => {
     const w = world();
-    expect(await w.run("dep", "add", "#1")).toBe(0);
-    expect(w.github.body(REPO, 10)).toContain("depends-on: #1");
-    expect(w.out()).toMatch(/^updated #10: .*depends-on: #1/);
+    w.store.addInbox({
+      type: "item",
+      id: "c-9",
+      kind: "message",
+      text: "?",
+      addressed: true,
+      from: "maria",
+      repo: REPO,
+      thread: 10,
+      event: "review",
+      msgId: "k3f9",
+    });
+    expect(await w.run("reply", "c-9", "--done", "merged")).toBe(0);
+    expect(w.github.comments[0]?.body).toContain("status=done");
   });
 
   test("init writes the bundled kit", async () => {

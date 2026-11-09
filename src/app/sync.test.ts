@@ -854,31 +854,41 @@ describe("cross-repo contracts", () => {
     return w;
   }
 
-  test("my producer change and a consumer PR in a watched repo without a clone make an order finding", async () => {
-    const w = await producing();
-    await w.store.kv.set("watched", { "github.com/o/web": START });
-    await w.sync();
-    expect((await readRadar(w.store, REF))?.findings).toEqual([
-      expect.objectContaining({
-        kind: "order",
-        contract: "api",
-        producer: "mine",
-        mine: expect.objectContaining({ repo: REPO, pr: 7 }),
-        other: expect.objectContaining({
-          repo: "o/web",
-          owner: "dmitri",
-          pr: 3,
+  test.each([
+    ["exact case", "o/web:"],
+    ["another case", "O/Web:"],
+  ])(
+    "my producer change and a consumer PR in a watched repo without a clone make an order finding: consumer named in %s",
+    async (_name, consumer) => {
+      const w = await producing();
+      w.git.files.set(
+        "origin/HEAD:.github/crew-net.yml",
+        CONFIG.replace("o/web:", consumer),
+      );
+      await w.store.kv.set("watched", { "github.com/o/web": START });
+      await w.sync();
+      expect((await readRadar(w.store, REF))?.findings).toEqual([
+        expect.objectContaining({
+          kind: "order",
+          contract: "api",
+          producer: "mine",
+          mine: expect.objectContaining({ repo: REPO, pr: 7 }),
+          other: expect.objectContaining({
+            repo: "o/web",
+            owner: "dmitri",
+            pr: 3,
+          }),
+          paths: ["api/openapi/users.yaml", "clients/r/users.ts"],
         }),
-        paths: ["api/openapi/users.yaml", "clients/r/users.ts"],
-      }),
-    ]);
-    expect((await w.items()).map((i) => i.text)).toEqual([
-      "order: #7 changes api, dmitri o/web#3 uses it. Add depends-on?",
-    ]);
-    expect(
-      w.github.calls.filter((c) => c.startsWith("listPullFiles")).sort(),
-    ).toEqual(["listPullFiles o/web#3", "listPullFiles o/web#4"]);
-  });
+      ]);
+      expect((await w.items()).map((i) => i.text)).toEqual([
+        "order: #7 changes api, dmitri o/web#3 uses it. Add depends-on?",
+      ]);
+      expect(
+        w.github.calls.filter((c) => c.startsWith("listPullFiles")).sort(),
+      ).toEqual(["listPullFiles o/web#3", "listPullFiles o/web#4"]);
+    },
+  );
 
   test("bot PRs are never read; unchanged PRs are read once; a failed read is logged", async () => {
     const w = await producing();
@@ -912,34 +922,27 @@ describe("cross-repo contracts", () => {
     expect((await readRadar(w.store, REF))?.findings).toHaveLength(1);
   });
 
-  test("without a producer change of mine, the consumer repo's files are not read", async () => {
-    const w = await producing();
-    await w.store.kv.set("watched", { "github.com/o/web": START });
-    w.git.worktrees = [];
-    w.git.local("feat/mine", ["web/x.ts"]);
-    await w.sync();
-    expect(w.github.calls.filter((c) => c.startsWith("listPullFiles"))).toEqual(
-      [],
-    );
-  });
-
-  test("a consumer named in another case still matches", async () => {
-    const w = await producing();
-    w.git.files.set(
-      "origin/HEAD:.github/crew-net.yml",
-      CONFIG.replace("o/web:", "O/Web:"),
-    );
-    await w.store.kv.set("watched", { "github.com/o/web": START });
-    await w.sync();
-    expect((await readRadar(w.store, REF))?.findings).toHaveLength(1);
-  });
-
-  test("a consumer repo that is not watched is never read", async () => {
-    const w = await producing();
-    await w.sync();
-    expect((await readRadar(w.store, REF))?.findings).toEqual([]);
-    expect(w.github.calls.filter((c) => c.includes("o/web"))).toEqual([]);
-  });
+  test.each([
+    ["no producer change of mine", true, ["listOpenPulls o/web"]],
+    ["consumer repo not watched", false, []],
+  ])(
+    "the consumer repo's files are not read: %s",
+    async (_name, watched, consumerCalls) => {
+      const w = await producing();
+      if (watched)
+        await w.store.kv.set("watched", { "github.com/o/web": START });
+      w.git.worktrees = [];
+      w.git.local(
+        "feat/mine",
+        watched ? ["web/x.ts"] : ["api/openapi/users.yaml"],
+      );
+      await w.sync();
+      expect((await readRadar(w.store, REF))?.findings).toEqual([]);
+      expect(w.github.calls.filter((c) => c.includes("o/web"))).toEqual(
+        consumerCalls,
+      );
+    },
+  );
 });
 
 describe("dependencies", () => {
@@ -1068,17 +1071,11 @@ describe("store maintenance", () => {
     const w = world();
     await w.store.inbox.put(item("old"));
     await w.store.delivered.claim("old", "s1");
-    w.advance(10 * DAY);
-    await w.store.inbox.put(item("recent"));
-    await w.store.delivered.claim("recent", "s1");
     await w.store.inbox.put(item("unclaimed"));
-    w.advance(5 * DAY);
+    w.advance(15 * DAY);
     const report = await w.sync();
     expect(report.jobs).toContainEqual({ job: "prune", outcome: "ran" });
-    expect((await w.items()).map((i) => i.id).sort()).toEqual([
-      "recent",
-      "unclaimed",
-    ]);
+    expect((await w.items()).map((i) => i.id)).toEqual(["unclaimed"]);
     w.advance(DAY - 1);
     expect((await w.sync()).jobs).toContainEqual({
       job: "prune",

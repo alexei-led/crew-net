@@ -27,7 +27,7 @@ Pure TypeScript: no I/O, no `node:` imports, no clock. The mod bundles it.
 - `<!-- crew-net:msg` is not a state block: the block tag must be followed by whitespace or `-->`.
 - A message marker counts only at the start of a comment, so a quoted marker in a person's reply is not a request.
 - `item` may carry `repo` (`owner/repo`), `thread` (issue or PR number) and `event` (what happened: a message kind, `comment`, `pr-review`, `unblocked`, `dependency-closed`, `waits-on-you`, `auto-merge-off` or a finding kind). All three are optional; a reader treats them as absent when missing.
-- `fixtures/events/*.json` holds one event per file, one file per event type (three for `item`, one per kind). Consumers compact each file to one NDJSON line. The watcher and mod contract tests read the same files, so a schema change breaks both or neither.
+- `fixtures/events/*.json` holds one event per file, one file per event type (three for `item`, one per kind). Consumers compact each file to one NDJSON line. `events.test.ts` decodes and re-encodes each file, so a schema change that drops one fails there.
 - `repo-kit/scripts/crew-deps.mjs` carries a dependency-free copy of the state block reader. `repo-kit/crew-deps.test.ts` checks it against `parseStateBlock`.
 
 ## Repo config subset

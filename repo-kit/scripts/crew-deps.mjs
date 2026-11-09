@@ -224,10 +224,7 @@ if (
       throw new Error(
         "Usage: crew-deps.mjs check BODY_FILE | check-queue QUEUE_HEAD_REF | rerun MERGED_PR_NUMBER (GITHUB_REPOSITORY required)",
       );
-    if (command === "parse")
-      console.log(JSON.stringify(parseStateBlock(readFileSync(arg, "utf8"))));
-    else if (command === "check")
-      check(arg, repo, process.env.GITHUB_PR_NUMBER);
+    if (command === "check") check(arg, repo, process.env.GITHUB_PR_NUMBER);
     else if (command === "check-queue") checkQueue(arg, repo);
     else if (command === "rerun" && /^\d+$/.test(arg)) rerun(repo, arg);
     else throw new Error("Unknown command or invalid PR number");

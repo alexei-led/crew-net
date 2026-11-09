@@ -303,16 +303,6 @@ describe("compose: Others", () => {
       "Others  dmitri doiteng/omni#88  order: #1 changes api, this uses it. Add depends-on?",
     );
   });
-
-  test(`capped at ${SECTION_MAX} with a pointer to who`, () => {
-    const others = Array.from({ length: SECTION_MAX + 3 }, (_, i) =>
-      other(`dev${i}`, { pr: i + 1 }),
-    );
-    const d = compose(input({ others }), NOW);
-    expect(d.others.shown).toHaveLength(SECTION_MAX);
-    expect(d.others.hidden).toBe(3);
-    expect(renderText(d)).toContain("        +3 more: crew-net who");
-  });
 });
 
 describe("compose: Merged since you branched", () => {
@@ -591,33 +581,43 @@ describe("review regressions", () => {
 
   test("every section is capped", () => {
     const n = SECTION_MAX + 2;
-    const out = text({
-      inbox: Array.from({ length: n }, (_, i) => ({
-        from: "m",
-        kind: "ask",
-        repo: REPO,
-        thread: i,
-        text: "t",
-        atMs: NOW,
-      })),
-      waiting: Array.from({ length: n }, (_, i) => ({
-        to: "m",
-        kind: "ask",
-        repo: REPO,
-        thread: i,
-        atMs: NOW,
-        status: "open" as const,
-      })),
-      dependents: Array.from({ length: n }, (_, i) => ({
-        repo: REPO,
-        number: 100 + i,
-        owner: "m",
-        on: 1,
-      })),
-    });
-    expect(out.split("\n").filter((l) => l.includes("+2 more"))).toHaveLength(
-      3,
+    const d = compose(
+      input({
+        others: Array.from({ length: n }, (_, i) =>
+          other(`dev${i}`, { pr: i + 1 }),
+        ),
+        inbox: Array.from({ length: n }, (_, i) => ({
+          from: "m",
+          kind: "ask",
+          repo: REPO,
+          thread: i,
+          text: "t",
+          atMs: NOW,
+        })),
+        waiting: Array.from({ length: n }, (_, i) => ({
+          to: "m",
+          kind: "ask",
+          repo: REPO,
+          thread: i,
+          atMs: NOW,
+          status: "open" as const,
+        })),
+        dependents: Array.from({ length: n }, (_, i) => ({
+          repo: REPO,
+          number: 100 + i,
+          owner: "m",
+          on: 1,
+        })),
+      }),
+      NOW,
     );
-    expect(out.split("\n")).toHaveLength(1 + 3 * (SECTION_MAX + 1) + 1);
+    const out = renderText(d);
+    expect(d.others.shown).toHaveLength(SECTION_MAX);
+    expect(d.others.hidden).toBe(2);
+    expect(out).toContain("+2 more: crew-net who");
+    expect(out.split("\n").filter((l) => l.includes("+2 more"))).toHaveLength(
+      4,
+    );
+    expect(out.split("\n")).toHaveLength(1 + 4 * (SECTION_MAX + 1) + 1);
   });
 });

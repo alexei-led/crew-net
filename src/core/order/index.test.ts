@@ -237,6 +237,7 @@ describe("detectMerge: wrappers and chains", () => {
     ["g'h' pr mer\"ge\" 5", merge({ pr: 5 })],
     ["gh pr merge 5 > out.txt 2>&1", merge({ pr: 5 })],
     ["gh pr merge 1; gh pr merge 2", merge({ pr: 1 }, { pr: 2 })],
+    ["cat <<EOF\nhello\nEOF\ngh pr merge 5", merge({ pr: 5 })],
   ])("%s", (command, expected) => {
     expect(detectMerge(command)).toEqual(expected);
   });
@@ -310,12 +311,6 @@ describe("detectMerge: wrappers and chains", () => {
     "gh pr list | xargs gh pr view",
   ])("allows non-merge %j", (command) => {
     expect(detectMerge(command)).toEqual(NONE);
-  });
-
-  test("a merge after a here-document is found", () => {
-    expect(detectMerge("cat <<EOF\nhello\nEOF\ngh pr merge 5")).toEqual(
-      merge({ pr: 5 }),
-    );
   });
 });
 
@@ -416,11 +411,9 @@ describe("detectMerge: gh aliases", () => {
     ["gh view5", NONE],
     ["gh shipit", merge({})],
     ["gh some-extension run", NONE],
+    ["gh shipvar 5", expect.objectContaining({ kind: "deny" })],
   ])("with alias map: %s", (command, expected) => {
     expect(detectMerge(command, { aliases })).toEqual(expected);
-  });
-  test("shell alias with a variable target is denied", () => {
-    expect(detectMerge("gh shipvar 5", { aliases }).kind).toBe("deny");
   });
   test("without a map an unknown command is a possible merge of the current PR", () => {
     expect(detectMerge("gh sq 5")).toEqual(merge({}));

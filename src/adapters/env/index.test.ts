@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,6 +18,27 @@ beforeEach(() => {
 });
 afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
+});
+
+test("the default runner runs git for real and fails closed on a bad exit or launch", async () => {
+  const env = new EnvAdapter({ repoDir: dir });
+  await expect(env.repoIdentity(dir)).rejects.toBeInstanceOf(EnvCommandError);
+  await expect(env.repoIdentity(join(dir, "missing"))).rejects.toBeInstanceOf(
+    EnvCommandError,
+  );
+  execFileSync("git", ["init", "-q", dir]);
+  execFileSync("git", [
+    "-C",
+    dir,
+    "remote",
+    "add",
+    "origin",
+    "git@github.com:o/r.git",
+  ]);
+  expect(await env.repoIdentity(dir)).toEqual({
+    host: "github.com",
+    repo: "o/r",
+  });
 });
 
 test("token and repository commands use argv, cwd, and no shell", async () => {
@@ -97,48 +119,53 @@ test("missing user and device plists means a known false policy", async () => {
   expect(calls).toEqual([]);
 });
 
-test("user setting wins, using plutil with the exact path argument", async () => {
-  const user = join(dir, "user policy.plist");
-  const device = join(dir, "device.plist");
-  writeFileSync(user, "fixture");
-  writeFileSync(device, "fixture");
-  const { env, calls } = policy([user, device], {
-    [user]: '{"allowManagedHooksOnly":false}',
-    [device]: '{"allowManagedHooksOnly":true}',
-  });
-  expect(await env.managedHooksOnly()).toEqual({
-    status: "known",
-    enabled: false,
-  });
-  expect(calls).toEqual([["plutil", "-convert", "json", "-o", "-", user]]);
-});
+const plutil = (path: string) => [
+  "plutil",
+  "-convert",
+  "json",
+  "-o",
+  "-",
+  path,
+];
 
-test("missing user key falls through to device policy", async () => {
-  const user = join(dir, "user");
-  const device = join(dir, "device");
-  writeFileSync(user, "fixture");
-  writeFileSync(device, "fixture");
-  const { env } = policy([user, device], {
-    [user]: "{}",
-    [device]: '{"allowManagedHooksOnly":true}',
-  });
-  expect(await env.managedHooksOnly()).toEqual({
-    status: "known",
-    enabled: true,
-  });
-});
-
-test("missing user file falls through to device policy", async () => {
-  const device = join(dir, "device");
-  writeFileSync(device, "fixture");
-  const { env } = policy([join(dir, "missing"), device], {
-    [device]: '{"allowManagedHooksOnly":true}',
-  });
-  expect(await env.managedHooksOnly()).toEqual({
-    status: "known",
-    enabled: true,
-  });
-});
+test.each<[string, string | undefined, string | undefined, boolean, string[]]>([
+  [
+    "user setting wins",
+    '{"allowManagedHooksOnly":false}',
+    '{"allowManagedHooksOnly":true}',
+    false,
+    ["user"],
+  ],
+  [
+    "missing user key falls through to device",
+    "{}",
+    '{"allowManagedHooksOnly":true}',
+    true,
+    ["user", "device"],
+  ],
+  [
+    "missing user file falls through to device",
+    undefined,
+    '{"allowManagedHooksOnly":true}',
+    true,
+    ["device"],
+  ],
+])(
+  "plist precedence: %s",
+  async (_name, userJson, deviceJson, enabled, read) => {
+    const user = join(dir, "user policy.plist");
+    const device = join(dir, "device.plist");
+    const files: Record<string, string> = { user, device };
+    if (userJson !== undefined) writeFileSync(user, "fixture");
+    if (deviceJson !== undefined) writeFileSync(device, "fixture");
+    const { env, calls } = policy([user, device], {
+      ...(userJson !== undefined && { [user]: userJson }),
+      ...(deviceJson !== undefined && { [device]: deviceJson }),
+    });
+    expect(await env.managedHooksOnly()).toEqual({ status: "known", enabled });
+    expect(calls).toEqual(read.map((which) => plutil(files[which] ?? "")));
+  },
+);
 
 test.each(["not JSON", "[]", "null", '{"allowManagedHooksOnly":"false"}'])(
   "malformed policy returns unknown, never false: %s",

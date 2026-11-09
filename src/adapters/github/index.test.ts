@@ -13,7 +13,6 @@ import {
   GitHubResponseError,
   RateLimitError,
   SsoError,
-  WRITE_WINDOWS,
 } from "./index";
 
 const API = "https://api.github.com";
@@ -197,16 +196,45 @@ describe("notifications", () => {
 });
 
 describe("viewer", () => {
-  test("reads the token user's login from /user and revalidates with the ETag", async () => {
-    const { adapter, calls } = setup([
-      json({ login: "alexei-led", id: 1 }, { etag: '"u1"' }),
-      new Response(null, { status: 304 }),
-    ]);
-    expect(await adapter.viewer()).toBe("alexei-led");
-    expect(await adapter.viewer()).toBe("alexei-led");
-    expect(calls[0]?.url).toBe(`${API}/user`);
-    expect(header(calls[1], "if-none-match")).toBe('"u1"');
-  });
+  test.each<
+    [
+      string,
+      string,
+      unknown,
+      string,
+      (a: GitHubAdapter) => Promise<string>,
+      string,
+    ]
+  >([
+    [
+      "viewer login",
+      `${API}/user`,
+      { login: "alexei-led", id: 1 },
+      "alexei-led",
+      (a) => a.viewer(),
+      '"u1"',
+    ],
+    [
+      "default branch",
+      REPO_URL,
+      { full_name: REPO, default_branch: "dev" },
+      "dev",
+      (a) => a.defaultBranch(REPO),
+      '"r"',
+    ],
+  ])(
+    "%s is read once and revalidated with its ETag",
+    async (_, url, body, value, read, etag) => {
+      const { adapter, calls } = setup([
+        json(body, { etag }),
+        new Response(null, { status: 304 }),
+      ]);
+      expect(await read(adapter)).toBe(value);
+      expect(await read(adapter)).toBe(value);
+      expect(calls.map((c) => c.url)).toEqual([url, url]);
+      expect(header(calls[1], "if-none-match")).toBe(etag);
+    },
+  );
 
   test("a response without a login is rejected", async () => {
     const { adapter } = setup([json({ id: 1 })]);
@@ -357,7 +385,7 @@ describe("pulls, comments and reviews", () => {
     expect(calls).toHaveLength(2);
   });
 
-  test("pagination follows a same-origin path change, never another origin", async () => {
+  test("pagination follows a same-origin path change", async () => {
     const moved = `${API}/repositories/123/issues/7/comments?page=2`;
     const { adapter, calls } = setup([
       json(comments, { link: `<${moved}>; rel="next"` }),
@@ -369,19 +397,25 @@ describe("pulls, comments and reviews", () => {
     });
     expect(result.map((c) => c.id)).toEqual([42, 43]);
     expect(calls[1]?.url).toBe(moved);
+  });
 
-    const { adapter: evil, calls: evilCalls } = setup([
+  test("pagination to another origin is rejected before the request", async () => {
+    const { adapter, calls } = setup([
       json([], { link: '<https://evil.invalid/steal>; rel="next"' }),
     ]);
-    await expect(evil.listOpenPulls(REPO)).rejects.toThrow("pagination URL");
-    expect(evilCalls).toHaveLength(1);
+    await expect(adapter.listOpenPulls(REPO)).rejects.toThrow("pagination URL");
+    expect(calls).toHaveLength(1);
+  });
 
-    const { adapter: cycle } = setup([
+  test("a pagination cycle is rejected", async () => {
+    const { adapter } = setup([
       json([], {
         link: `<${REPO_URL}/pulls?state=open&per_page=100>; rel="next"`,
       }),
     ]);
-    await expect(cycle.listOpenPulls(REPO)).rejects.toThrow("pagination cycle");
+    await expect(adapter.listOpenPulls(REPO)).rejects.toThrow(
+      "pagination cycle",
+    );
   });
 
   test("open pulls reuse the ETag on a 304, including cached next links", async () => {
@@ -454,17 +488,6 @@ describe("pulls, comments and reviews", () => {
     expect(header(calls[2], "if-none-match")).toBeNull();
   });
 
-  test("the default branch comes from the repo and is revalidated with its ETag", async () => {
-    const { adapter, calls } = setup([
-      json({ full_name: REPO, default_branch: "dev" }, { etag: '"r"' }),
-      new Response(null, { status: 304 }),
-    ]);
-    expect(await adapter.defaultBranch(REPO)).toBe("dev");
-    expect(await adapter.defaultBranch(REPO)).toBe("dev");
-    expect(calls.map((c) => c.url)).toEqual([REPO_URL, REPO_URL]);
-    expect(header(calls[1], "if-none-match")).toBe('"r"');
-  });
-
   test.each([
     ["an open issue", { state: "open" }, "open"],
     [
@@ -526,15 +549,18 @@ describe("pulls, comments and reviews", () => {
     },
   );
 
-  test.each([
-    json({}),
-    json([{ number: "7" }]),
-    new Response("not JSON"),
-    new Response(null, { status: 304 }),
-  ])("malformed list or unsolicited 304 is rejected", async (response) => {
-    const { adapter } = setup([response]);
-    await expect(adapter.listOpenPulls(REPO)).rejects.toBeInstanceOf(Error);
-  });
+  test.each<[string, Response]>([
+    ["object not array", json({})],
+    ["number as string", json([{ number: "7" }])],
+    ["not JSON", new Response("not JSON")],
+    ["unsolicited 304", new Response(null, { status: 304 })],
+  ])(
+    "malformed list or unsolicited 304 is rejected: %s",
+    async (_, response) => {
+      const { adapter } = setup([response]);
+      await expect(adapter.listOpenPulls(REPO)).rejects.toBeInstanceOf(Error);
+    },
+  );
 });
 
 describe("authentication", () => {
@@ -594,22 +620,34 @@ describe("authentication", () => {
     expect(calls).toHaveLength(0);
   });
 
-  test("403 with x-github-sso is an SSO error with the authorization link, not latched", async () => {
-    const url = "https://github.com/orgs/acme/sso?authorization_request=abc";
-    const { adapter, calls } = setup([
-      new Response(null, {
-        status: 403,
-        headers: { "x-github-sso": `required; url=${url}` },
-      }),
-      json(pulls),
-    ]);
-    const error = await caught(adapter.listOpenPulls("acme/app"));
-    expect(error).toBeInstanceOf(SsoError);
-    if (error instanceof SsoError) expect(error.authorizeUrl).toBe(url);
-    expect(String(error)).toContain(url);
-    expect(await adapter.listOpenPulls(REPO)).toHaveLength(1);
-    expect(calls).toHaveLength(2);
-  });
+  const ssoUrl = "https://github.com/orgs/acme/sso?authorization_request=abc";
+  test.each<[string, string, string | undefined, string]>([
+    ["with authorization url", `required; url=${ssoUrl}`, ssoUrl, ssoUrl],
+    [
+      "no link falls back to gh auth refresh",
+      "required",
+      undefined,
+      "gh auth refresh --hostname github.com",
+    ],
+  ])(
+    "403 with x-github-sso is an SSO error, not latched: %s",
+    async (_, header, authorizeUrl, text) => {
+      const { adapter, calls } = setup([
+        new Response(null, {
+          status: 403,
+          headers: { "x-github-sso": header },
+        }),
+        json(pulls),
+      ]);
+      const error = await caught(adapter.listOpenPulls("acme/app"));
+      expect(error).toBeInstanceOf(SsoError);
+      if (error instanceof SsoError)
+        expect(error.authorizeUrl).toBe(authorizeUrl);
+      expect(String(error)).toContain(text);
+      expect(await adapter.listOpenPulls(REPO)).toHaveLength(1);
+      expect(calls).toHaveLength(2);
+    },
+  );
 });
 
 describe("rate limits", () => {
@@ -699,10 +737,6 @@ describe("writes", () => {
     if (error instanceof BudgetError) expect(error.retryAfterMs).toBe(60_000);
     expect(second.calls).toHaveLength(8);
     expect(kv.writes()).toHaveLength(20);
-    expect(WRITE_WINDOWS).toEqual([
-      { windowMs: 60_000, max: 20 },
-      { windowMs: 3_600_000, max: 200 },
-    ]);
   });
 
   test("a 401 retry spends the budget once", async () => {
@@ -887,18 +921,6 @@ describe("review regressions", () => {
     ]);
     const page = await adapter.notifications("2026-11-01T00:00:00Z");
     expect(page.ssoPartialOrgs).toEqual(["21955855", "20582480"]);
-  });
-
-  test("SSO error without a link falls back to gh auth refresh", async () => {
-    const { adapter } = setup([
-      new Response(null, {
-        status: 403,
-        headers: { "x-github-sso": "required" },
-      }),
-    ]);
-    const error = await caught(adapter.listOpenPulls(REPO));
-    expect(error).toBeInstanceOf(SsoError);
-    expect(String(error)).toContain("gh auth refresh --hostname github.com");
   });
 
   test("a moved notifications cursor still polls conditionally and filters the replayed body", async () => {

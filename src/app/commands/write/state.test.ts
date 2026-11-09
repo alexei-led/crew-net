@@ -1,17 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { parseStateBlock } from "../../../protocol/index";
-import { BRANCH, harness, pull, REPO } from "./fixtures/fakes";
-import { CommandError, dep, renderState, type StateArgs, state } from "./index";
-
-async function refusal(promise: Promise<unknown>): Promise<CommandError> {
-  try {
-    await promise;
-  } catch (error) {
-    if (error instanceof CommandError) return error;
-    throw error;
-  }
-  throw new Error("expected a CommandError");
-}
+import { BRANCH, harness, pull, REPO, refusal } from "./fixtures/fakes";
+import {
+  type CommandError,
+  dep,
+  renderState,
+  type StateArgs,
+  state,
+} from "./index";
 
 const BLOCK = `Adds users.tier.
 
@@ -106,6 +102,11 @@ describe("state (design §7.1)", () => {
     ["someone else's PR", { state: "review", pr: "#20" }, "refused"],
     ["a closed PR of mine", { state: "review", pr: "#7" }, "refused"],
     ["a missing PR", { state: "review", pr: "#404" }, "not-found"],
+    [
+      "a URL on another host, not read as this host",
+      { state: "review", pr: "https://ghe.corp/acme/app/pull/10" },
+      "usage",
+    ],
   ])("refuses %s", async (_n, args, code) => {
     const h = mine();
     const error = await refusal(state(h.ctx, args));
@@ -116,6 +117,11 @@ describe("state (design §7.1)", () => {
   test.each([
     ["unterminated", "<!-- crew-net\nstate: review\n", /unreadable/],
     ["repeated", "<!-- crew-net\n-->\n<!-- crew-net\n-->", /unreadable/],
+    [
+      "with an unknown state value, rather than dropping it",
+      "<!-- crew-net\nstate: done\n-->",
+      /state has an unreadable entry "done"/,
+    ],
     [
       "with a bad depends-on entry",
       "<!-- crew-net\ndepends-on: #5, nonsense\n-->",
@@ -128,32 +134,6 @@ describe("state (design §7.1)", () => {
       "refused",
       expect.stringMatching(msg),
     ]);
-    expect(h.github.writes).toEqual([]);
-  });
-
-  test("refuses a block whose state value is unknown, rather than dropping it", async () => {
-    const h = mine("<!-- crew-net\nstate: done\n-->");
-    const error = await refusal(state(h.ctx, { state: "review" }));
-    expect(error.message).toMatch(/state has an unreadable entry "done"/);
-    expect(h.github.writes).toEqual([]);
-  });
-
-  test("dep add of a dependency already listed still turns auto-merge off while it is open", async () => {
-    const h = mine(BLOCK, { autoMerge: true });
-    const result = await dep(h.ctx, { action: "add", ref: "#5" });
-    expect(result).toMatchObject({ changed: false, autoMergeDisabled: true });
-    expect(h.github.writes).toEqual([`auto-merge-off ${REPO}#10`]);
-  });
-
-  test("a URL on another host is refused, not read as this host", async () => {
-    const h = mine();
-    const error = await refusal(
-      state(h.ctx, {
-        state: "review",
-        pr: "https://ghe.corp/acme/app/pull/10",
-      }),
-    );
-    expect(error.code).toBe("usage");
     expect(h.github.writes).toEqual([]);
   });
 
@@ -187,25 +167,21 @@ describe("dep (design §11)", () => {
     expect(result.changed).toBe(true);
   });
 
-  test.each([["#5"], ["acme/app#5"], ["ACME/App#5"]])(
-    "add %s when #5 is already there writes nothing",
-    async (ref) => {
-      const h = mine(BLOCK);
-      expect((await dep(h.ctx, { action: "add", ref })).changed).toBe(false);
-      expect(h.github.writes).toEqual([]);
-    },
-  );
+  test.each([
+    ["add #5 when it is already there", "add", "#5"],
+    ["add acme/app#5 when #5 is already there", "add", "acme/app#5"],
+    ["add ACME/App#5 when #5 is already there", "add", "ACME/App#5"],
+    ["rm of an absent dependency", "rm", "#6"],
+  ])("%s writes nothing", async (_n, action, ref) => {
+    const h = mine(BLOCK);
+    expect((await dep(h.ctx, { action, ref })).changed).toBe(false);
+    expect(h.github.writes).toEqual([]);
+  });
 
   test.each([["#5"], ["acme/app#5"]])("rm %s drops #5", async (ref) => {
     const h = mine(BLOCK);
     await dep(h.ctx, { action: "rm", ref });
     expect(block(h)).toMatchObject({ state: "building", dependsOn: [] });
-  });
-
-  test("rm of an absent dependency writes nothing", async () => {
-    const h = mine(BLOCK);
-    expect((await dep(h.ctx, { action: "rm", ref: "#6" })).changed).toBe(false);
-    expect(h.github.writes).toEqual([]);
   });
 
   test("add to a PR without a block writes only depends-on", async () => {
@@ -217,30 +193,51 @@ describe("dep (design §11)", () => {
   });
 
   test.each([
-    ["itself", "#10", "usage"],
-    ["a PR closed without merge", "#8", "refused"],
-    ["a missing PR", "#404", "not-found"],
-    ["garbage", "five", "usage"],
-  ] as const)("refuses to depend on %s", async (_n, ref, code) => {
+    ["depend on itself", "add", "#10", "usage"],
+    ["depend on a PR closed without merge", "add", "#8", "refused"],
+    ["depend on a missing PR", "add", "#404", "not-found"],
+    ["depend on garbage", "add", "five", "usage"],
+    ["an unknown action", "del", "#5", "usage"],
+  ])("refuses to %s", async (_n, action, ref, code) => {
     const h = mine(BLOCK);
-    const error = await refusal(dep(h.ctx, { action: "add", ref }));
-    expect(error.code).toBe(code);
+    const error = await refusal(dep(h.ctx, { action, ref }));
+    expect(error.code).toBe(code as CommandError["code"]);
     expect(h.github.writes).toEqual([]);
   });
 
-  test("an unknown action is a usage error", async () => {
-    const error = await refusal(dep(mine().ctx, { action: "del", ref: "#5" }));
-    expect(error.code).toBe("usage");
-  });
-
-  test("add turns auto-merge off before writing the body", async () => {
+  test.each([
+    [
+      "add of an open dependency turns auto-merge off before writing the body",
+      "add",
+      "#6",
+      [`auto-merge-off ${REPO}#10`, `body ${REPO}#10`],
+      { changed: true, autoMergeDisabled: true },
+    ],
+    [
+      "add of an open dependency already listed still turns auto-merge off",
+      "add",
+      "#5",
+      [`auto-merge-off ${REPO}#10`],
+      { changed: false, autoMergeDisabled: true },
+    ],
+    [
+      "add of a merged dependency keeps auto-merge",
+      "add",
+      "#7",
+      [`body ${REPO}#10`],
+      { changed: true, autoMergeDisabled: false },
+    ],
+    [
+      "rm keeps auto-merge as it is",
+      "rm",
+      "#5",
+      [`body ${REPO}#10`],
+      { changed: true, autoMergeDisabled: false },
+    ],
+  ])("auto-merge: %s", async (_n, action, ref, writes, result) => {
     const h = mine(BLOCK, { autoMerge: true });
-    const result = await dep(h.ctx, { action: "add", ref: "#6" });
-    expect(h.github.writes).toEqual([
-      `auto-merge-off ${REPO}#10`,
-      `body ${REPO}#10`,
-    ]);
-    expect(result.autoMergeDisabled).toBe(true);
+    expect(await dep(h.ctx, { action, ref })).toMatchObject(result);
+    expect(h.github.writes).toEqual(writes);
   });
 
   test("a failed auto-merge switch leaves the body alone", async () => {
@@ -250,21 +247,6 @@ describe("dep (design §11)", () => {
       "502",
     );
     expect(h.github.writes).toEqual([]);
-  });
-
-  test.each([["a merged dependency", "#7"]])(
-    "add of %s keeps auto-merge",
-    async (_n, ref) => {
-      const h = mine(BLOCK, { autoMerge: true });
-      await dep(h.ctx, { action: "add", ref });
-      expect(h.github.writes).toEqual([`body ${REPO}#10`]);
-    },
-  );
-
-  test("rm keeps auto-merge as it is", async () => {
-    const h = mine(BLOCK, { autoMerge: true });
-    await dep(h.ctx, { action: "rm", ref: "#5" });
-    expect(h.github.writes).toEqual([`body ${REPO}#10`]);
   });
 });
 

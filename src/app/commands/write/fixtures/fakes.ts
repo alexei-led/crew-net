@@ -13,7 +13,20 @@ import type {
   WorktreeBranch,
 } from "../../../../ports/index";
 import type { ItemEvent } from "../../../../protocol/index";
-import type { WriteContext } from "../context";
+import { CommandError, type WriteContext } from "../context";
+
+/** The CommandError a command refuses with. */
+export async function refusal(
+  promise: Promise<unknown>,
+): Promise<CommandError> {
+  try {
+    await promise;
+  } catch (error) {
+    if (error instanceof CommandError) return error;
+    throw error;
+  }
+  throw new Error("expected a CommandError");
+}
 
 export const ME = "alexei";
 export const REPO = "acme/app";

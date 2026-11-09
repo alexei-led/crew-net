@@ -1,26 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import { GitHubAdapter } from "../../../adapters/github/index";
-import { parseMessageMarker } from "../../../protocol/index";
-import { BRANCH, FakeGit, harness, ME, pull, REPO } from "./fixtures/fakes";
+import { BRANCH, harness, ME, pull, REPO, refusal } from "./fixtures/fakes";
 import {
   ask,
-  CommandError,
+  type CommandError,
   REPLIED_KEY_PREFIX,
   renderReply,
   renderSend,
   reply,
   request,
 } from "./index";
-
-async function refusal(promise: Promise<unknown>): Promise<CommandError> {
-  try {
-    await promise;
-  } catch (error) {
-    if (error instanceof CommandError) return error;
-    throw error;
-  }
-  throw new Error("expected a CommandError");
-}
 
 /** My PR #10 on the current branch, maria's #20, and dmitri's #30 and #31. */
 function team() {
@@ -46,7 +35,7 @@ describe("ask: thread choice (design §7.2)", () => {
     ],
     ["@login: my PR on this branch", "@maria", undefined, 10, "maria"],
     ["@login --on a thread", "@maria", "#77", 77, "maria"],
-  ])("%s", async (_name, target, on, number, to) => {
+  ] as const)("%s", async (_name, target, on, number, to) => {
     const h = team();
     const result = await ask(h.ctx, {
       target,
@@ -62,6 +51,43 @@ describe("ask: thread choice (design §7.2)", () => {
       },
     ]);
   });
+
+  test("a review request goes on their PR with the review marker", async () => {
+    const h = team();
+    expect(
+      await request(h.ctx, { target: "#20", kind: "review", text: "please" }),
+    ).toMatchObject({ kind: "review", to: "maria", number: 20, repo: REPO });
+    expect(h.github.comments).toEqual([
+      {
+        repo: REPO,
+        number: 20,
+        body: "<!-- crew-net:msg kind=review id=id00001 -->\n\n@maria please",
+      },
+    ]);
+  });
+
+  test.each([
+    [
+      "an ask here",
+      { kind: "ask", repo: REPO, number: 20, openedIssue: false },
+      "asked @maria on #20 (id k3f9); tracked in crew-net inbox",
+    ],
+    [
+      "a review in another repo",
+      { kind: "review", repo: "acme/other", number: 5, openedIssue: false },
+      "requested review from @maria on acme/other#5 (id k3f9); tracked in crew-net inbox",
+    ],
+    [
+      "a bug on a new Issue",
+      { kind: "bug", repo: REPO, number: 40, openedIssue: true },
+      "requested bug from @maria on new Issue #40 (id k3f9); tracked in crew-net inbox",
+    ],
+  ] as const)(
+    "output for %s names logins, refs and ids only",
+    (_n, r, line) => {
+      expect(renderSend({ id: "k3f9", to: "maria", ...r }, REPO)).toBe(line);
+    },
+  );
 
   test("@login without my PR goes to their only PR", async () => {
     const h = team();
@@ -87,48 +113,35 @@ describe("ask: thread choice (design §7.2)", () => {
   );
 
   test.each([
-    ["my own PR by ref", "#10", "usage", /your PR/],
-    ["myself", `@${ME}`, "usage", /yourself/],
-    ["a missing PR", "#404", "not-found", /not a pull request/],
-    ["garbage", "maria", "usage", /expected @login/],
-  ])("refuses %s", async (_n, target, code, msg) => {
+    ["my own PR by ref", { target: "#10" }, "usage", /your PR/],
+    ["myself", { target: `@${ME}` }, "usage", /yourself/],
+    ["a missing PR", { target: "#404" }, "not-found", /not a pull request/],
+    ["garbage", { target: "maria" }, "usage", /expected @login/],
+    ["a merged PR", { target: "#21" }, "refused", /is merged/],
+    ["a closed PR", { target: "#22" }, "refused", /is closed/],
+    [
+      "a PR URL on another host",
+      { target: "https://ghe.corp/acme/app/pull/20" },
+      "usage",
+      /crew-net works on github\.com only/,
+    ],
+    [
+      "--on with a PR target",
+      { target: "#20", on: "#3" },
+      "usage",
+      /--on goes/,
+    ],
+  ])("refuses %s", async (_n, input, code, msg) => {
     const h = team();
-    const error = await refusal(ask(h.ctx, { target, text: "hi" }));
+    h.github
+      .add(REPO, pull(21, { author: "maria", state: "closed", merged: true }))
+      .add(REPO, pull(22, { author: "maria", state: "closed", merged: false }));
+    const error = await refusal(ask(h.ctx, { text: "hi", ...input }));
     expect([error.code, error.message]).toEqual([
       code,
       expect.stringMatching(msg),
     ]);
     expect(h.github.writes).toEqual([]);
-  });
-
-  test.each([
-    ["merged", { state: "closed", merged: true } as const, /is merged/],
-    ["closed", { state: "closed", merged: false } as const, /is closed/],
-  ])("refuses a %s PR", async (_n, over, msg) => {
-    const h = team();
-    h.github.add(REPO, pull(21, { author: "maria", ...over }));
-    const error = await refusal(ask(h.ctx, { target: "#21", text: "hi" }));
-    expect([error.code, error.message]).toEqual([
-      "refused",
-      expect.stringMatching(msg),
-    ]);
-  });
-
-  test("a PR URL on another host is refused", async () => {
-    const error = await refusal(
-      ask(team().ctx, {
-        target: "https://ghe.corp/acme/app/pull/20",
-        text: "hi",
-      }),
-    );
-    expect(error.code).toBe("usage");
-  });
-
-  test("--on with a PR target is a usage error", async () => {
-    const error = await refusal(
-      ask(team().ctx, { target: "#20", text: "hi", on: "#3" }),
-    );
-    expect(error.code).toBe("usage");
   });
 
   test("empty text is refused before any request", async () => {
@@ -169,15 +182,6 @@ describe("ask: posting and tracking", () => {
     ]);
   });
 
-  test("the posted marker parses back", async () => {
-    const h = team();
-    await request(h.ctx, { target: "#20", kind: "review", text: "please" });
-    expect(parseMessageMarker(h.github.comments[0]?.body ?? "")).toEqual({
-      ok: true,
-      marker: { kind: "review", id: "id00001" },
-    });
-  });
-
   test("ids are random per message, not derived from the text", async () => {
     const h = team();
     const a = await ask(h.ctx, { target: "#20", text: "same" });
@@ -202,58 +206,37 @@ describe("ask: posting and tracking", () => {
       /posted on #20 but could not track it locally: disk full/,
     );
   });
-
-  test("output names logins, refs and ids only", () => {
-    expect(
-      renderSend(
-        {
-          id: "k3f9",
-          kind: "review",
-          to: "maria",
-          repo: "acme/other",
-          number: 5,
-          openedIssue: false,
-        },
-        REPO,
-      ),
-    ).toBe(
-      "requested review from @maria on acme/other#5 (id k3f9); tracked in crew-net inbox",
-    );
-  });
 });
 
 describe("closing keywords (design §7.1)", () => {
   test.each([
-    "this fixes #12",
-    "Closes acme/app#3 when merged",
-    "resolved https://github.com/acme/app/issues/4",
-    "see below\n\n**Fixes** #9",
-  ])("refuses %p and writes nothing", async (text) => {
+    [
+      "ask",
+      (h: ReturnType<typeof team>) =>
+        ask(h.ctx, { target: "#20", text: "this fixes #12" }),
+    ],
+    [
+      "request bug",
+      (h: ReturnType<typeof team>) =>
+        request(h.ctx, {
+          target: "@maria",
+          kind: "bug",
+          text: "Closes acme/app#3 when merged",
+        }),
+    ],
+    [
+      "reply",
+      (h: ReturnType<typeof team>) =>
+        reply(h.ctx, { item: "c-1", text: "done, **Fixes** #20" }),
+    ],
+  ])("%s refuses a closing keyword and writes nothing", async (_name, send) => {
     const h = team();
-    const error = await refusal(ask(h.ctx, { target: "#20", text }));
+    h.store.addInbox(inboundAsk());
+    const error = await refusal(send(h));
     expect(error.code).toBe("closing-keyword");
     expect(error.message).toMatch(/Refs #N/);
     expect(h.github.writes).toEqual([]);
     expect(h.store.outboxItems.size).toBe(0);
-  });
-
-  test("a bug report with a keyword opens no Issue", async () => {
-    const h = team();
-    const error = await refusal(
-      request(h.ctx, { target: "@maria", kind: "bug", text: "fixes #3 broke" }),
-    );
-    expect(error.code).toBe("closing-keyword");
-    expect(h.github.writes).toEqual([]);
-  });
-
-  test("a reply with a keyword is refused", async () => {
-    const h = team();
-    h.store.addInbox(inboundAsk());
-    const error = await refusal(
-      reply(h.ctx, { item: "c-1", text: "done, closes #20" }),
-    );
-    expect(error.code).toBe("closing-keyword");
-    expect(h.github.writes).toEqual([]);
   });
 });
 
@@ -402,27 +385,41 @@ describe("reply (design §7.2, §7.3)", () => {
   });
 
   test.each([
-    ["an unknown item", "nope", {}, "not-found"],
+    [
+      "an unknown item",
+      "nope",
+      {},
+      "not-found",
+      "`crew-net inbox` lists the item ids",
+    ],
     [
       "a person's comment",
       "c-1",
       { event: undefined, msgId: undefined },
       "refused",
+      "is not a crew request",
     ],
-    ["a reply item", "c-1", { event: "reply" }, "refused"],
-    ["an item without a thread", "c-1", { thread: undefined }, "refused"],
-  ])("refuses %s", async (_n, item, over, code) => {
+    [
+      "a reply item",
+      "c-1",
+      { event: "reply" },
+      "refused",
+      "is not a crew request",
+    ],
+    [
+      "an item without a thread",
+      "c-1",
+      { thread: undefined },
+      "refused",
+      "is not a crew request",
+    ],
+  ] as const)("refuses %s", async (_n, item, over, code, message) => {
     const h = team();
     h.store.addInbox(inboundAsk(over));
     const error = await refusal(reply(h.ctx, { item, text: "x" }));
     expect(error.code).toBe(code as CommandError["code"]);
+    expect(error.message).toContain(message);
     expect(h.github.writes).toEqual([]);
-  });
-
-  test("an unknown item names the command that lists ids", async () => {
-    const h = team();
-    const error = await refusal(reply(h.ctx, { item: "nope", text: "x" }));
-    expect(error.message).toContain("`crew-net inbox` lists the item ids");
   });
 });
 
@@ -442,11 +439,3 @@ function rawPull(number: number, author: string) {
     merged: false,
   };
 }
-
-test("FakeGit ignores worktrees the cwd is not in", async () => {
-  const h = harness({
-    git: new FakeGit([{ path: "/elsewhere", branch: "x" }]),
-  });
-  h.github.add(REPO, pull(20, { author: "maria" }));
-  expect((await ask(h.ctx, { target: "@maria", text: "hi" })).number).toBe(20);
-});

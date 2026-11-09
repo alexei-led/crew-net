@@ -5,7 +5,6 @@ import type {
   EnvPort,
   GitHubPort,
   GitPort,
-  GitRemote,
   IssueComment,
   LandedCommit,
   ManagedHooksPolicy,
@@ -36,13 +35,11 @@ export class FakeGitHub implements GitHubPort {
   readonly defaults = new Map<string, string>();
   /** `repo#N` → thread state; `open` when absent. */
   readonly states = new Map<string, ThreadState>();
-  readonly posted: { repo: string; number: number; body: string }[] = [];
   readonly autoMergeOff: string[] = [];
   readonly calls: string[] = [];
   /** Method name → error it throws until removed. */
   readonly failing = new Map<string, Error>();
   pollIntervalMs: number | null = 60_000;
-  ssoPartialOrgs: string[] = [];
 
   private call(name: string, detail = ""): void {
     this.calls.push(detail ? `${name} ${detail}` : name);
@@ -61,7 +58,7 @@ export class FakeGitHub implements GitHubPort {
       modified: true,
       threads: this.threads.filter((t) => t.updatedAt > since),
       pollIntervalMs: this.pollIntervalMs,
-      ssoPartialOrgs: this.ssoPartialOrgs,
+      ssoPartialOrgs: [],
     };
   }
 
@@ -119,9 +116,8 @@ export class FakeGitHub implements GitHubPort {
     return this.reviews.get(`${repo}#${number}`) ?? [];
   }
 
-  async postComment(repo: string, number: number, body: string) {
+  async postComment(repo: string, number: number) {
     this.call("postComment", `${repo}#${number}`);
-    this.posted.push({ repo, number, body });
   }
 
   async updatePullBody(): Promise<void> {
@@ -139,12 +135,7 @@ export class FakeGitHub implements GitHubPort {
   }
 
   requestStats(): RequestStats {
-    return {
-      requests: this.calls.length,
-      notModified: 0,
-      writes: 0,
-      rateLimitRemaining: null,
-    };
+    return { requests: 0, notModified: 0, writes: 0, rateLimitRemaining: null };
   }
 }
 
@@ -194,7 +185,7 @@ export function comment(
  * In-memory git for one clone. `branch(name, paths)` makes a remote branch
  * whose diff against `origin/<base>` is `paths`.
  */
-export class FakeGit implements GitPort {
+export class FakeGit {
   fetches = 0;
   worktrees: WorktreeBranch[] = [];
   branches: RemoteBranch[] = [];
@@ -213,9 +204,6 @@ export class FakeGit implements GitPort {
   readonly sameContents = new Set<string>();
   /** Root of the clone every worktree belongs to; else each worktree is its own. */
   clone: string | undefined;
-  remoteList: GitRemote[] = [];
-  /** The directory `checkout()` answers for; `at(dir)` gives a view for another. */
-  cwd = "/work/r";
 
   /** A remote branch; `loginHint` and `authorEmail` name its own last author. */
   remote(
@@ -250,8 +238,8 @@ export class FakeGit implements GitPort {
     return {
       checkout: async () => this.checkoutOf(dir),
       fetch: () => this.fetch(),
-      remotes: () => this.remotes(),
-      configValue: (key) => this.configValue(key),
+      remotes: async () => [],
+      configValue: async () => undefined,
       worktreeBranches: () => this.worktreeBranches(),
       remoteBranches: () => this.remoteBranches(),
       mergeBase: (a, b) => this.mergeBase(a, b),
@@ -277,22 +265,8 @@ export class FakeGit implements GitPort {
     };
   }
 
-  async checkout(): Promise<Checkout> {
-    return this.checkoutOf(this.cwd);
-  }
-
   async fetch(): Promise<void> {
     this.fetches++;
-  }
-
-  async remotes(): Promise<GitRemote[]> {
-    return this.remoteList;
-  }
-
-  /** git config values by key. */
-  readonly config = new Map<string, string>();
-  async configValue(key: string): Promise<string | undefined> {
-    return this.config.get(key);
   }
 
   async worktreeBranches(): Promise<WorktreeBranch[]> {
@@ -359,9 +333,8 @@ export class FakeEnv implements EnvPort {
     if (this.identity instanceof Error) throw this.identity;
     return this.identity;
   }
-  aliases: ReadonlyMap<string, string> | undefined;
   async ghAliases(): Promise<ReadonlyMap<string, string> | undefined> {
-    return this.aliases;
+    return undefined;
   }
   async managedHooksOnly(): Promise<ManagedHooksPolicy> {
     return this.policy;
