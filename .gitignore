@@ -1,4 +1,23 @@
+# Dependencies and build output. The plugin bundles under plugin/ are tracked on purpose.
 node_modules/
 /dist/
+*.tsbuildinfo
+coverage/
+
+# Local harness and tool state
+.claude/
 .pi/
 .fitness-*/
+
+# Secrets and local settings
+.env
+.env.*
+!.env.example
+*.local.json
+
+# OS and editor noise
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
