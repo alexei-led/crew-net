@@ -315,6 +315,14 @@ export interface StorePort {
   prune(): Promise<void>;
 }
 
+/** Files in the developer's working tree, for `crew-net init`. Paths are absolute. */
+export interface FilesPort {
+  /** True when anything exists at `path`, a dangling symlink included. */
+  exists(path: string): Promise<boolean>;
+  /** Write `content`, creating parent directories. Replaces an existing file. */
+  write(path: string, content: string): Promise<void>;
+}
+
 export interface ClockPort {
   now(): number;
 }

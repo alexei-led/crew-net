@@ -4,5 +4,9 @@
   "kind": "message",
   "text": "Does #2310 need the new column before your migration merges?",
   "addressed": true,
-  "from": "maria"
+  "from": "maria",
+  "repo": "doiteng/reflex",
+  "thread": 2310,
+  "event": "ask",
+  "msgId": "k3f9"
 }

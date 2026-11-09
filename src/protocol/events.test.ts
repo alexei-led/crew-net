@@ -151,6 +151,10 @@ describe("decodeEvent", () => {
       "item with fractional thread",
       '{"type":"item","id":"1","kind":"message","text":"t","addressed":true,"thread":1.5}',
     ],
+    [
+      "item with non-string msgId",
+      '{"type":"item","id":"1","kind":"message","text":"t","addressed":true,"msgId":7}',
+    ],
     ["ack with unknown outcome", '{"type":"ack","id":"1","outcome":"maybe"}'],
     ["hello with string pid", HELLO({ pid: "1" })],
     ["hello without a session", HELLO({ session: undefined })],
