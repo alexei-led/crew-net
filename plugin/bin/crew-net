@@ -3207,8 +3207,8 @@ var REVIEW_LABEL = {
 async function readReviews(ports, host, me, since, repo, number) {
   const { store, clock } = ports;
   const name = reviewCursor(host, repo, number);
-  const after = await store.cursors.get(name) ?? since;
-  const reviews = (await ports.github(host).listReviews(repo, number)).filter((r) => r.submittedAt !== null && r.submittedAt >= after);
+  const after = reviewPosition(await store.cursors.get(name), since);
+  const reviews = (await ports.github(host).listReviews(repo, number)).filter((r) => r.submittedAt !== null && (r.submittedAt > after.submittedAt || r.submittedAt === after.submittedAt && r.id > after.id)).sort((a, b) => a.submittedAt === b.submittedAt ? a.id - b.id : a.submittedAt < b.submittedAt ? -1 : 1);
   for (const review of reviews) {
     if (sameLogin2(review.author, me) || isBotLogin(review.author))
       continue;
@@ -3228,9 +3228,19 @@ async function readReviews(ports, host, me, since, repo, number) {
       event: "pr-review"
     }, clock.now());
   }
-  const newest = reviews.map((r) => r.submittedAt).sort().at(-1);
+  const newest = reviews.at(-1);
   if (newest)
-    await store.cursors.set(name, newest);
+    await store.cursors.set(name, JSON.stringify({ submittedAt: newest.submittedAt, id: newest.id }));
+}
+function reviewPosition(cursor, since) {
+  if (cursor?.startsWith("{")) {
+    try {
+      const v = JSON.parse(cursor);
+      if (typeof v.submittedAt === "string" && typeof v.id === "number")
+        return { submittedAt: v.submittedAt, id: v.id };
+    } catch {}
+  }
+  return { submittedAt: cursor ?? since, id: Number.NEGATIVE_INFINITY };
 }
 
 // src/app/radar.ts
@@ -4599,6 +4609,8 @@ async function deliverTo(ports, sessionId, options) {
       if (routed.session !== sessionId)
         continue;
       if (!await store.delivered.claim(item.id, sessionId))
+        continue;
+      if (!await store.inbox.get(item.id))
         continue;
       await store.events.append({
         type: "delivery",

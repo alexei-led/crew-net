@@ -95,6 +95,8 @@ export async function deliverTo(
     if (!claim) {
       if (routed.session !== sessionId) continue;
       if (!(await store.delivered.claim(item.id, sessionId))) continue;
+      // Prune may have removed the item and its old claim since the listing.
+      if (!(await store.inbox.get(item.id))) continue;
       await store.events.append({
         type: "delivery",
         id: item.id,

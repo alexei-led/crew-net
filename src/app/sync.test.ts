@@ -325,6 +325,32 @@ describe("inbox job", () => {
     ]);
   });
 
+  test("a review delivered and pruned weeks ago does not arrive again", async () => {
+    const w = world();
+    w.github.threads = [thread(2)];
+    w.github.reviews.set(`${REPO}#2`, [
+      {
+        id: 3,
+        author: "maria",
+        state: "CHANGES_REQUESTED",
+        body: "fix x",
+        submittedAt: "2026-11-09T11:52:00Z",
+        url: "u",
+      },
+    ]);
+    await w.sync();
+    const [first] = await w.items();
+    await w.store.delivered.claim(first?.id ?? "", "s1");
+    w.advance(15 * 24 * 60 * 60_000);
+    await w.sync();
+    expect(await w.items()).toEqual([]);
+    w.advance(INTERVALS.inbox);
+    w.github.threads = [thread(2, "2026-11-24T12:00:00Z")];
+    await w.sync();
+    expect(await w.items()).toEqual([]);
+    expect(await w.itemEvents()).toHaveLength(1);
+  });
+
   test("a rate limit fails the job, keeps the cursor and says until when", async () => {
     const w = world();
     const limited = Object.assign(new Error("GitHub rate limit reached"), {
