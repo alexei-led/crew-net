@@ -30,13 +30,13 @@ cn a sync --once; cn a        # digest as laptop a
 teardown                      # run when finished: the inbox job reads the whole account
 ```
 
-| Script         | Does                                                                     |
-| -------------- | ------------------------------------------------------------------------ |
+| Script         | Does                                                                             |
+| -------------- | -------------------------------------------------------------------------------- |
 | `env.sh`       | Defines `setup`, `lap` (run in a laptop's clone), `cn`, `pretend` and `teardown` |
-| `watch.mjs`    | Runs `crew-net watch` for a session, prints its events, then SIGKILLs it |
-| `killsync.mjs` | Starts `crew-net sync --once` and SIGKILLs it after N ms                 |
-| `budget.mjs`   | Runs two watchers on laptop `d` (two repos) and logs each `fetch`        |
-| `count.mjs`    | `--import` preload for `budget.mjs`: method, path and status per fetch   |
+| `watch.mjs`    | Runs `crew-net watch` for a session, prints its events, then SIGKILLs it         |
+| `killsync.mjs` | Starts `crew-net sync --once` and SIGKILLs it after N ms                         |
+| `budget.mjs`   | Runs two watchers on laptop `d` (two repos) and logs each `fetch`                |
+| `count.mjs`    | `--import` preload for `budget.mjs`: method, path and status per fetch           |
 
 `pretend` makes one account act as two developers. Laptop A uses the login of
 laptop B's cached credentials. A's commits use a `maria-sim@users.noreply.github.com`
