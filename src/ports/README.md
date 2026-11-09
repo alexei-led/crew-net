@@ -49,4 +49,11 @@ for that host. `stateDir()` and `configDir()` follow XDG. managedHooksOnly
 returns `{status:"known",enabled:boolean}` or `{status:"unknown",reason:string}`.
 Callers must not treat unknown as false.
 
+## Files
+
+`FilesPort` reads and writes files in the developer's working tree, for
+`crew-net init`: `exists(path)` (a dangling symlink counts) and
+`write(path, content)` (creates parent directories, replaces the file). Paths
+are absolute. See [files adapter](../adapters/files/README.md).
+
 ClockPort is unchanged; the store adapter takes a ClockPort.
