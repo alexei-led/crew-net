@@ -71,6 +71,7 @@ replies, and may do nothing else.
   adoption levels, failure modes, token and security.
 - [Other harnesses](docs/harnesses.md): Pi, Codex, the `AGENTS.md` snippet.
 - [Design](docs/design.md) and [plan](docs/plan.md).
+- [Releasing](docs/releasing.md): version bump, tag, what the workflow checks.
 - [Claude Code plugin](plugin/README.md), [repo kit](repo-kit/README.md)
   (the optional `crew-deps` required check), [end-to-end results](e2e/README.md).
 - [Changelog](CHANGELOG.md).
