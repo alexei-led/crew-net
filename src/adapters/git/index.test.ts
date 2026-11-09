@@ -6,7 +6,7 @@ import {
   setDefaultTimeout,
   test,
 } from "bun:test";
-import { execFile, execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import {
   cpSync,
   mkdirSync,
@@ -18,7 +18,6 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
 import {
   COMMAND_TIMEOUT_MS,
   FETCH_TIMEOUT_MS,
@@ -30,13 +29,39 @@ import {
   runGit,
 } from "./index";
 
-const exec = promisify(execFile);
+/** Runs git with stdin closed, as the adapter does; resolves stdout, rejects on a non-zero exit. */
+function exec(
+  file: string,
+  args: string[],
+  options: { cwd?: string; encoding?: "utf8" } = {},
+): Promise<{ stdout: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(file, args, {
+      cwd: options.cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", reject);
+    child.on("close", (code) =>
+      code === 0
+        ? resolve({ stdout })
+        : reject(new Error(`${file} ${args.join(" ")}: ${stderr}`)),
+    );
+  });
+}
 
 // Real git spawns many processes; under full-suite load 5 s is not enough.
 setDefaultTimeout(30_000);
 
-// One base repo is built once and copied for each test, so tests run
-// concurrently and each one changes only its own copy.
+// One base repo is built once and copied for each test (cheaper than git init
+// and a commit), and each test changes only its own copy.
 let template: string;
 const roots: string[] = [];
 
@@ -76,7 +101,7 @@ function fresh() {
   return { root, repo, git, commit, adapter: new GitAdapter(repo) };
 }
 
-describe.concurrent("real git", () => {
+describe("real git", () => {
   test("merges clean branches and reports no conflicts", async () => {
     const { repo, git, commit, adapter } = fresh();
     await git("branch", "other");
@@ -348,7 +373,7 @@ describe.concurrent("real git", () => {
   });
 });
 
-describe.concurrent("showFile and landed", () => {
+describe("showFile and landed", () => {
   test("showFile reads a file at a ref and answers undefined for a missing path or ref", async () => {
     const { repo, commit, adapter } = fresh();
     mkdirSync(join(repo, ".github"));
