@@ -7,21 +7,22 @@ host's filesystem. The composition root passes
 `${XDG_STATE_HOME:-~/.local/state}/crew-net` (a relative `XDG_STATE_HOME` is
 ignored), and a `ClockPort`. Every age, expiry and timestamp uses that clock.
 
-```text
-crew-net/
-  inbox/<h>.json         {item, receivedAtMs}: one protocol ItemEvent
-  delivered/<h>          {sessionId, atMs}: delivery claim, first writer wins
-  outbox.json            [OutboundRequest]: my open requests and their status
-  sessions/<h>.json      SessionRecord: heartbeat with seenAtMs
-  repos/<host>/<owner>/<repo>/
-    snapshot.json        JSON owned by the app
-    radar.json           JSON owned by the app
-  cursors.json           {cursors: {name: string}, lastRun: {job: ms}}
-  kv/<h>.json            {key, value}: HTTP cache entries, write budget
-  locks/<h>.lock         {pid, token, expiresAtMs}: job locks and mutexes
-  locks/recovery-<token> marker of the one process allowed to reap that lock
-  events.ndjson          append-only log; events.ndjson.1 is the previous 10 MB
-```
+The directory layout is in [design §8.3](../../../docs/design.md#83-local-store).
+This table gives the content of each file.
+
+| File                     | Content                                                     |
+| ------------------------ | ----------------------------------------------------------- |
+| `inbox/<h>.json`         | `{item, receivedAtMs}`: one protocol `ItemEvent`            |
+| `delivered/<h>`          | `{sessionId, atMs}`: delivery claim, first writer wins      |
+| `outbox.json`            | `[OutboundRequest]`: my open requests and their status      |
+| `sessions/<h>.json`      | `SessionRecord`: heartbeat with `seenAtMs`                  |
+| `repos/…/snapshot.json`  | JSON owned by the app                                       |
+| `repos/…/radar.json`     | JSON owned by the app                                       |
+| `cursors.json`           | `{cursors: {name: string}, lastRun: {job: ms}}`             |
+| `kv/<h>.json`            | `{key, value}`: HTTP cache entries, write budget            |
+| `locks/<h>.lock`         | `{pid, token, expiresAtMs}`: job locks and mutexes          |
+| `locks/recovery-<token>` | Marker of the one process allowed to reap that lock         |
+| `events.ndjson`          | Append-only log. `events.ndjson.1` holds the previous 10 MB |
 
 `<h>` is the SHA-256 of the id, key or lock name, so no id reaches a path.
 Repo directories use the host, owner and name as given; each must be a plain

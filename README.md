@@ -1,87 +1,118 @@
 # crew-net
 
-Coding-agent sessions on different laptops see each other's work on shared
-GitHub repos, catch collisions early, ask each other for things, and merge in
-the right order. GitHub is the only transport: PRs, comments, notifications
-and `git fetch`. No server, no daemon, no repo changes needed.
+[![CI](https://github.com/alexei-led/crew-net/actions/workflows/ci.yml/badge.svg)](https://github.com/alexei-led/crew-net/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-## Why
+crew-net connects the coding agents of one team across laptops. GitHub is the
+only transport. There is no server and no daemon.
 
-On one laptop, agents can talk before they push. Across laptops they first
-meet as a merge conflict, a red CI run after a rebase, or a consumer that
-deploys before its producer, because merge to `main` is the deploy. crew-net
-moves that meeting to the first push:
+## The problem
 
-- **Awareness.** At session start your agent sees who works on what in this
-  repo, what touches your files, and what merged since you branched.
-- **Early collision warning.** Conflicts and overlaps with pushed branches
-  show up within minutes, not at merge time.
-- **Requests.** One agent asks another a question or for a review, fix or bug
-  fix; the answer comes back into the asking session. Each message is a normal
-  PR comment, so colleagues without crew-net can answer by hand.
-- **Merge order.** A PR declares `depends-on`; agents cannot merge it early,
-  the author learns the moment it is unblocked, and the producer sees who
-  waits on them.
+Two agents on one laptop can talk before they push. Agents on different laptops
+find each other late, in one of three ways:
+
+- **A merge conflict** after both sides finish.
+- **A red CI run** after a rebase onto work that changed under them.
+- **An out-of-order deploy.** A merge to `main` is a deploy. A consumer that
+  merges before its producer breaks production.
+
+## How it works
+
+`crew-net sync` runs in short passes on each laptop. It reads GitHub, runs `git
+fetch` and writes a local store. Agent sessions read that store. Messages are normal
+PR and Issue comments with an `@mention`, so a colleague without crew-net still gets
+the notification.
+
+```mermaid
+flowchart LR
+    GH["GitHub<br/>PRs, comments, notifications, branches"]
+    subgraph LA["Laptop A"]
+        SA["crew-net sync"] --> YA[("Local store")]
+        YA --> AA["Agent session<br/>digest, items, band"]
+        AA --> CA["crew-net CLI<br/>ask, request, reply, dep, gate"]
+    end
+    subgraph LB["Laptop B"]
+        SB["crew-net sync"] --> YB[("Local store")]
+        YB --> AB["Agent session<br/>digest, items, band"]
+        AB --> CB["crew-net CLI<br/>ask, request, reply, dep, gate"]
+    end
+    SA <-->|"REST with ETag, git fetch"| GH
+    SB <-->|"REST with ETag, git fetch"| GH
+    CA -->|"comments, PR body"| GH
+    CB -->|"comments, PR body"| GH
+
+    classDef store fill:#dbeafe,stroke:#1d4ed8,color:#0f172a
+    classDef agent fill:#dcfce7,stroke:#15803d,color:#052e16
+    classDef gh fill:#fef3c7,stroke:#b45309,color:#451a03
+    class YA,YB store
+    class AA,AB agent
+    class GH gh
+```
+
+```mermaid
+sequenceDiagram
+    participant A as Alice's session
+    participant GH as GitHub
+    participant M as Maria's session
+    A->>GH: crew-net request PR 2318 review
+    GH-->>M: notification (mention)
+    M->>M: sync stores the item and routes it to PR 2318
+    M->>GH: crew-net reply --done
+    GH-->>A: notification
+    A->>A: the reply reaches the next prompt as information
+```
+
+## What the agent sees
+
+At session start, the agent gets a short digest of the repo. The band above the
+prompt shows it too:
+
+```text
+crew-net · acme/app · feat/users-tier
+You     #2310 building  api/openapi/ (2 files)        depends on #2301 (open)
+Others  maria   #2318 review   api/openapi/users.yaml  ⚠ conflicts with #2310
+        dmitri  feat/billing  no PR, pushed 14 min ago  web/billing/
+Inbox   maria asks on #2310: "Does #2310 need the new column first?"  12 min
+```
 
 ## Install
 
-Needs Node 22+, `git`, and `gh` signed in (`gh auth login`). In Claude Code:
+You need Node 22+, `git`, and `gh` signed in (`gh auth login`). In Claude
+Code, run:
 
 ```text
 claude plugin marketplace add alexei-led/crew-net
 claude plugin install crew-net@crew-net
 ```
 
-Then run `crew-net doctor` in a repo. It names the next step if anything is
-missing. Pi and Codex: CLI plus an `AGENTS.md` snippet, see
-[docs/harnesses.md](docs/harnesses.md).
+Then run `crew-net doctor` in a repo. It names the next step if something is
+missing. For Pi and Codex, see [docs/harnesses.md](docs/harnesses.md).
 
-## 60-second tour
+## Commands
 
-Start a Claude Code session in a working copy. The digest is in the model's
-context and in the band above the prompt:
+| Command                     | Use                                            |
+| --------------------------- | ---------------------------------------------- |
+| `crew-net`                  | Show the digest for the current repo           |
+| `crew-net who <paths>`      | Show open work that touches these paths        |
+| `crew-net ask <@login\|PR>` | Ask a question. It stays open until answered   |
+| `crew-net inbox`            | Show unread items and open requests, both ways |
+| `crew-net dep add <PR>`     | Merge this PR only after PR `<PR>` has merged  |
 
-```text
-crew-net · acme/app · feat/users-tier
-You     #2310 building  api/openapi/ (2 files)        depends on #2301 (open)
-Others  maria   #2318 review   api/openapi/users.yaml  ⚠ conflicts with #2310: users.yaml
-        dmitri  feat/billing  no PR, pushed 14 min ago  web/billing/
-Merged since you branched: #2305 touches api/server.ts (yours)
-Inbox   maria asks on #2310: "Does #2310 need the new column first?"  12 min
-```
-
-Your agent uses the CLI through Bash, and so can you:
-
-```sh
-crew-net who api/openapi/                    # who else touches these paths
-crew-net ask #2318 "is users.tier nullable?" # a comment on maria's PR, @mentioning her
-crew-net inbox                               # unread items, open requests both ways
-crew-net reply <item> --done "fixed in #2320"
-crew-net dep add #2301                       # this PR merges after #2301
-gh pr merge --auto                           # run by the agent: denied while #2301 is open
-```
-
-When #2301 merges, an `unblocked` item arrives and the merge goes through. If
-your session sits idle and maria asks it something, it wakes, reads, and
-replies, and may do nothing else.
+All commands and settings are in the [user guide](docs/user-guide.md).
 
 ## Docs
 
-- [User guide](docs/user-guide.md): setup, daily use, commands, settings,
-  adoption levels, failure modes, token and security.
-- [Other harnesses](docs/harnesses.md): Pi, Codex, the `AGENTS.md` snippet.
-- [Design](docs/design.md) and [plan](docs/plan.md).
-- [Releasing](docs/releasing.md): version bump, tag, what the workflow checks.
-- [Claude Code plugin](plugin/README.md), [repo kit](repo-kit/README.md)
-  (the optional `crew-deps` required check), [end-to-end results](e2e/README.md).
-- [Changelog](CHANGELOG.md).
+- [User guide](docs/user-guide.md): setup, daily use, commands, settings, limits.
+- [Design](docs/design.md): how it works and why.
+- [Other harnesses](docs/harnesses.md): Pi and Codex, and the `AGENTS.md` snippet.
+- [Releasing](docs/releasing.md): version, tag and the release workflow.
+- [Claude Code plugin](plugin/README.md), [repo kit](repo-kit/README.md),
+  [end-to-end results](e2e/README.md).
+- [Changelog](CHANGELOG.md) and [agent instructions](AGENTS.md).
 
-## Development
+## Develop
 
 ```sh
 bun install --frozen-lockfile
-make check   # types, lint, tests, dependency rules, claude plugin test
-make build   # dist/crew-net.js and the bundled plugin files
+make check   # types, lint, tests, dependency rules, plugin tests
 ```
-
-MIT licensed.
