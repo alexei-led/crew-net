@@ -9,7 +9,7 @@ modes. For the design, see [design.md](design.md).
 
 ## Setup
 
-You need Node 22 or newer, `git`, and `gh` signed in to GitHub (`gh auth login`).
+You need Node 26 or newer, `git`, and `gh` signed in to GitHub (`gh auth login`).
 In Claude Code, run:
 
 ```text

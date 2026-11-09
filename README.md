@@ -77,7 +77,7 @@ Inbox   maria asks on #2310: "Does #2310 need the new column first?"  12 min
 
 ## Install
 
-You need Node 22+, `git`, and `gh` signed in (`gh auth login`). In Claude
+You need Node 26+, `git`, and `gh` signed in (`gh auth login`). In Claude
 Code, run:
 
 ```text
