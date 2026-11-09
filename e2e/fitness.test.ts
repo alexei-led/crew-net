@@ -17,12 +17,7 @@ const root = process.cwd();
 test("architecture gates reject planted violations", () => {
   const fixture = mkdtempSync(join(root, ".fitness-"));
   try {
-    for (const file of [
-      ".dependency-cruiser.cjs",
-      "biome.json",
-      "tsconfig.json",
-      "tsconfig.pure.json",
-    ]) {
+    for (const file of ["biome.json", "tsconfig.json", "tsconfig.pure.json"]) {
       cpSync(join(root, file), join(fixture, file));
     }
     cpSync(join(root, "src"), join(fixture, "src"), { recursive: true });
@@ -41,6 +36,8 @@ test("architecture gates reject planted violations", () => {
       if (result.error) throw result.error;
       return { status: result.status, output: result.stdout + result.stderr };
     };
+    const lint = (...paths: string[]) =>
+      run("biome", "lint", "--error-on-warnings", ...paths);
     const plant = (path: string, source: string) => {
       const file = join(fixture, path);
       mkdirSync(join(file, ".."), { recursive: true });
@@ -58,6 +55,11 @@ test("architecture gates reject planted violations", () => {
         "protocol-is-independent",
       ],
       [
+        "src/protocol/plant.ts",
+        'import type * as core from "../core/index";',
+        "protocol-is-independent",
+      ],
+      [
         "src/core/delivery/plant.ts",
         'import "../../app/index";',
         "core-only-depends-on-core-and-protocol",
@@ -68,13 +70,28 @@ test("architecture gates reject planted violations", () => {
         "core-only-depends-on-core-and-protocol",
       ],
       [
+        "src/core/delivery/plant.ts",
+        'import "left-pad";',
+        "core-only-depends-on-core-and-protocol",
+      ],
+      [
         "src/app/plant.ts",
         'import "../adapters/git/index";',
         "app-only-depends-on-core-protocol-ports",
       ],
       [
+        "src/app/plant.ts",
+        'import "node:fs/promises";',
+        "app-only-depends-on-core-protocol-ports",
+      ],
+      [
         "src/adapters/git/plant.ts",
         'import "../github/index";',
+        "adapters-only-depend-on-ports-protocol-and-self",
+      ],
+      [
+        "src/adapters/git/plant.ts",
+        'import "../../core/index";',
         "adapters-only-depend-on-ports-protocol-and-self",
       ],
       [
@@ -88,11 +105,16 @@ test("architecture gates reject planted violations", () => {
         "plugin-only-depends-on-core-and-protocol",
       ],
       ["plugin/hooks/mod.ts", 'import "node:fs";', "mod-has-no-node"],
+      [
+        "plugin/hooks/register.ts",
+        'import "../../src/adapters/store/index";',
+        "plugin-only-depends-on-core-and-protocol",
+      ],
     ];
     for (const [path, source, rule] of cases) {
       if (!path || !source || !rule) throw new Error("Invalid fixture");
       const cleanup = plant(path, source);
-      const result = run("depcruise", "src", "plugin");
+      const result = lint(path);
       expect(result.status).toBe(1);
       expect(result.output).toContain(rule);
       console.log(`planted ${path}: ${rule}, rc=${result.status}`);
@@ -101,17 +123,19 @@ test("architecture gates reject planted violations", () => {
     const allowed = [
       plant(
         "src/adapters/git/plant.ts",
-        'import "node:fs"; import "./index"; import "../../ports/index";',
+        'import "node:fs"; import "node:fs/promises"; import "./index"; import "../../ports/index";',
+      ),
+      plant(
+        "src/app/plant.ts",
+        'import "./ports"; import "../core/radar/index"; import "../protocol/index"; import "../ports/index";',
       ),
       plant(
         "plugin/hooks/plant.ts",
         'import "node:fs"; import "../../src/core/order/index"; import "../../src/core/trust/index"; import "../../src/protocol/index";',
       ),
     ];
-    const allowedResult = run("depcruise", "src", "plugin");
-    expect(allowedResult.status).toBe(0);
+    expect(lint("src", "plugin").status).toBe(0);
     for (const cleanup of allowed) cleanup();
-    expect(run("depcruise", "src", "plugin").status).toBe(0);
 
     let cleanup = plant(
       "src/core/delivery/plant.ts",
@@ -124,14 +148,14 @@ test("architecture gates reject planted violations", () => {
     cleanup();
 
     cleanup = plant("src/protocol/plant.ts", "new Date();");
-    result = run("biome", "lint", "src/protocol/plant.ts");
+    result = lint("src/protocol/plant.ts");
     expect(result.status).not.toBe(0);
     expect(result.output).toContain("noRestrictedGlobals");
     console.log(`planted Date: noRestrictedGlobals, rc=${result.status}`);
     cleanup();
 
     expect(run("tsc", "--noEmit", "-p", "tsconfig.pure.json").status).toBe(0);
-    expect(run("biome", "lint", "src/protocol", "src/core").status).toBe(0);
+    expect(lint("src", "plugin").status).toBe(0);
   } finally {
     rmSync(fixture, { recursive: true, force: true });
   }

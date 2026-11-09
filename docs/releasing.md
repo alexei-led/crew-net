@@ -47,14 +47,15 @@ except the workflow after step 5.
 
 `.github/workflows/release.yml`, on a pushed `v*` tag:
 
-| Job        | Checks or does                                                                                                                                                                              |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `validate` | Tag is `vMAJOR.MINOR.PATCH`, annotated, points at the triggering commit, which is on `main`. CI passed on that exact commit. `make check`, `make plugin-fresh`, `scripts/release.ts check`. |
-| `release`  | Copies the committed `plugin/bin/crew-net` to `crew-net.js`, writes `checksums.txt`, takes the notes from the CHANGELOG section, runs `gh release create --verify-tag`.                     |
-| `verify`   | Downloads the release, checks the checksum, runs `crew-net.js --version` against the tag, and confirms the release is not a draft.                                                          |
+| Job        | Checks or does                                                                                                                                                                               |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `validate` | Tag is `vMAJOR.MINOR.PATCH`, annotated, points at the triggering commit, which is on `main`. CI (`make check`, `make plugin-fresh`) passed on that exact commit. `scripts/release.ts check`. |
+| `release`  | Copies the committed `plugin/bin/crew-net` to `crew-net.js`, writes `checksums.txt`, takes the notes from the CHANGELOG section, runs `gh release create --verify-tag`.                      |
+| `verify`   | Downloads the release, checks the checksum, runs `crew-net.js --version` against the tag, and confirms the release is not a draft.                                                           |
 
-Only `release` has `contents: write`. Actions are pinned by SHA. Runs for one
-tag never overlap and are never cancelled.
+Only `release` has `contents: write`. Actions are pinned by SHA, and no job
+restores a cache (a poisoned cache could reach a release). Runs for one tag
+never overlap and are never cancelled.
 
 ## When something fails
 

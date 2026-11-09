@@ -7,13 +7,12 @@
     "crew-net": "dist/crew-net.js"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=26"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.6.6",
-    "@types/bun": "1.2.22",
-    "@types/node": "^22",
-    "dependency-cruiser": "^18.7.2",
-    "typescript": "~5.9.3"
+    "@biomejs/biome": "2.6.6",
+    "@types/bun": "1.4.4",
+    "@types/node": "26.6.6",
+    "typescript": "7.0.2"
   }
 }

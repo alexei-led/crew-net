@@ -18,7 +18,17 @@
   "linter": {
     "enabled": true,
     "rules": {
-      "preset": "recommended"
+      "preset": "recommended",
+      "nursery": {
+        "noFloatingPromises": "error",
+        "noMisusedPromises": "error"
+      },
+      "style": {
+        "noNonNullAssertion": "error"
+      },
+      "suspicious": {
+        "noImportCycles": "error"
+      }
     }
   },
   "overrides": [
@@ -35,6 +45,223 @@
                   "performance": "Pass time as a parameter.",
                   "queueMicrotask": "Pure modules do not schedule work."
                 }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/protocol/**/*.ts", "!**/*.test.ts"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["**", "!./**"],
+                    "message": "protocol-is-independent: protocol imports nothing outside protocol (design §19 rule 1)."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/core/**/*.ts", "!**/*.test.ts"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["**", "!./**", "!../**"],
+                    "message": "core-only-depends-on-core-and-protocol: no packages and no node: modules (design §19 rule 2)."
+                  },
+                  {
+                    "group": [
+                      "**/app",
+                      "**/app/**",
+                      "**/adapters",
+                      "**/adapters/**",
+                      "**/ports",
+                      "**/ports/**",
+                      "**/cli",
+                      "**/cli/**",
+                      "**/watch",
+                      "**/watch/**",
+                      "**/plugin/**",
+                      "**/e2e/**",
+                      "**/repo-kit/**",
+                      "**/scripts/**"
+                    ],
+                    "message": "core-only-depends-on-core-and-protocol (design §19 rule 2)."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/app/**/*.ts", "!**/*.test.ts"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["**", "!./**", "!../**"],
+                    "message": "app-only-depends-on-core-protocol-ports: no packages and no node: modules (design §19 rule 3)."
+                  },
+                  {
+                    "group": [
+                      "**/adapters",
+                      "**/adapters/**",
+                      "**/cli",
+                      "**/cli/**",
+                      "**/watch",
+                      "**/watch/**",
+                      "**/plugin/**",
+                      "**/e2e/**",
+                      "**/repo-kit/**",
+                      "**/scripts/**"
+                    ],
+                    "message": "app-only-depends-on-core-protocol-ports (design §19 rule 3)."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/adapters/*/**/*.ts", "!**/*.test.ts"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "**",
+                      "!./**",
+                      "!node:*",
+                      "!node:*/**",
+                      "!**/ports",
+                      "!**/ports/**",
+                      "!**/protocol",
+                      "!**/protocol/**"
+                    ],
+                    "message": "adapters-only-depend-on-ports-protocol-and-self (design §19 rule 4)."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["plugin/**/*.ts", "!**/*.test.ts", "!**/*.spec.ts"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "**",
+                      "!./**",
+                      "!../**",
+                      "!node:*",
+                      "!node:*/**",
+                      "!claude-code",
+                      "!claude-code/**"
+                    ],
+                    "message": "plugin-only-depends-on-core-and-protocol: no packages (design §19 rule 6)."
+                  },
+                  {
+                    "group": [
+                      "**/src/app",
+                      "**/src/app/**",
+                      "**/src/adapters",
+                      "**/src/adapters/**",
+                      "**/src/ports",
+                      "**/src/ports/**",
+                      "**/src/cli",
+                      "**/src/cli/**",
+                      "**/src/watch",
+                      "**/src/watch/**",
+                      "**/e2e/**",
+                      "**/repo-kit/**",
+                      "**/scripts/**"
+                    ],
+                    "message": "plugin-only-depends-on-core-and-protocol: the plugin reaches GitHub, git and the store only through crew-net processes (design §19 rule 6)."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["plugin/hooks/register.ts", "plugin/hooks/mod.ts"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["node:*", "node:*/**", "bun:*"],
+                    "message": "mod-has-no-node: the mod runs inside Claude Code without Node built-ins (design §19 rule 6)."
+                  },
+                  {
+                    "group": [
+                      "**",
+                      "!./**",
+                      "!../**",
+                      "!claude-code",
+                      "!claude-code/**"
+                    ],
+                    "message": "plugin-only-depends-on-core-and-protocol: no packages (design §19 rule 6)."
+                  },
+                  {
+                    "group": [
+                      "**/src/app",
+                      "**/src/app/**",
+                      "**/src/adapters",
+                      "**/src/adapters/**",
+                      "**/src/ports",
+                      "**/src/ports/**",
+                      "**/src/cli",
+                      "**/src/cli/**",
+                      "**/src/watch",
+                      "**/src/watch/**",
+                      "**/e2e/**",
+                      "**/repo-kit/**",
+                      "**/scripts/**"
+                    ],
+                    "message": "plugin-only-depends-on-core-and-protocol: the plugin reaches GitHub, git and the store only through crew-net processes (design §19 rule 6)."
+                  }
+                ]
               }
             }
           }
