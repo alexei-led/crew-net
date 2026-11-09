@@ -94,7 +94,7 @@ describe("crew-net write commands", () => {
   test("a refusal exits 1 with the reason on stderr; --json also prints it", async () => {
     const w = world();
     expect(await w.run("ask", "#20", "fixes #3", "--json")).toBe(1);
-    expect(w.err()).toMatch(/closing keyword/);
+    expect(w.err()).toMatch(/^crew-net: .*closing keyword/);
     expect(JSON.parse(w.out())).toMatchObject({ error: "closing-keyword" });
   });
 

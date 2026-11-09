@@ -168,14 +168,14 @@ describe("classify: order with default contracts", () => {
     "proto/users.proto",
   ])("their producer %s, my other path", (path) => {
     expect(order(work("a", ["web/x.ts"]), work("b", [path]))).toEqual([
-      ["other", "default", [path, "web/x.ts"].sort()],
+      ["other", "schema", [path, "web/x.ts"].sort()],
     ]);
   });
 
   test("my producer, their consumer", () => {
     expect(
       order(work("a", ["db/migrations/1.sql"]), work("b", ["api/m.ts"])),
-    ).toEqual([["mine", "default", ["api/m.ts", "db/migrations/1.sql"]]]);
+    ).toEqual([["mine", "schema", ["api/m.ts", "db/migrations/1.sql"]]]);
   });
 
   test("producer paths on the other side are not consumer paths", () => {

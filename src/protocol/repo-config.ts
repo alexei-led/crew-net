@@ -38,7 +38,7 @@ export const DEFAULT_PRODUCER_PATTERNS = [
 
 /** Without a config, every path that is not a producer consumes. */
 export const DEFAULT_CONTRACT: Contract = {
-  name: "default",
+  name: "schema",
   producer: DEFAULT_PRODUCER_PATTERNS,
   consumers: [{ pattern: "**" }],
 };

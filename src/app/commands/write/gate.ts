@@ -319,6 +319,8 @@ export async function gate(
       decision: result.decision,
       failed: result.failed,
       checked: result.checked,
+      // stats counts blocked merges per repo; a multi-PR command counts under its first.
+      ...(result.checked[0] ? { repo: result.checked[0].split("#")[0] } : {}),
       reasons: result.reasons.length,
       atMs: ctx.clock.now(),
     })

@@ -67,7 +67,7 @@ export async function doctor(
     add({
       name: "gh token",
       status: "fail",
-      detail: message(error),
+      detail: `gh has no token for ${host}: gh is not installed or not signed in (${message(error)})`,
       fix: `gh auth login --hostname ${host}`,
     });
   }
@@ -141,6 +141,13 @@ export async function doctor(
     detail: gateActive
       ? "the PreToolUse hook checks depends-on before gh pr merge"
       : "inactive: agents can merge a PR whose dependencies are open",
+    ...(gateActive
+      ? {}
+      : {
+          fix: hooksAllowed
+            ? INSTALL
+            : "the plugin hooks must be allowed to run (see hooks policy above)",
+        }),
   });
 
   let configOk = false;

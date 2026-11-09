@@ -262,12 +262,12 @@ describe("compose: Others", () => {
         "c-feat",
         [
           "overlaps alexei-feat: 2 files",
-          "order: alexei-feat changes default, this uses it. Add depends-on?",
+          "order: alexei-feat changes schema, this uses it. Add depends-on?",
         ],
       ],
       [
         "#50",
-        ["order: alexei-feat changes default, this uses it. Add depends-on?"],
+        ["order: alexei-feat changes schema, this uses it. Add depends-on?"],
       ],
       ["#2", []],
       ["#7", []],
