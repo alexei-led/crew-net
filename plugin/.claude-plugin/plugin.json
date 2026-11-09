@@ -1,6 +1,6 @@
 {
   "name": "crew-net",
-  "version": "0.1.0-dev",
+  "version": "0.1.0",
   "description": "See who works on what in shared GitHub repos, catch collisions early, ask other developers' agents, and merge in depends-on order.",
   "author": {
     "name": "Alexei Ledenev",
