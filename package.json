@@ -1,6 +1,6 @@
 {
   "name": "crew-net",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Coding-agent sessions on different laptops share work, requests and merge order through GitHub alone.",
   "keywords": [
     "claude-code",

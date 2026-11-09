@@ -4,7 +4,7 @@ import { COMMANDS } from "./commands/index";
 
 /** Run when the first word is a flag or missing: the digest, once it exists. */
 export const DEFAULT_COMMAND = "digest";
-export const VERSION = "0.1.1";
+export const VERSION = "0.2.0";
 
 export function usage(commands: readonly Command[]): string {
   const lines = commands.map((c) => `  ${c.name.padEnd(10)} ${c.summary}`);
