@@ -19,6 +19,7 @@ becomes the notice `crew-net: rate-limited until HH:MM` in `sync:status`.
 | Repo state      | `repo:<host/o/r>`  | 60 s active, 15 min watched    | Open PRs with parsed state blocks → `snapshot.json`; closes my requests whose thread closed or merged                  |
 | Fetch and radar | `radar:<host/o/r>` | 5 min, active only             | `git fetch`, my work vs others' PRs and bare branches (same base) → findings; new ones become items, then `radar.json` |
 | Dependencies    | `deps`             | 5 min; 60 s while I am blocked | Reads each dependency of my PRs; `auto-merge-off`, `dependency-closed`, `unblocked`, `waits-on-you` items              |
+| Store prune     | `prune`            | 24 h                           | Removes items delivered 14 days ago, dead session files, stale lock markers and orphan temp files                      |
 
 - **Scope.** Active: the repo of a live session heartbeat, plus the
   command's own working copy. Watched: a session there in the last 14 days

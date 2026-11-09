@@ -3207,8 +3207,8 @@ var REVIEW_LABEL = {
 async function readReviews(ports, host, me, since, repo, number) {
   const { store, clock } = ports;
   const name = reviewCursor(host, repo, number);
-  const after = await store.cursors.get(name) ?? since;
-  const reviews = (await ports.github(host).listReviews(repo, number)).filter((r) => r.submittedAt !== null && r.submittedAt >= after);
+  const after = reviewPosition(await store.cursors.get(name), since);
+  const reviews = (await ports.github(host).listReviews(repo, number)).filter((r) => r.submittedAt !== null && (r.submittedAt > after.submittedAt || r.submittedAt === after.submittedAt && r.id > after.id)).sort((a, b) => a.submittedAt === b.submittedAt ? a.id - b.id : a.submittedAt < b.submittedAt ? -1 : 1);
   for (const review of reviews) {
     if (sameLogin2(review.author, me) || isBotLogin(review.author))
       continue;
@@ -3228,9 +3228,19 @@ async function readReviews(ports, host, me, since, repo, number) {
       event: "pr-review"
     }, clock.now());
   }
-  const newest = reviews.map((r) => r.submittedAt).sort().at(-1);
+  const newest = reviews.at(-1);
   if (newest)
-    await store.cursors.set(name, newest);
+    await store.cursors.set(name, JSON.stringify({ submittedAt: newest.submittedAt, id: newest.id }));
+}
+function reviewPosition(cursor, since) {
+  if (cursor?.startsWith("{")) {
+    try {
+      const v = JSON.parse(cursor);
+      if (typeof v.submittedAt === "string" && typeof v.id === "number")
+        return { submittedAt: v.submittedAt, id: v.id };
+    } catch {}
+  }
+  return { submittedAt: cursor ?? since, id: Number.NEGATIVE_INFINITY };
 }
 
 // src/app/radar.ts
@@ -3692,7 +3702,8 @@ var INTERVALS = {
   repoWatched: 15 * 60000,
   radar: 5 * 60000,
   deps: 5 * 60000,
-  depsBlocked: 60000
+  depsBlocked: 60000,
+  prune: 24 * 60 * 60000
 };
 var SYNC_STATUS_KEY = "sync:status";
 var HHMM = (ms) => new Date(ms).toTimeString().slice(0, 5);
@@ -3752,6 +3763,7 @@ async function runSync(ports, here) {
   }
   const depsInterval = await anyBlocked(store) ? INTERVALS.depsBlocked : INTERVALS.deps;
   await run("deps", undefined, depsInterval, () => depsJob(ports, repos));
+  await run("prune", undefined, INTERVALS.prune, () => store.prune());
   const failed = jobs.filter((j) => j.outcome === "failed");
   const status = {
     atMs: clock.now(),
@@ -4600,6 +4612,8 @@ async function deliverTo(ports, sessionId, options) {
       if (routed.session !== sessionId)
         continue;
       if (!await store.delivered.claim(item.id, sessionId))
+        continue;
+      if (!await store.inbox.get(item.id))
         continue;
       await store.events.append({
         type: "delivery",
