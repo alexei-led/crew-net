@@ -131,6 +131,32 @@ describe("state (design §7.1)", () => {
     expect(h.github.writes).toEqual([]);
   });
 
+  test("refuses a block whose state value is unknown, rather than dropping it", async () => {
+    const h = mine("<!-- crew-net\nstate: done\n-->");
+    const error = await refusal(state(h.ctx, { state: "review" }));
+    expect(error.message).toMatch(/state has an unreadable entry "done"/);
+    expect(h.github.writes).toEqual([]);
+  });
+
+  test("dep add of a dependency already listed still turns auto-merge off while it is open", async () => {
+    const h = mine(BLOCK, { autoMerge: true });
+    const result = await dep(h.ctx, { action: "add", ref: "#5" });
+    expect(result).toMatchObject({ changed: false, autoMergeDisabled: true });
+    expect(h.github.writes).toEqual([`auto-merge-off ${REPO}#10`]);
+  });
+
+  test("a URL on another host is refused, not read as this host", async () => {
+    const h = mine();
+    const error = await refusal(
+      state(h.ctx, {
+        state: "review",
+        pr: "https://ghe.corp/acme/app/pull/10",
+      }),
+    );
+    expect(error.code).toBe("usage");
+    expect(h.github.writes).toEqual([]);
+  });
+
   test("without a PR on the current branch names the fix", async () => {
     const h = harness();
     const error = await refusal(state(h.ctx, { state: "review" }));

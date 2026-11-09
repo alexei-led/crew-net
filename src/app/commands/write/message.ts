@@ -99,7 +99,7 @@ async function pickThread(
   args: SendArgs,
   me: string,
 ): Promise<Thread> {
-  const target = parseTarget(args.target, ctx.repo);
+  const target = parseTarget(args.target, ctx);
   if ("thread" in target) {
     if (args.on !== undefined)
       throw new CommandError("usage", "--on goes with @login, not with a PR");
@@ -117,7 +117,7 @@ async function pickThread(
   if (same(to, me))
     throw new CommandError("usage", "you cannot send a request to yourself");
   if (args.on !== undefined) {
-    const ref = parseThreadRef(args.on, ctx.repo);
+    const ref = parseThreadRef(args.on, ctx);
     if (!ref)
       throw new CommandError(
         "usage",

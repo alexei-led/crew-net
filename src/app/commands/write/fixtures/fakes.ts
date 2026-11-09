@@ -242,7 +242,7 @@ export class FakeFiles implements FilesPort {
   async exists(path: string) {
     return this.files.has(path);
   }
-  async write(path: string, content: string) {
+  async write(path: string, content: string, _root: string) {
     this.files.set(path, content);
   }
 }

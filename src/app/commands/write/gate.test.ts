@@ -135,16 +135,49 @@ describe("gate decisions (design §11)", () => {
   });
 
   test("an unknown gh command gates the current PR when aliases are unknown", async () => {
-    expect((await run(world(deps("#1")), "gh shipit")).decision).toBe("deny");
+    expect((await run(world(deps("#1")), "gh deploy")).decision).toBe("deny");
   });
 
   test("a known alias map lets an unrelated alias through", async () => {
     const h = world(deps("#1"));
     const result = await gate(h.ctx, {
-      argv: ["gh co 5"],
+      argv: ["gh deploy 5"],
       aliases: new Map([["shipit", "pr merge"]]),
     });
     expect(result.decision).toBe("allow");
+  });
+
+  test("a split line with a shell operator is denied, not read as its first command", async () => {
+    const h = world("");
+    const result = await run(h, [
+      "gh",
+      "pr",
+      "view",
+      "10",
+      "&&",
+      "gh",
+      "pr",
+      "merge",
+      "10",
+    ]);
+    expect(result).toMatchObject({ decision: "deny", failed: false });
+    expect(result.reasons[0]).toMatch(/split into words/);
+  });
+
+  test("a deny reason with peer text is one short line", async () => {
+    const h = world("");
+    h.github.add(
+      REPO,
+      pull(12, {
+        body: `<!-- crew-net\ndepends-on: #1, bad\u0007\u001b[2J${"z".repeat(300)}\n-->`,
+      }),
+    );
+    const result = await run(h, "gh pr merge 12");
+    expect(result.decision).toBe("deny");
+    for (const r of result.reasons) {
+      expect([...r].some((c) => c.charCodeAt(0) < 32)).toBe(false);
+      expect(r.length).toBeLessThanOrEqual(160);
+    }
   });
 });
 

@@ -39,11 +39,26 @@ function commandLine(argv: readonly string[]): string {
 
 class GateFailure extends Error {}
 
-/** False when the command cannot merge a PR: the caller may allow it without reading anything. */
+/** A shell operator as its own word: the caller split the line itself, so the words cannot be trusted. */
+const SHELL_WORD = /[;&|<>()`$\n]/;
+
+/** Reasons can carry peer text (a teammate's `depends-on` value): one short line, no control characters. */
+const REASON_MAX = 160;
+const clean = (reason: string): string =>
+  Array.from(reason, (c) => (c.charCodeAt(0) < 32 || c === "\x7f" ? " " : c))
+    .join("")
+    .slice(0, REASON_MAX);
+
+/** True for a split line whose words hold shell operators: the gate denies it. */
+const splitLine = (argv: readonly string[]): boolean =>
+  argv.length > 1 && argv.some((w) => SHELL_WORD.test(w));
+
+/** True when the command may merge, so the gate must look at it. */
 export function mayMerge(
   argv: readonly string[],
   aliases?: ReadonlyMap<string, string>,
 ): boolean {
+  if (splitLine(argv)) return true;
   return (
     detectMerge(commandLine(argv), aliases === undefined ? {} : { aliases })
       .kind !== "none"
@@ -119,6 +134,14 @@ async function decide(
   ctx: WriteContext,
   args: GateArgs,
 ): Promise<Omit<GateResult, "failed">> {
+  if (splitLine(args.argv))
+    return {
+      decision: "deny",
+      reasons: [
+        "crew-net gate: the command was split into words; pass the whole line as one argument",
+      ],
+      checked: [],
+    };
   const detection = detectMerge(
     commandLine(args.argv),
     args.aliases === undefined ? {} : { aliases: args.aliases },
@@ -126,12 +149,16 @@ async function decide(
   if (detection.kind === "none")
     return { decision: "allow", reasons: [], checked: [] };
   if (detection.kind === "deny")
-    return { decision: "deny", reasons: [detection.reason], checked: [] };
+    return {
+      decision: "deny",
+      reasons: [clean(detection.reason)],
+      checked: [],
+    };
   const results = await Promise.all(
     detection.targets.map((t) => check(ctx, t)),
   );
   const checked = [...new Set(results.map((r) => r.name))];
-  const reasons = results.flatMap((r) => r.reasons);
+  const reasons = results.flatMap((r) => r.reasons).map(clean);
   return {
     decision: reasons.length ? "deny" : "allow",
     reasons: [...new Set(reasons)],

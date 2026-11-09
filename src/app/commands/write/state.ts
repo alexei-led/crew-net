@@ -9,6 +9,7 @@ import {
   CommandError,
   currentPr,
   guardKeywords,
+  type Home,
   label,
   parseThreadRef,
   readPull,
@@ -54,7 +55,7 @@ async function targetPr(
       );
     return { pr, ref: { repo: ctx.repo, number: pr.number } };
   }
-  const ref = parseThreadRef(args.pr, ctx.repo);
+  const ref = parseThreadRef(args.pr, ctx);
   if (!ref)
     throw new CommandError(
       "usage",
@@ -81,12 +82,12 @@ function currentFields(pr: PullRequest, ref: ThreadRef, home: string): Fields {
       "refused",
       `${label(ref, home)}: the state block is unreadable (${parsed.detail}); fix the PR body by hand`,
     );
-  // A skipped ref would vanish on rewrite and with it a dependency the author meant.
-  const bad = parsed.warnings.find((w) => w.field === "depends-on");
+  // A skipped value would vanish on rewrite: a dependency the author meant, or a state.
+  const bad = parsed.warnings[0];
   if (bad)
     throw new CommandError(
       "refused",
-      `${label(ref, home)}: depends-on has an unreadable entry ${JSON.stringify(bad.value)} (${bad.detail}); fix the PR body by hand`,
+      `${label(ref, home)}: ${bad.field} has an unreadable entry ${JSON.stringify(bad.value)} (${bad.detail}); fix the PR body by hand`,
     );
   const { state, scope, dependsOn } = parsed.state;
   return { ...(state === undefined ? {} : { state }), scope, dependsOn };
@@ -95,7 +96,11 @@ function currentFields(pr: PullRequest, ref: ThreadRef, home: string): Fields {
 const sameList = (a: readonly string[], b: readonly string[]): boolean =>
   a.length === b.length && a.every((x, i) => x === b[i]);
 
-/** Write `next` into the PR body when a field changed (design §7.1: no heartbeats). */
+/**
+ * Write `next` into the PR body when a field changed (design §7.1: no heartbeats).
+ * `before` runs in every case, after the new body is checked and before it is
+ * written: it may switch auto-merge off, which is a write in its own right.
+ */
 async function write(
   ctx: WriteContext,
   pr: PullRequest,
@@ -111,14 +116,12 @@ async function write(
     scope: next.scope,
     dependsOn: next.dependsOn,
   };
-  if (
+  const unchanged =
     current.state === next.state &&
     sameList(current.scope, next.scope) &&
-    sameList(current.dependsOn, next.dependsOn)
-  )
-    return { ...result, changed: false, autoMergeDisabled: false };
-  const replaced = replaceStateBlock(pr.body, next);
-  if (!replaced.ok) {
+    sameList(current.dependsOn, next.dependsOn);
+  const replaced = unchanged ? undefined : replaceStateBlock(pr.body, next);
+  if (replaced && !replaced.ok) {
     const error = replaced.error;
     switch (error.reason) {
       case "closing-keyword":
@@ -139,6 +142,7 @@ async function write(
     }
   }
   const autoMergeDisabled = await before();
+  if (!replaced?.ok) return { ...result, changed: false, autoMergeDisabled };
   await ctx.github.updatePullBody(ref.repo, ref.number, replaced.body);
   return { ...result, changed: true, autoMergeDisabled };
 }
@@ -182,7 +186,7 @@ export interface DepArgs extends TargetArgs {
 const blockRef = (dep: ThreadRef, home: string): string =>
   same(dep.repo, home) ? `#${dep.number}` : `${dep.repo}#${dep.number}`;
 
-const sameDep = (a: string, b: ThreadRef, home: string): boolean => {
+const sameDep = (a: string, b: ThreadRef, home: Home): boolean => {
   const parsed = parseThreadRef(a, home);
   return (
     parsed !== null && same(parsed.repo, b.repo) && parsed.number === b.number
@@ -201,35 +205,39 @@ export async function dep(
     );
   const me = await ctx.github.viewer();
   const { pr, ref } = await targetPr(ctx, args, me);
-  const depRef = parseThreadRef(args.ref, ref.repo);
+  const home = { host: ctx.host, repo: ref.repo };
+  const depRef = parseThreadRef(args.ref, home);
   if (!depRef)
     throw new CommandError(
       "usage",
       `expected #N, owner/repo#N or a PR URL, got ${JSON.stringify(args.ref)}`,
     );
   const current = currentFields(pr, ref, ctx.repo);
-  const rest = current.dependsOn.filter((d) => !sameDep(d, depRef, ref.repo));
+  const rest = current.dependsOn.filter((d) => !sameDep(d, depRef, home));
   if (args.action === "rm")
     return write(ctx, pr, ref, current, { ...current, dependsOn: rest });
 
   if (same(depRef.repo, ref.repo) && depRef.number === ref.number)
     throw new CommandError("usage", "a PR cannot depend on itself");
-  if (rest.length < current.dependsOn.length)
-    return write(ctx, pr, ref, current, current);
   const target = await readPull(ctx, depRef);
-  if (target.state === "closed" && !target.merged)
+  // Also for a dependency already listed: auto-merge may have been turned on since.
+  const alreadyListed = rest.length < current.dependsOn.length;
+  if (!alreadyListed && target.state === "closed" && !target.merged)
     throw new CommandError(
       "refused",
       `${label(depRef, ref.repo)} was closed without merge; the gate would block forever`,
     );
-  const next = {
-    ...current,
-    dependsOn: [...current.dependsOn, blockRef(depRef, ref.repo)],
-  };
+  const next = alreadyListed
+    ? current
+    : {
+        ...current,
+        dependsOn: [...current.dependsOn, blockRef(depRef, ref.repo)],
+      };
   // Auto-merge would complete on the server, past every client gate (design §11).
   // Off first: if the body write then fails, nothing is left unguarded.
   return write(ctx, pr, ref, current, next, async () => {
-    if (!pr.autoMerge || target.merged) return false;
+    if (!pr.autoMerge || target.merged || target.state === "closed")
+      return false;
     await ctx.github.disableAutoMerge(ref.repo, ref.number);
     return true;
   });

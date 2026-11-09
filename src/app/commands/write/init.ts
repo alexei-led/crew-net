@@ -61,7 +61,7 @@ export async function init(
       );
   }
   for (const [path, content] of files)
-    await ctx.files.write(abs(path), content);
+    await ctx.files.write(abs(path), content, tree.path);
   const next = [
     "Review the files (git status, git diff) and edit them to fit the repo.",
     "Commit them through a PR; crew-net never commits or pushes.",

@@ -56,28 +56,41 @@ const LOGIN = new RegExp(`^@(${LOGIN_PATTERN})$`);
 const NUMBER = /^#?([1-9]\d{0,9})$/;
 const QUALIFIED = /^([\w.-]+\/[\w.-]+)#([1-9]\d{0,9})$/;
 const URL_REF =
-  /^https:\/\/[^/\s]+\/([\w.-]+\/[\w.-]+)\/(?:pull|issues)\/([1-9]\d{0,9})\/?$/;
+  /^https:\/\/([^/\s]+)\/([\w.-]+\/[\w.-]+)\/(?:pull|issues)\/([1-9]\d{0,9})\/?$/;
 
-/** `#N`, `N`, `owner/name#N` or a PR/Issue URL. Null when `text` is none of them. */
-export function parseThreadRef(
-  text: string,
-  defaultRepo: string,
-): ThreadRef | null {
+/** Where a bare ref points: this host and repo. */
+export type Home = Pick<WriteContext, "host" | "repo">;
+
+/**
+ * `#N`, `N`, `owner/name#N` or a PR/Issue URL. A URL on another host is an
+ * error, not a guess: the number would name a different PR. Null when `text`
+ * is none of these forms.
+ */
+export function parseThreadRef(text: string, home: Home): ThreadRef | null {
   const plain = NUMBER.exec(text);
-  if (plain) return { repo: defaultRepo, number: Number(plain[1]) };
-  const qualified = QUALIFIED.exec(text) ?? URL_REF.exec(text);
+  if (plain) return { repo: home.repo, number: Number(plain[1]) };
+  const qualified = QUALIFIED.exec(text);
   if (qualified)
     return { repo: qualified[1] as string, number: Number(qualified[2]) };
+  const url = URL_REF.exec(text);
+  if (url) {
+    if ((url[1] ?? "").toLowerCase() !== home.host.toLowerCase())
+      throw new CommandError(
+        "usage",
+        `${text} is on ${url[1]}; crew-net works on ${home.host} only`,
+      );
+    return { repo: url[2] as string, number: Number(url[3]) };
+  }
   return null;
 }
 
 export type Target = { login: string } | { thread: ThreadRef };
 
 /** `@login` or a thread ref. */
-export function parseTarget(text: string, defaultRepo: string): Target {
+export function parseTarget(text: string, home: Home): Target {
   const login = LOGIN.exec(text);
   if (login) return { login: login[1] as string };
-  const thread = parseThreadRef(text, defaultRepo);
+  const thread = parseThreadRef(text, home);
   if (thread) return { thread };
   throw new CommandError(
     "usage",

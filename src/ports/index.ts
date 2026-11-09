@@ -319,8 +319,8 @@ export interface StorePort {
 export interface FilesPort {
   /** True when anything exists at `path`, a dangling symlink included. */
   exists(path: string): Promise<boolean>;
-  /** Write `content`, creating parent directories. Replaces an existing file. */
-  write(path: string, content: string): Promise<void>;
+  /** Write `content`, creating parent directories. Replaces an existing file. Refuses any path that resolves outside `root`, and a symlink at the file name. */
+  write(path: string, content: string, root: string): Promise<void>;
 }
 
 export interface ClockPort {

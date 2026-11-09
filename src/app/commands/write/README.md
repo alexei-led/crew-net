@@ -65,6 +65,11 @@ The comment goes on the item's thread:
 Afterwards the store KV holds `replied:<item>` = `{ status, re, atMs }`, so
 `inbox` can show the request as answered, and `request.replied` is logged.
 
+## Hosts
+
+A PR URL on another host is a usage error. Numbers are per repo and
+host, so a `ghe.corp` URL must never resolve to a `github.com` PR.
+
 ## state and dep
 
 `crew-net state <planning|building|review|blocked> [--scope p…] [--pr #N]`,
@@ -111,6 +116,11 @@ argument with the whole Bash line, or its words.
   "failed": false
 }
 ```
+
+A split command (several words, one holding a shell operator such as `&&`,
+`|` or `$`) is denied: the caller split the line, so the gate cannot see what
+runs. Reasons are cleaned to one line of at most 160 characters, since they can
+carry a teammate's `depends-on` value.
 
 Exit 0 for allow and deny, 1 when the gate failed (and denied). Decisions on
 merge commands are logged as `gate` events.

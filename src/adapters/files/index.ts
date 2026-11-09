@@ -1,5 +1,6 @@
-import { lstat, mkdir, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute } from "node:path";
+import { constants } from "node:fs";
+import { lstat, mkdir, open, realpath } from "node:fs/promises";
+import { dirname, isAbsolute, relative, sep } from "node:path";
 import type { FilesPort } from "../../ports/index";
 
 function absolute(path: string): string {
@@ -8,7 +9,13 @@ function absolute(path: string): string {
   return path;
 }
 
-/** Working-tree files on the local filesystem. */
+/** True when `path` is `root` or below it, both real paths. */
+const inside = (root: string, path: string): boolean => {
+  const rel = relative(root, path);
+  return rel === "" || (!rel.startsWith("..") && !rel.startsWith(sep));
+};
+
+/** Working-tree files on the local filesystem. Writes never leave `root` (symlinks included). */
 export class FilesAdapter implements FilesPort {
   async exists(path: string): Promise<boolean> {
     try {
@@ -21,8 +28,34 @@ export class FilesAdapter implements FilesPort {
     }
   }
 
-  async write(path: string, content: string): Promise<void> {
-    await mkdir(dirname(absolute(path)), { recursive: true });
-    await writeFile(path, content, { mode: 0o644 });
+  async write(path: string, content: string, root: string): Promise<void> {
+    const target = absolute(path);
+    const rootReal = await realpath(absolute(root));
+    // The deepest existing ancestor decides where mkdir would create folders.
+    let ancestor = dirname(target);
+    while (!(await this.exists(ancestor))) ancestor = dirname(ancestor);
+    if (!inside(rootReal, await realpath(ancestor)))
+      throw new Error(
+        `refusing to write ${path}: it leads outside the working tree`,
+      );
+    await mkdir(dirname(target), { recursive: true });
+    if (!inside(rootReal, await realpath(dirname(target))))
+      throw new Error(
+        `refusing to write ${path}: it leads outside the working tree`,
+      );
+    // O_NOFOLLOW: a symlink at the file name fails instead of being written through.
+    const handle = await open(
+      target,
+      constants.O_WRONLY |
+        constants.O_CREAT |
+        constants.O_TRUNC |
+        constants.O_NOFOLLOW,
+      0o644,
+    );
+    try {
+      await handle.writeFile(content);
+    } finally {
+      await handle.close();
+    }
   }
 }

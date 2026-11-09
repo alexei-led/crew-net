@@ -53,7 +53,7 @@ Callers must not treat unknown as false.
 
 `FilesPort` reads and writes files in the developer's working tree, for
 `crew-net init`: `exists(path)` (a dangling symlink counts) and
-`write(path, content)` (creates parent directories, replaces the file). Paths
-are absolute. See [files adapter](../adapters/files/README.md).
+`write(path, content, root)` (creates parent directories, replaces the file;
+refuses anything that resolves outside `root`). Paths are absolute. See [files adapter](../adapters/files/README.md).
 
 ClockPort is unchanged; the store adapter takes a ClockPort.

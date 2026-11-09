@@ -114,6 +114,16 @@ describe("ask: thread choice (design §7.2)", () => {
     ]);
   });
 
+  test("a PR URL on another host is refused", async () => {
+    const error = await refusal(
+      ask(team().ctx, {
+        target: "https://ghe.corp/acme/app/pull/20",
+        text: "hi",
+      }),
+    );
+    expect(error.code).toBe("usage");
+  });
+
   test("--on with a PR target is a usage error", async () => {
     const error = await refusal(
       ask(team().ctx, { target: "#20", text: "hi", on: "#3" }),
