@@ -263,6 +263,7 @@ describe("real git", () => {
     expect(await adapter.sameContent("main", "squashed", squashed)).toBe(true);
     const open = await adapter.changedFiles("main", "open");
     expect(await adapter.sameContent("main", "open", open)).toBe(false);
+    expect(await adapter.sameContent("main", "open", [])).toBe(true);
     // Paths are literal: "*.txt" names no file, so it cannot match shared.txt.
     expect(await adapter.sameContent("main", "open", ["*.txt"])).toBe(true);
   });

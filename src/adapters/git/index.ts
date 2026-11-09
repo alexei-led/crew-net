@@ -288,6 +288,8 @@ export class GitAdapter implements GitPort {
     b: string,
     paths: readonly string[],
   ): Promise<boolean> {
+    // No pathspec would compare whole trees.
+    if (paths.length === 0) return true;
     // Paths are listed on the command line; a huge list counts as different.
     if (paths.length > MAX_PATHSPECS) return false;
     const result = await this.run(

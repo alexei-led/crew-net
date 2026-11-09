@@ -3412,7 +3412,8 @@ async function radarJob(ports, active, repos) {
     const paths = await changed(git, `origin/${defaultBase}`, ref);
     if (!paths)
       continue;
-    if (await git.sameContent(`origin/${defaultBase}`, ref, paths))
+    const merged = await git.sameContent(`origin/${defaultBase}`, ref, paths).catch(() => false);
+    if (merged)
       continue;
     theirs.push({
       ref,
@@ -5992,6 +5993,8 @@ class GitAdapter {
     return stdout.split("\x00").filter(Boolean);
   }
   async sameContent(a, b, paths) {
+    if (paths.length === 0)
+      return true;
     if (paths.length > MAX_PATHSPECS)
       return false;
     const result = await this.run([

@@ -268,7 +268,11 @@ export async function radarJob(
     const paths = await changed(git, `origin/${defaultBase}`, ref);
     if (!paths) continue;
     // Squash- or rebase-merged and not deleted: its changes are on the base already.
-    if (await git.sameContent(`origin/${defaultBase}`, ref, paths)) continue;
+    // A git failure here keeps the branch, as a failed diff drops it: one item, not the pass.
+    const merged = await git
+      .sameContent(`origin/${defaultBase}`, ref, paths)
+      .catch(() => false);
+    if (merged) continue;
     theirs.push({
       ref,
       facts: {
