@@ -267,6 +267,8 @@ export async function radarJob(
     if (!owner || sameLogin(owner, me) || isBot(owner, bots)) continue;
     const paths = await changed(git, `origin/${defaultBase}`, ref);
     if (!paths) continue;
+    // Squash- or rebase-merged and not deleted: its changes are on the base already.
+    if (await git.sameContent(`origin/${defaultBase}`, ref, paths)) continue;
     theirs.push({
       ref,
       facts: {

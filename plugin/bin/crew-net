@@ -3412,6 +3412,8 @@ async function radarJob(ports, active, repos) {
     const paths = await changed(git, `origin/${defaultBase}`, ref);
     if (!paths)
       continue;
+    if (await git.sameContent(`origin/${defaultBase}`, ref, paths))
+      continue;
     theirs.push({
       ref,
       facts: {
@@ -5835,6 +5837,7 @@ class GitCommandError extends Error {
     this.stderr = clean;
   }
 }
+var MAX_PATHSPECS = 500;
 var NOREPLY = /^(?:\d+\+)?([A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)@users\.noreply\./i;
 var MISSING_OBJECT = /does not exist|exists on disk, but not in|unknown revision|bad revision|invalid object name|not a valid object name/i;
 
@@ -5987,6 +5990,23 @@ class GitAdapter {
       "--"
     ]);
     return stdout.split("\x00").filter(Boolean);
+  }
+  async sameContent(a, b, paths) {
+    if (paths.length > MAX_PATHSPECS)
+      return false;
+    const result = await this.run([
+      "--literal-pathspecs",
+      "diff",
+      "--quiet",
+      "--no-ext-diff",
+      "--no-textconv",
+      "--end-of-options",
+      a,
+      b,
+      "--",
+      ...paths
+    ], [0, 1]);
+    return result.exitCode === 0;
   }
   async showFile(ref, path) {
     const result = await this.run(["show", "--end-of-options", `${ref}:${path}`], [0, 128]);

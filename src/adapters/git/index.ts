@@ -98,6 +98,8 @@ export class GitCommandError extends Error {
   }
 }
 
+const MAX_PATHSPECS = 500;
+
 const NOREPLY =
   /^(?:\d+\+)?([A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)@users\.noreply\./i;
 
@@ -279,6 +281,31 @@ export class GitAdapter implements GitPort {
       "--",
     ]);
     return stdout.split("\0").filter(Boolean);
+  }
+
+  async sameContent(
+    a: string,
+    b: string,
+    paths: readonly string[],
+  ): Promise<boolean> {
+    // Paths are listed on the command line; a huge list counts as different.
+    if (paths.length > MAX_PATHSPECS) return false;
+    const result = await this.run(
+      [
+        "--literal-pathspecs",
+        "diff",
+        "--quiet",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--end-of-options",
+        a,
+        b,
+        "--",
+        ...paths,
+      ],
+      [0, 1],
+    );
+    return result.exitCode === 0;
   }
 
   async showFile(ref: string, path: string): Promise<string | undefined> {

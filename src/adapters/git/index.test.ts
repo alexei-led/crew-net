@@ -247,6 +247,26 @@ describe("real git", () => {
     ).toEqual({ authorEmail: "dmitri@corp.example", loginHint: null });
   });
 
+  test("same content: a squash-merged branch matches the base on its paths, open work does not", async () => {
+    git("switch", "-c", "squashed");
+    writeFileSync(join(repo, "feature.txt"), "feature\n");
+    commit("feature");
+    git("switch", "-c", "open");
+    writeFileSync(join(repo, "shared.txt"), "open work\n");
+    commit("open work");
+    git("switch", "main");
+    git("merge", "--squash", "squashed");
+    commit("squash merge");
+    writeFileSync(join(repo, "later.txt"), "main moved on\n");
+    commit("later");
+    const squashed = await adapter.changedFiles("main", "squashed");
+    expect(await adapter.sameContent("main", "squashed", squashed)).toBe(true);
+    const open = await adapter.changedFiles("main", "open");
+    expect(await adapter.sameContent("main", "open", open)).toBe(false);
+    // Paths are literal: "*.txt" names no file, so it cannot match shared.txt.
+    expect(await adapter.sameContent("main", "open", ["*.txt"])).toBe(true);
+  });
+
   test("changed files list both paths of a rename", async () => {
     git("switch", "-c", "feature");
     git("mv", "rename.txt", "renamed.txt");
