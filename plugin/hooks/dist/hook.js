@@ -824,6 +824,113 @@ function detectIn(src, options, depth, where) {
 function detectMerge(command, options = {}) {
   return detectIn(command, options, 0, "command");
 }
+// src/core/digest/index.ts
+var MINUTE = 60000;
+var HOUR = 60 * MINUTE;
+var DAY = 24 * HOUR;
+
+// src/core/trust/gate.ts
+var matches = (re) => (value) => re.test(value);
+var INT = matches(/^\d{1,6}$/);
+var JSON_FIELDS = matches(/^[A-Za-z][A-Za-z0-9,]*$/);
+function safeRefOrPath(word) {
+  return /^[A-Za-z0-9_.@^:+=%][A-Za-z0-9_./@^~:+=%-]*$/.test(word) && !word.split("/").includes("..");
+}
+var JQ_FUNCTIONS = new Set([
+  "add",
+  "all",
+  "and",
+  "any",
+  "ascii_downcase",
+  "ascii_upcase",
+  "contains",
+  "elif",
+  "else",
+  "empty",
+  "end",
+  "endswith",
+  "false",
+  "first",
+  "flatten",
+  "group_by",
+  "has",
+  "if",
+  "join",
+  "keys",
+  "last",
+  "length",
+  "map",
+  "max",
+  "min",
+  "not",
+  "null",
+  "or",
+  "reverse",
+  "select",
+  "sort",
+  "sort_by",
+  "startswith",
+  "test",
+  "then",
+  "tonumber",
+  "tostring",
+  "true",
+  "type",
+  "unique",
+  "unique_by",
+  "values"
+]);
+var flags = (entries) => new Map(Object.entries(entries));
+var GIT_RULES = {
+  log: {
+    flags: flags({
+      "--oneline": true,
+      "--stat": true,
+      "-n": INT,
+      "--max-count": INT,
+      "--format": matches(/^(oneline|short|medium)$/)
+    }),
+    countFlag: true,
+    positional: safeRefOrPath
+  },
+  show: {
+    flags: flags({
+      "--stat": true,
+      "--name-only": true,
+      "--name-status": true
+    }),
+    positional: safeRefOrPath
+  },
+  diff: {
+    flags: flags({
+      "--stat": true,
+      "--name-only": true,
+      "--name-status": true
+    }),
+    positional: safeRefOrPath
+  },
+  status: {
+    flags: flags({ "-s": true, "--short": true, "--branch": true }),
+    positional: safeRefOrPath
+  }
+};
+var GH_PR_RULES = {
+  view: { flags: flags({ "--json": JSON_FIELDS, "--comments": true }) },
+  diff: { flags: flags({ "--name-only": true }) },
+  checks: { flags: flags({}) }
+};
+var GH_PR_LIST_RULES = {
+  flags: flags({
+    "--state": matches(/^(open|closed|merged|all)$/),
+    "--json": JSON_FIELDS,
+    "--limit": INT
+  })
+};
+var HEADER = matches(/^(?![^:]*(override|authorization))[A-Za-z][A-Za-z0-9-]*: [\x20-\x7e]*$/i);
+var STATES = matches(/^(planning|building|review|blocked)$/);
+// plugin/hooks/mod.ts
+var WAKE_MARK = /^crew-net wake turn [0-9a-f]{32}\.$/m;
+
 // plugin/hooks/hook.ts
 var HOOK_EVENTS = [
   "session-start",
@@ -831,11 +938,13 @@ var HOOK_EVENTS = [
   "pre-bash",
   "session-end"
 ];
-var CONTEXT_MAX = 8000;
 var QUICK_MS = 3000;
 var DIGEST_MS = 5000;
 var GATE_TIMEOUT_MS = 20000;
 var str = (value) => typeof value === "string" && value !== "" ? value : undefined;
+function isWakePrompt(prompt) {
+  return typeof prompt === "string" && WAKE_MARK.test(prompt);
+}
 function sessionFlags(input, deps) {
   const session = str(input.session_id);
   if (session === undefined)
@@ -843,17 +952,13 @@ function sessionFlags(input, deps) {
   const role = deps.role === "worker" ? "worker" : "lead";
   return ["--session", session, "--harness", "claude-code", "--role", role];
 }
-function cap(text) {
-  const trimmed = text.trim();
-  return trimmed.length > CONTEXT_MAX ? `${trimmed.slice(0, CONTEXT_MAX - 1)}…` : trimmed;
-}
 function output(result) {
   return result.code === 0 ? result.stdout : "";
 }
 function context(event, parts) {
-  const text = cap(parts.filter((p) => p.trim() !== "").join(`
+  const text = parts.map((p) => p.trim()).filter((p) => p !== "").join(`
 
-`));
+`);
   if (text === "")
     return null;
   return {
@@ -874,7 +979,7 @@ function promptSubmit(input, cwd, deps) {
     return null;
   deps.cli(["session", "beat", ...flags], { cwd, timeoutMs: QUICK_MS });
   deps.cli(["sync", "--detach"], { cwd, timeoutMs: QUICK_MS });
-  if (deps.role === "worker")
+  if (deps.role === "worker" || isWakePrompt(input.prompt))
     return null;
   const items = output(deps.cli(["inbox", "--session", flags[1] ?? "", "--claim", "--format", "context"], { cwd, timeoutMs: DIGEST_MS }));
   return context("UserPromptSubmit", [items]);
@@ -899,27 +1004,36 @@ function gateVerdict(result) {
   const down = "merges are refused while the gate cannot decide";
   if (result.code === null)
     return { allow: false, reason: `the gate did not finish; ${down}` };
-  if (result.code !== 0)
+  const answer = parseAnswer(result.stdout);
+  if (result.code !== 0) {
+    const why = answer === null ? "" : reasonsOf(answer);
     return {
       allow: false,
-      reason: `the gate failed (exit ${result.code}); ${down}`
+      reason: `the gate failed (exit ${result.code})${why ? `: ${why}` : ""}; ${down}`
     };
-  let answer;
-  try {
-    answer = JSON.parse(result.stdout);
-  } catch {
-    return { allow: false, reason: `the gate gave no JSON; ${down}` };
   }
-  if (typeof answer !== "object" || answer === null)
+  if (answer === null)
     return { allow: false, reason: `the gate gave no decision; ${down}` };
-  const { decision, reasons } = answer;
-  if (decision === "allow")
+  if (answer.decision === "allow")
     return { allow: true };
-  if (decision === "deny") {
-    const why = Array.isArray(reasons) ? reasons.filter((r) => typeof r === "string").join("; ") : "";
-    return { allow: false, reason: why || "depends-on is not satisfied" };
-  }
+  if (answer.decision === "deny")
+    return {
+      allow: false,
+      reason: reasonsOf(answer) || "depends-on is not satisfied"
+    };
   return { allow: false, reason: `the gate gave no decision; ${down}` };
+}
+function parseAnswer(stdout) {
+  try {
+    const value = JSON.parse(stdout);
+    return typeof value === "object" && value !== null && !Array.isArray(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+function reasonsOf(answer) {
+  const { reasons } = answer;
+  return Array.isArray(reasons) ? reasons.filter((r) => typeof r === "string").join("; ") : "";
 }
 function preBash(input, cwd, deps) {
   const toolInput = input.tool_input;
@@ -948,6 +1062,13 @@ function handle(event, input, deps) {
       return preBash(input, cwd, deps);
     case "session-end":
       return sessionEnd(input, cwd, deps);
+  }
+}
+function handleSafely(event, input, deps) {
+  try {
+    return handle(event, input, deps);
+  } catch (error) {
+    return event === "pre-bash" ? deny(`the hook failed (${String(error)}); merges are refused`) : null;
   }
 }
 function parseInput(raw) {
@@ -984,7 +1105,7 @@ if (!HOOK_EVENTS.some((e) => e === event)) {
     raw = readFileSync(0, "utf8");
   } catch {}
   const here = dirname(fileURLToPath(import.meta.url));
-  const out = handle(event, parseInput(raw), {
+  const out = handleSafely(event, parseInput(raw), {
     cli: nodeCli(join(here, "..", "..", "bin", "crew-net")),
     role: process.env.CREW_NET_ROLE
   });

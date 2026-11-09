@@ -41,7 +41,7 @@ export function ask(id = "c-1", extra: Record<string, unknown> = {}): string {
     type: "item",
     id,
     kind: "message",
-    itemKind: "ask",
+    event: "ask",
     from: "maria",
     repo: "doiteng/reflex",
     thread: 2318,
@@ -79,6 +79,8 @@ export interface World {
   sessionId: string;
   /** Plugin submits stay unsettled until `releaseSubmits`, as one queued behind a running turn. */
   hangPluginSubmits: boolean;
+  /** Plugin submits are dropped, as by a hook beneath or the engine. */
+  dropPluginSubmits: boolean;
   releaseSubmits: () => void;
   /** Writes lines to the watcher's stdout; resolves once the mod has read them all. */
   emit: (...lines: string[]) => Promise<void>;
@@ -119,6 +121,7 @@ export function world(on: On, mock: Mock): World {
     draft: "",
     sessionId: "session-1",
     hangPluginSubmits: false,
+    dropPluginSubmits: false,
     releaseSubmits: () => {
       for (const r of held.splice(0)) r();
     },
@@ -178,6 +181,8 @@ export function world(on: On, mock: Mock): World {
       e.context === undefined
         ? { text: e.text, origin: e.origin }
         : { text: e.text, context: e.context, origin: e.origin };
+    if (e.origin.kind === "plugin" && w.dropPluginSubmits)
+      return { drop: "refused" };
     if (e.origin.kind === "plugin" && w.hangPluginSubmits)
       return new Promise<typeof entered>((resolve) => {
         held.push(() => resolve(entered));

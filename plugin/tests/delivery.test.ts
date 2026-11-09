@@ -3,6 +3,8 @@ import { expect, mock, test } from "claude-code/testing";
 import {
   acks,
   ask,
+  bash,
+  denied,
   goIdle,
   line,
   mountBand,
@@ -159,6 +161,24 @@ test("idle: a direct request starts one wake turn, not awaited, and it is acked"
   w.releaseSubmits();
 });
 
+test("a dropped wake gives the request back to the next prompt and frees the gate", async ($, on) => {
+  const w = world(on, mock);
+  await start($, w);
+  await goIdle(w);
+  w.dropPluginSubmits = true;
+  await w.emit(ask("c-1"));
+  await w.clock.settle();
+  const prompt = await userPrompt($, "back");
+  expect(prompt.context?.join("\n")).toContain("users.tier");
+  await $.turn.start({ text: "back", turnId: "t-1" });
+  expect(denied(await bash($, "make build"))).toBeUndefined();
+  const ui = await mountBand($, w, "terminal");
+  expect((await ui.find({ type: "Text", text: /wake failed/ }))?.text).toBe(
+    "crew-net · wake failed for c-1 · next prompt",
+  );
+  await ui.unmount();
+});
+
 test("no wake with a draft in the prompt box", async ($, on) => {
   const w = world(on, mock);
   await start($, w);
@@ -200,8 +220,8 @@ test("a reply, a comment or a non-wakeable route never wakes", async ($, on) => 
   await start($, w);
   await goIdle(w);
   await w.emit(
-    ask("r-1", { itemKind: "reply" }),
-    ask("p-1", { itemKind: undefined, kind: "message" }),
+    ask("r-1", { event: "reply" }),
+    ask("p-1", { event: undefined, kind: "message" }),
     ask("a-1", { wakeable: false }),
     ask("n-1", { wakeable: undefined }),
   );

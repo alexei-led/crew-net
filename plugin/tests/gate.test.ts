@@ -88,16 +88,6 @@ test("with an own PR the wake turn may update its state", async ($, on) => {
   expect(denied(await bash($, "crew-net state review"))).toBeUndefined();
 });
 
-test("a reply uses the item's ref when the watcher gives one", async ($, on) => {
-  const w = world(on, mock);
-  const prompt = await wakeTurn($, w, { ref: "k3f9" });
-  expect(prompt).toContain('crew-net reply k3f9 "<text>"');
-  expect(denied(await bash($, 'crew-net reply k3f9 "yes"'))).toBeUndefined();
-  expect(denied(await bash($, 'crew-net reply c-1 "yes"'))).toContain(
-    "may only answer",
-  );
-});
-
 test("subagents of a wake turn are gated too", async ($, on) => {
   const w = world(on, mock);
   await wakeTurn($, w);
@@ -140,9 +130,47 @@ test("an armed wake gates the next main turn unless it is the developer's own pr
     turnId: "t-1",
     reason: "answer",
   });
-  // Any other main turn while the wake is armed is treated as the wake turn.
+  // Any other main turn while the wake is armed is gated too ...
   await $.turn.start({ text: "", turnId: "t-2" });
   expect(denied(await bash($, "make build"))).toContain("crew-net wake turn");
+  await $.turn.complete({
+    answer: "",
+    durationMs: 1,
+    isAborted: false,
+    turnId: "t-2",
+    reason: "answer",
+  });
+  // ... and does not use up the token: the real wake turn is still gated.
+  w.releaseSubmits();
+  const wakeText =
+    w.submits.find((x) => x.origin.kind === "plugin")?.text ?? "";
+  expect(wakeText).toMatch(/^crew-net wake turn/);
+  await $.turn.start({ text: wakeText, turnId: "wake-1" });
+  expect(denied(await bash($, "rm -rf src"))).toContain("crew-net wake turn");
+  await $.turn.complete({
+    answer: "",
+    durationMs: 1,
+    isAborted: false,
+    turnId: "wake-1",
+    reason: "answer",
+  });
+  expect(denied(await bash($, "make build"))).toBeUndefined();
+});
+
+test("a prompt the developer typed during a turn is their own when it starts", async ($, on) => {
+  const w = world(on, mock);
+  await start($, w);
+  await goIdle(w);
+  w.hangPluginSubmits = true;
+  await w.emit(ask("c-1"));
+  await $.prompt.submit({
+    text: "and also run the tests",
+    origin: { kind: "composer" },
+    wait: true,
+    turnId: "t-0",
+  } as never);
+  await $.turn.start({ text: "and also run the tests", turnId: "t-1" });
+  expect(denied(await bash($, "make test"))).toBeUndefined();
   w.releaseSubmits();
 });
 

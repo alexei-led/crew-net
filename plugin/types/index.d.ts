@@ -30,8 +30,9 @@ export type CrewNetPending = {
 
 /**
  * The wake turn. `token` is the nonce in the submitted wake prompt; `turnId` is
- * set when that turn starts and cleared when it completes. While `turnId` is
- * set, every tool call goes through the wake gate.
+ * set when the turn carrying the token starts and cleared when it completes.
+ * The wake gate applies during that turn and, while `token` is armed, to any
+ * turn that is not the developer's own prompt.
  */
 export type CrewNetWake = {
   token: string | null;
@@ -52,6 +53,8 @@ export type CrewNetSession = {
   lastWakeAtMs: number;
   /** The main loop's running turn; null when idle. */
   turnId: string | null;
+  /** The running main turn when it is the developer's own prompt; null otherwise. */
+  ownTurnId: string | null;
   /** Last watcher status line. */
   status: string;
 };

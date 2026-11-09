@@ -12,11 +12,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   type CliResult,
-  CONTEXT_MAX,
   GATE_TIMEOUT_MS,
   gateVerdict,
   type HookDeps,
   handle,
+  handleSafely,
   nodeCli,
   parseInput,
 } from "./hook";
@@ -127,8 +127,22 @@ describe("pre-bash merge gate", () => {
 
   test.each([
     ["exit 2", { code: 2, stdout: "" }, "the gate failed (exit 2)"],
+    [
+      "exit 1 with deny JSON",
+      {
+        code: 1,
+        stdout:
+          '{"decision":"deny","reasons":["cannot read doiteng/omni#88"],"failed":true}',
+      },
+      "the gate failed (exit 1): cannot read doiteng/omni#88; merges are refused",
+    ],
+    [
+      "exit 1 claiming allow",
+      { code: 1, stdout: '{"decision":"allow"}' },
+      "the gate failed (exit 1)",
+    ],
     ["timeout", { code: null, stdout: "" }, "the gate did not finish"],
-    ["not JSON", { code: 0, stdout: "oops" }, "the gate gave no JSON"],
+    ["not JSON", { code: 0, stdout: "oops" }, "the gate gave no decision"],
     ["no decision", { code: 0, stdout: "{}" }, "the gate gave no decision"],
     ["null", { code: 0, stdout: "null" }, "the gate gave no decision"],
     [
@@ -148,6 +162,21 @@ describe("pre-bash merge gate", () => {
       allow: false,
       reason: "depends-on is not satisfied",
     });
+  });
+
+  test("a hook that throws denies the merge; other events add nothing", () => {
+    const deps: HookDeps = {
+      role: undefined,
+      cli: () => {
+        throw new Error("boom");
+      },
+    };
+    expect(reason(handleSafely("pre-bash", bash("gh pr merge 1"), deps))).toBe(
+      "crew-net merge gate: the hook failed (Error: boom); merges are refused",
+    );
+    expect(
+      handleSafely("session-start", { session_id: "s1", cwd: "/w" }, deps),
+    ).toBeNull();
   });
 
   test("an unreadable command is denied", () => {
@@ -203,17 +232,14 @@ describe("session-start", () => {
     ).toBeNull();
   });
 
-  test("long context is capped", () => {
-    const deps = fakeCli({
-      digest: { code: 0, stdout: "x".repeat(CONTEXT_MAX * 2) },
-    });
-    const out = handle("session-start", { session_id: "s1", cwd: "/w" }, deps);
+  test("claimed items are never cut, so frames stay closed", () => {
+    const framed = `[UNTRUSTED n: x]\n${"x".repeat(20_000)}\n[END UNTRUSTED n]`;
+    const deps = fakeCli({ inbox: { code: 0, stdout: framed } });
+    const out = handle("prompt-submit", { session_id: "s1", cwd: "/w" }, deps);
     const specific = out?.hookSpecificOutput as
       | { additionalContext: string }
       | undefined;
-    const text = specific?.additionalContext ?? "";
-    expect(text.length).toBe(CONTEXT_MAX);
-    expect(text.endsWith("…")).toBe(true);
+    expect(specific?.additionalContext).toBe(framed);
   });
 
   test("a worker beats as a worker", () => {
@@ -259,6 +285,23 @@ describe("prompt-submit", () => {
       handle("prompt-submit", { session_id: "s1", cwd: "/w" }, fakeCli()),
     ).toBeNull();
   });
+
+  test.each([
+    ["bare", "crew-net wake turn 0123456789abcdef0123456789abcdef.\nRead..."],
+    [
+      "framed by the engine",
+      "The crew-net plugin sent a message:\ncrew-net wake turn 0123456789abcdef0123456789abcdef.\n...",
+    ],
+  ])(
+    "the %s wake prompt claims nothing: new items wait for the next prompt",
+    (_n, prompt) => {
+      const deps = fakeCli({ inbox: { code: 0, stdout: "x" } });
+      expect(
+        handle("prompt-submit", { session_id: "s1", cwd: "/w", prompt }, deps),
+      ).toBeNull();
+      expect(deps.calls.map((c) => c.args[0])).toEqual(["session", "sync"]);
+    },
+  );
 
   test("a worker never claims items", () => {
     const deps = fakeCli({ inbox: { code: 0, stdout: "x" } }, "worker");

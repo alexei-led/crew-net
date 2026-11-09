@@ -52,17 +52,20 @@ one, tell the developer and let them decide.
 
 ## Wake turns
 
-A turn that starts with `crew-net wake turn` was started because another
-developer asked something while this session was idle. Read what you need,
+A turn whose prompt contains a line `crew-net wake turn <token>.` was started
+by the crew-net plugin because another developer asked something while this
+session was idle. Read what you need,
 answer with `crew-net reply <item> "<text>"`, or reply that the developer will
 follow up. Do nothing else: the plugin refuses edits, merges and other commands
 in that turn.
 
 ## Merge order
 
-- When the radar reports `order` (one side changes a contract the other uses),
-  propose `crew-net dep add <#N|owner/repo#N>` to the developer for the PR that
-  must merge after; run it once they agree. `crew-net dep rm` drops one.
+- When the radar reports `order` (one side changes a contract the other uses)
+  and your PR is the one that must merge after, run
+  `crew-net dep add <#N|owner/repo#N>` on your own PR and tell the developer.
+  If the other PR must wait for yours instead, ask its author with
+  `crew-net ask`; never edit their PR. `crew-net dep rm` drops one.
 - Never merge a PR whose `depends-on` has an open PR. The merge gate denies
   `gh pr merge` (and `--auto`) while a dependency is open and names it; do not
   try to get around it (other commands, the API, aliases). Wait for the

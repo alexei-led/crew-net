@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import {
   HOOK_EVENTS,
   type HookEvent,
-  handle,
+  handleSafely,
   nodeCli,
   parseInput,
 } from "./hook";
@@ -23,7 +23,7 @@ if (!HOOK_EVENTS.some((e) => e === event)) {
   }
   // The bundle sits in <plugin>/hooks/dist; the CLI in <plugin>/bin.
   const here = dirname(fileURLToPath(import.meta.url));
-  const out = handle(event as HookEvent, parseInput(raw), {
+  const out = handleSafely(event as HookEvent, parseInput(raw), {
     cli: nodeCli(join(here, "..", "..", "bin", "crew-net")),
     role: process.env.CREW_NET_ROLE,
   });

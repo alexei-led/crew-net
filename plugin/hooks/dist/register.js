@@ -499,11 +499,11 @@ function readItem(event) {
   const item = {
     id: event.id,
     kind: event.kind,
-    request: word(raw.itemKind) ?? fallback,
+    request: word(raw.event) ?? fallback,
     text: event.text,
-    wakeable: raw.wakeable === true,
+    wakeable: event.kind === "message" && raw.wakeable === true,
     ownPr: raw.ownPr === true,
-    ref: typeof raw.ref === "string" && raw.ref !== "" ? raw.ref : event.id
+    ref: event.id
   };
   if (typeof event.from === "string" && event.from !== "")
     item.from = clean(event.from, 39);
@@ -541,7 +541,9 @@ var VERBS = {
   fix: "asks for a fix",
   bug: "reports a bug",
   reply: "replies",
-  comment: "comments"
+  comment: "comments",
+  info: "says",
+  "pr-review": "reviews"
 };
 var PREVIEW_MAX = 100;
 function bandText(item, outcome) {
@@ -606,6 +608,7 @@ var BAND_SHOWN = 5;
 var SEEN_KEEP = 500;
 var SEND_TIMEOUT_MS = 1e4;
 var TICK_MS = 30000;
+var CHANGE_ATTEMPTS = 20;
 var INITIAL = {
   sessionId: "",
   band: [],
@@ -614,6 +617,7 @@ var INITIAL = {
   wake: { token: null, turnId: null, ref: "", ownPr: false },
   lastWakeAtMs: 0,
   turnId: null,
+  ownTurnId: null,
   status: ""
 };
 async function readSession($) {
@@ -621,13 +625,14 @@ async function readSession($) {
   return { ...INITIAL, ...value };
 }
 async function change($, fn) {
-  for (;; ) {
+  for (let attempt = 0;attempt < CHANGE_ATTEMPTS; attempt++) {
     const held = await $.state.get({ plugin: "crew-net", key: "session" });
     const next = fn({ ...INITIAL, ...held.value });
     const written = await $.state.set({ plugin: "crew-net", key: "session" }, next, { ifVersion: held.version });
     if (written.isSet)
       return next;
   }
+  throw new Error("crew-net: session state kept changing; write dropped");
 }
 var run;
 var generation = 0;
@@ -691,7 +696,7 @@ async function wake($, p) {
   const nowMs = await $.clock.now();
   let armed = false;
   await change($, (s) => {
-    armed = s.wake.token === null && s.wake.turnId === null;
+    armed = s.wake.token === null && s.wake.turnId === null && s.turnId === null;
     if (!armed)
       return s;
     return {
@@ -704,12 +709,17 @@ async function wake($, p) {
   if (!armed)
     return false;
   await change($, bandEntry(p.id, "wake", `woke this session for ${p.ref}`, nowMs));
-  $.prompt.submit({ text: wakePrompt(p.framed, p.ref, token) }).then((result) => {
-    if (result.drop === undefined)
-      return;
-    log($, `wake for ${p.id} dropped: ${result.drop}`);
-    return change($, (s) => s.wake.token === token ? { ...s, wake: { ...INITIAL.wake } } : s).then(ignore);
-  }).catch((error) => log($, `wake failed: ${String(error)}`));
+  const undo = async (why) => {
+    log($, `wake for ${p.id} ${why}`);
+    const at = await $.clock.now();
+    await change($, (s) => s.wake.token === token ? {
+      ...s,
+      wake: { ...INITIAL.wake },
+      pending: [...s.pending, { ...p, wakeable: false }]
+    } : s);
+    await change($, bandEntry(p.id, "wake", `wake failed for ${p.ref} · next prompt`, at));
+  };
+  $.prompt.submit({ text: wakePrompt(p.framed, p.ref, token) }).then((result) => result.drop === undefined ? undefined : undo(`dropped: ${result.drop}`)).catch((error) => undo(`failed: ${String(error)}`)).catch(ignore);
   return true;
 }
 async function recheck($, r) {
@@ -789,6 +799,8 @@ async function supervise($, r) {
   const current = () => r.gen === generation;
   for (let failures = 0;current(); ) {
     const startedAt = await $.clock.now();
+    if (!current())
+      return;
     const stream = $.process.spawn({
       argv: [NODE, r.cli, "watch", "--session", r.hello.session],
       cwd: r.root,
@@ -881,8 +893,9 @@ async function followSession($) {
   const id = await $.session.id();
   if (id === r.hello.session)
     return;
-  await change($, (s) => ({ ...s, sessionId: id, pending: [] }));
-  startWatcher($, { ...r, hello: { ...r.hello, session: id } });
+  await change($, (s) => ({ ...s, sessionId: id }));
+  const { stop: _old, ...rest } = r;
+  startWatcher($, { ...rest, hello: { ...r.hello, session: id } });
 }
 async function tick($) {
   await followSession($);
@@ -915,8 +928,7 @@ function register(on, options) {
     if (e.origin.kind !== "composer")
       return next(e);
     lastUserPromptMs = await $.clock.now();
-    if (e.turnId === undefined)
-      lastComposerText = e.text;
+    lastComposerText = e.text;
     await followSession($);
     if (e.command !== undefined)
       return next(e);
@@ -944,10 +956,11 @@ function register(on, options) {
       lastComposerText = undefined;
     await change($, (s) => {
       const armed = s.wake.token;
-      const isWake = armed !== null && (e.text.includes(armed) || !ownPrompt);
+      const isWake = armed !== null && e.text.includes(armed);
       return {
         ...s,
         turnId: e.turnId,
+        ownTurnId: ownPrompt ? e.turnId : null,
         wake: isWake ? { ...s.wake, token: null, turnId: e.turnId } : s.wake
       };
     });
@@ -959,6 +972,7 @@ function register(on, options) {
       await change($, (s) => ({
         ...s,
         turnId: s.turnId === e.turnId ? null : s.turnId,
+        ownTurnId: s.ownTurnId === e.turnId ? null : s.ownTurnId,
         wake: s.wake.turnId === e.turnId ? { ...INITIAL.wake } : s.wake
       }));
       if (run)
@@ -968,7 +982,9 @@ function register(on, options) {
   });
   on("tool.call", async ($, e, next) => {
     const s = await readSession($);
-    if (s.wake.turnId === null)
+    const ownTurn = s.turnId !== null && s.ownTurnId === s.turnId;
+    const gated = s.wake.turnId !== null || s.wake.token !== null && !ownTurn;
+    if (!gated)
       return next(e);
     const r = run;
     const input = { ...e };

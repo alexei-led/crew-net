@@ -42,8 +42,8 @@ and GraphQL merge mutations. A command that cannot merge passes with no output.
 A merge it cannot pin to a PR (a `cd` or `GH_REPO` before it, a variable as the
 PR) is denied. Otherwise it runs `crew-net gate --json -- "<command>"` and
 denies unless the answer is `{"decision":"allow"}` (fail closed: a timeout,
-non-zero exit or bad JSON denies). An allow prints nothing, so the normal
-permission prompt still runs.
+non-zero exit, bad JSON or a crash of the hook itself denies). An allow prints
+nothing, so the normal permission prompt still runs.
 
 ### Band, delivery and wake
 
@@ -62,10 +62,14 @@ Each item shows in the band at once. Delivery follows `core/delivery`:
   fixed prompt. At most one per 10 minutes. A request held back by a running
   turn or the cooldown is decided again every 30 s and when a turn ends.
 
-During a wake turn every tool call goes through `core/trust` `gate`: reads
+During the wake turn, and while a wake is armed during any turn that is not
+the developer's own prompt, every tool call goes through `core/trust` `gate`: reads
 inside the worktree, read-only `git` and `gh`, `crew-net reply` to the waking
 item, `crew-net inbox`, and `crew-net state` when the branch has a PR.
-Everything else is denied, and allowed Bash runs in the worktree root.
+Everything else is denied, and allowed Bash runs in the worktree root. A wake
+that the engine drops gives the request back to the next prompt. The
+`UserPromptSubmit` hook claims no new items for the wake prompt: they wait for
+the developer's next prompt.
 
 ## Settings
 

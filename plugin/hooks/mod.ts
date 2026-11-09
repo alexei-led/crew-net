@@ -8,7 +8,7 @@ import type { ItemEvent } from "../../src/protocol/index";
 export interface Item {
   id: string;
   kind: ItemEvent["kind"];
-  /** `ask`, `review`, `fix`, `bug`, `reply`, `comment`, `finding`, `unblocked`, ...; what delivery decides on. */
+  /** The watcher's `event` (`ask`, `review`, `fix`, `bug`, `reply`, `comment`, `conflict`, `unblocked`, ...); what delivery decides on. */
   request: string;
   from?: string;
   /** `owner/name` of the thread. */
@@ -19,7 +19,7 @@ export interface Item {
   wakeable: boolean;
   /** The session's branch has an open PR (the wake gate allows `crew-net state` then). */
   ownPr: boolean;
-  /** What `crew-net reply` takes for this item. */
+  /** What `crew-net reply` takes for this item: its id. */
   ref: string;
 }
 
@@ -35,11 +35,12 @@ export function readItem(event: ItemEvent): Item {
   const item: Item = {
     id: event.id,
     kind: event.kind,
-    request: word(raw.itemKind) ?? fallback,
+    request: word(raw.event) ?? fallback,
     text: event.text,
-    wakeable: raw.wakeable === true,
+    // Only a crew message may wake; a finding or digest never does.
+    wakeable: event.kind === "message" && raw.wakeable === true,
     ownPr: raw.ownPr === true,
-    ref: typeof raw.ref === "string" && raw.ref !== "" ? raw.ref : event.id,
+    ref: event.id,
   };
   if (typeof event.from === "string" && event.from !== "")
     item.from = clean(event.from, 39);
@@ -86,6 +87,8 @@ const VERBS: Record<string, string> = {
   bug: "reports a bug",
   reply: "replies",
   comment: "comments",
+  info: "says",
+  "pr-review": "reviews",
 };
 
 export const PREVIEW_MAX = 100;
@@ -113,10 +116,13 @@ export function bandText(item: Item, outcome: Outcome): string {
   }
 }
 
+/** Matches the first line of `wakePrompt`. */
+export const WAKE_MARK = /^crew-net wake turn [0-9a-f]{32}\.$/m;
+
 /**
  * The fixed prompt of a wake turn. `token` marks the turn so the mod can tell
- * it from the developer's own; it is the frame's nonce, which the peer cannot
- * know and which is stripped from the peer text.
+ * it from any other turn: a fresh random value per wake, which the peer
+ * cannot know or put in their text.
  */
 export function wakePrompt(framed: string, ref: string, token: string): string {
   return [

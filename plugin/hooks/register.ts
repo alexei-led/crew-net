@@ -49,6 +49,8 @@ const SEEN_KEEP = 500;
 const SEND_TIMEOUT_MS = 10_000;
 /** Re-decide held requests and check for /clear this often. */
 const TICK_MS = 30_000;
+/** Missed `ifVersion` writes before `change` gives up. */
+const CHANGE_ATTEMPTS = 20;
 
 const INITIAL: CrewNetSession = {
   sessionId: "",
@@ -58,6 +60,7 @@ const INITIAL: CrewNetSession = {
   wake: { token: null, turnId: null, ref: "", ownPr: false },
   lastWakeAtMs: 0,
   turnId: null,
+  ownTurnId: null,
   status: "",
 };
 
@@ -72,7 +75,7 @@ async function change(
   $: Engine,
   fn: (s: CrewNetSession) => CrewNetSession,
 ): Promise<CrewNetSession> {
-  for (;;) {
+  for (let attempt = 0; attempt < CHANGE_ATTEMPTS; attempt++) {
     const held = await $.state.get({ plugin: "crew-net", key: "session" });
     const next = fn({ ...INITIAL, ...held.value });
     const written = await $.state.set(
@@ -82,6 +85,7 @@ async function change(
     );
     if (written.isSet) return next;
   }
+  throw new Error("crew-net: session state kept changing; write dropped");
 }
 
 /** The watcher connection of this module load; a hot reload starts over. */
@@ -179,7 +183,8 @@ async function wake($: Engine, p: CrewNetPending): Promise<boolean> {
   const nowMs = await $.clock.now();
   let armed = false;
   await change($, (s) => {
-    armed = s.wake.token === null && s.wake.turnId === null;
+    armed =
+      s.wake.token === null && s.wake.turnId === null && s.turnId === null;
     if (!armed) return s;
     return {
       ...s,
@@ -193,16 +198,31 @@ async function wake($: Engine, p: CrewNetPending): Promise<boolean> {
     $,
     bandEntry(p.id, "wake", `woke this session for ${p.ref}`, nowMs),
   );
+  // A wake that never starts gives the request back to the next prompt.
+  const undo = async (why: string): Promise<void> => {
+    log($, `wake for ${p.id} ${why}`);
+    const at = await $.clock.now();
+    await change($, (s) =>
+      s.wake.token === token
+        ? {
+            ...s,
+            wake: { ...INITIAL.wake },
+            pending: [...s.pending, { ...p, wakeable: false }],
+          }
+        : s,
+    );
+    await change(
+      $,
+      bandEntry(p.id, "wake", `wake failed for ${p.ref} · next prompt`, at),
+    );
+  };
   void $.prompt
     .submit({ text: wakePrompt(p.framed, p.ref, token) })
-    .then((result) => {
-      if (result.drop === undefined) return;
-      log($, `wake for ${p.id} dropped: ${result.drop}`);
-      return change($, (s) =>
-        s.wake.token === token ? { ...s, wake: { ...INITIAL.wake } } : s,
-      ).then(ignore);
-    })
-    .catch((error: unknown) => log($, `wake failed: ${String(error)}`));
+    .then((result) =>
+      result.drop === undefined ? undefined : undo(`dropped: ${result.drop}`),
+    )
+    .catch((error: unknown) => undo(`failed: ${String(error)}`))
+    .catch(ignore);
   return true;
 }
 
@@ -300,6 +320,7 @@ async function supervise($: Engine, r: Run): Promise<void> {
   const current = () => r.gen === generation;
   for (let failures = 0; current(); ) {
     const startedAt = await $.clock.now();
+    if (!current()) return;
     const stream = $.process.spawn({
       argv: [NODE, r.cli, "watch", "--session", r.hello.session],
       cwd: r.root,
@@ -398,8 +419,9 @@ async function followSession($: Engine): Promise<void> {
   if (r === undefined) return;
   const id = await $.session.id();
   if (id === r.hello.session) return;
-  await change($, (s) => ({ ...s, sessionId: id, pending: [] }));
-  startWatcher($, { ...r, hello: { ...r.hello, session: id } });
+  await change($, (s) => ({ ...s, sessionId: id }));
+  const { stop: _old, ...rest } = r;
+  startWatcher($, { ...rest, hello: { ...r.hello, session: id } });
 }
 
 async function tick($: Engine): Promise<void> {
@@ -439,7 +461,7 @@ export function register(on: On, options: PluginOptions): void {
   on("prompt.submit", async ($, e, next) => {
     if (e.origin.kind !== "composer") return next(e);
     lastUserPromptMs = await $.clock.now();
-    if (e.turnId === undefined) lastComposerText = e.text;
+    lastComposerText = e.text;
     await followSession($);
     if (e.command !== undefined) return next(e);
     const queued = (await readSession($)).pending;
@@ -465,12 +487,14 @@ export function register(on: On, options: PluginOptions): void {
     if (ownPrompt) lastComposerText = undefined;
     await change($, (s) => {
       const armed = s.wake.token;
-      // Fail closed: once a wake is armed, the next main turn is the wake
-      // turn unless it is plainly the developer's own prompt.
-      const isWake = armed !== null && (e.text.includes(armed) || !ownPrompt);
+      // Only the turn carrying the token is the wake turn. Any other turn
+      // while a wake is armed stays gated (tool.call) unless it is plainly
+      // the developer's own prompt; the token stays armed for the real one.
+      const isWake = armed !== null && e.text.includes(armed);
       return {
         ...s,
         turnId: e.turnId,
+        ownTurnId: ownPrompt ? e.turnId : null,
         wake: isWake ? { ...s.wake, token: null, turnId: e.turnId } : s.wake,
       };
     });
@@ -483,6 +507,7 @@ export function register(on: On, options: PluginOptions): void {
       await change($, (s) => ({
         ...s,
         turnId: s.turnId === e.turnId ? null : s.turnId,
+        ownTurnId: s.ownTurnId === e.turnId ? null : s.ownTurnId,
         wake: s.wake.turnId === e.turnId ? { ...INITIAL.wake } : s.wake,
       }));
       if (run) await recheck($, run);
@@ -493,7 +518,11 @@ export function register(on: On, options: PluginOptions): void {
   // The wake tool gate (design §13). Fails closed: a gate that throws denies.
   on("tool.call", async ($, e, next) => {
     const s = await readSession($);
-    if (s.wake.turnId === null) return next(e);
+    const ownTurn = s.turnId !== null && s.ownTurnId === s.turnId;
+    // Fail closed: the wake turn, and while a wake is armed any turn that is
+    // not plainly the developer's own.
+    const gated = s.wake.turnId !== null || (s.wake.token !== null && !ownTurn);
+    if (!gated) return next(e);
     const r = run;
     const input: Record<string, unknown> = { ...e };
     const verdict = gate(

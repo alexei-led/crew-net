@@ -4,6 +4,7 @@
 // All GitHub and store access goes through the CLI shipped in the plugin.
 import { spawnSync } from "node:child_process";
 import { detectMerge } from "../../src/core/order/index";
+import { WAKE_MARK } from "./mod";
 
 export const HOOK_EVENTS = [
   "session-start",
@@ -34,8 +35,6 @@ export interface HookDeps {
 /** What the hook writes: JSON on stdout, or nothing. Exit code is always 0. */
 export type HookOutput = Record<string, unknown> | null;
 
-/** Context text above this is cut: the digest and items are short by design. */
-export const CONTEXT_MAX = 8_000;
 const QUICK_MS = 3_000;
 const DIGEST_MS = 5_000;
 /** `crew-net gate` reads GitHub live; slower than this counts as a failure. */
@@ -46,18 +45,16 @@ type Input = Record<string, unknown>;
 const str = (value: unknown): string | undefined =>
   typeof value === "string" && value !== "" ? value : undefined;
 
+/** The mod's wake prompt, with or without the engine's plugin-message frame. */
+export function isWakePrompt(prompt: unknown): boolean {
+  return typeof prompt === "string" && WAKE_MARK.test(prompt);
+}
+
 function sessionFlags(input: Input, deps: HookDeps): string[] | null {
   const session = str(input.session_id);
   if (session === undefined) return null;
   const role = deps.role === "worker" ? "worker" : "lead";
   return ["--session", session, "--harness", "claude-code", "--role", role];
-}
-
-function cap(text: string): string {
-  const trimmed = text.trim();
-  return trimmed.length > CONTEXT_MAX
-    ? `${trimmed.slice(0, CONTEXT_MAX - 1)}…`
-    : trimmed;
 }
 
 /** Stdout of a successful run, else "" (context hooks never fail a prompt). */
@@ -69,7 +66,12 @@ function context(
   event: "SessionStart" | "UserPromptSubmit",
   parts: string[],
 ): HookOutput {
-  const text = cap(parts.filter((p) => p.trim() !== "").join("\n\n"));
+  // Never cut: claimed items are delivered whole, frames intact. The CLI
+  // keeps each item short; the engine reads a head past 100,000 characters.
+  const text = parts
+    .map((p) => p.trim())
+    .filter((p) => p !== "")
+    .join("\n\n");
   if (text === "") return null;
   return {
     hookSpecificOutput: { hookEventName: event, additionalContext: text },
@@ -93,8 +95,9 @@ function promptSubmit(input: Input, cwd: string, deps: HookDeps): HookOutput {
   if (flags === null) return null;
   deps.cli(["session", "beat", ...flags], { cwd, timeoutMs: QUICK_MS });
   deps.cli(["sync", "--detach"], { cwd, timeoutMs: QUICK_MS });
-  // A worker is never a target; its lead speaks for it.
-  if (deps.role === "worker") return null;
+  // A worker is never a target; its lead speaks for it. A wake turn answers
+  // its one item: items that arrive meanwhile wait for the next prompt.
+  if (deps.role === "worker" || isWakePrompt(input.prompt)) return null;
   const items = output(
     deps.cli(
       ["inbox", "--session", flags[1] ?? "", "--claim", "--format", "context"],
@@ -129,28 +132,42 @@ export function gateVerdict(
   const down = "merges are refused while the gate cannot decide";
   if (result.code === null)
     return { allow: false, reason: `the gate did not finish; ${down}` };
-  if (result.code !== 0)
+  const answer = parseAnswer(result.stdout);
+  if (result.code !== 0) {
+    // A failed gate still prints its deny JSON; keep its reasons.
+    const why = answer === null ? "" : reasonsOf(answer);
     return {
       allow: false,
-      reason: `the gate failed (exit ${result.code}); ${down}`,
+      reason: `the gate failed (exit ${result.code})${why ? `: ${why}` : ""}; ${down}`,
     };
-  let answer: unknown;
-  try {
-    answer = JSON.parse(result.stdout);
-  } catch {
-    return { allow: false, reason: `the gate gave no JSON; ${down}` };
   }
-  if (typeof answer !== "object" || answer === null)
+  if (answer === null)
     return { allow: false, reason: `the gate gave no decision; ${down}` };
-  const { decision, reasons } = answer as Record<string, unknown>;
-  if (decision === "allow") return { allow: true };
-  if (decision === "deny") {
-    const why = Array.isArray(reasons)
-      ? reasons.filter((r) => typeof r === "string").join("; ")
-      : "";
-    return { allow: false, reason: why || "depends-on is not satisfied" };
-  }
+  if (answer.decision === "allow") return { allow: true };
+  if (answer.decision === "deny")
+    return {
+      allow: false,
+      reason: reasonsOf(answer) || "depends-on is not satisfied",
+    };
   return { allow: false, reason: `the gate gave no decision; ${down}` };
+}
+
+function parseAnswer(stdout: string): Record<string, unknown> | null {
+  try {
+    const value: unknown = JSON.parse(stdout);
+    return typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function reasonsOf(answer: Record<string, unknown>): string {
+  const { reasons } = answer;
+  return Array.isArray(reasons)
+    ? reasons.filter((r) => typeof r === "string").join("; ")
+    : "";
 }
 
 /**
@@ -191,6 +208,25 @@ export function handle(
       return preBash(input, cwd, deps);
     case "session-end":
       return sessionEnd(input, cwd, deps);
+  }
+}
+
+/**
+ * `handle`, but a hook that throws still answers: the merge gate denies
+ * (fail closed; a crashed hook would let the merge run), the others add
+ * nothing.
+ */
+export function handleSafely(
+  event: HookEvent,
+  input: Input,
+  deps: HookDeps,
+): HookOutput {
+  try {
+    return handle(event, input, deps);
+  } catch (error) {
+    return event === "pre-bash"
+      ? deny(`the hook failed (${String(error)}); merges are refused`)
+      : null;
   }
 }
 
