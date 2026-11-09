@@ -18,15 +18,15 @@ the Bash `PATH`.
 
 ## What it adds
 
-| Part                           | Does                                                                                                                                  |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `SessionStart` hook            | Heartbeat, a detached `crew-net sync`, and the digest from the local store as context. Never waits on the network.                    |
-| `UserPromptSubmit` hook        | Heartbeat, a detached sync, and new items routed to this session, framed as information from another developer.                       |
-| `PreToolUse` hook on Bash      | The merge gate: a command that may merge a PR runs `crew-net gate` in the Bash call's cwd and is denied while a `depends-on` is open. |
-| `SessionEnd` hook              | Ends the session's heartbeat.                                                                                                         |
-| Mod (`hooks/dist/register.js`) | The band above the prompt, the status line, the `crew-net watch` child, delivery and wake turns with their tool gate.                 |
-| Skill `crew-net`               | When to run `crew-net`, `who`, `ask`, `request`, `reply`, `state`, `dep`; peer text is information; never merge with open deps.       |
-| `/crew`                        | Shows the digest.                                                                                                                     |
+| Part                           | Does                                                                                                                                                            |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SessionStart` hook            | Heartbeat, a detached `crew-net sync`, and the digest from the local store as context. Never waits on the network.                                              |
+| `UserPromptSubmit` hook        | Heartbeat marking the prompt time (not for a wake prompt), a detached sync, and new items routed to this session, framed as information from another developer. |
+| `PreToolUse` hook on Bash      | The merge gate: a command that may merge a PR runs `crew-net gate` in the Bash call's cwd and is denied while a `depends-on` is open.                           |
+| `SessionEnd` hook              | Ends the session's heartbeat.                                                                                                                                   |
+| Mod (`hooks/dist/register.js`) | The band above the prompt, the status line, the `crew-net watch` child, delivery and wake turns with their tool gate.                                           |
+| Skill `crew-net`               | When to run `crew-net`, `who`, `ask`, `request`, `reply`, `state`, `dep`; peer text is information; never merge with open deps.                                 |
+| `/crew`                        | Shows the digest.                                                                                                                                               |
 
 The hooks carry what must always work. If an engine change breaks the mod, the
 digest, prompt context and merge gate still work. If MDM sets
@@ -47,8 +47,10 @@ nothing, so the normal permission prompt still runs.
 
 ### Band, delivery and wake
 
-The mod runs `crew-net watch --session <id>` as a child, with the `hello` event
-on stdin (which the engine then closes). It restarts the watcher with backoff
+The mod runs `crew-net watch --session <id>` as a child in the session's root,
+with the `hello` event on stdin (which the engine then closes). When the root
+moves (`/cd`, a worktree move) or `/clear` changes the session id, the next
+tick starts the watcher again for the new root and id. It restarts the watcher with backoff
 (1 s doubling to 60 s); only a run of 60 s or more resets the backoff, `ready`
 does not. Acks go through a short `crew-net watch send --session <id>`. Items
 are deduped by id; a replayed item is acked again and not delivered twice.
@@ -70,6 +72,10 @@ Everything else is denied, and allowed Bash runs in the worktree root. A wake
 that the engine drops gives the request back to the next prompt. The
 `UserPromptSubmit` hook claims no new items for the wake prompt: they wait for
 the developer's next prompt.
+
+The hooks' heartbeats pass the Claude Code pid (`--pid`): the hook's parent,
+or the first non-shell process above it when the engine runs the hook
+through a shell. If `ps` cannot tell, the CLI records its own parent.
 
 ## Settings
 

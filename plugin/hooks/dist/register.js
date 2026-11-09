@@ -900,11 +900,25 @@ async function followSession($) {
   if (r === undefined)
     return;
   const id = await $.session.id();
-  if (id === r.hello.session)
+  const root = await $.session.root();
+  if (id === r.hello.session && root === r.root)
     return;
-  await change($, (s) => ({ ...s, sessionId: id }));
-  const { stop: _old, ...rest } = r;
-  startWatcher($, { ...rest, hello: { ...r.hello, session: id } });
+  if (id !== r.hello.session)
+    await change($, (s) => ({ ...s, sessionId: id }));
+  const { stop: _old, repo: _repo, hello: _hello, ...rest } = r;
+  const { repo: _helloRepo, ...base } = r.hello;
+  const repo = root === r.root ? r.repo : repoFromRemote((await $.session.repo())?.remote ?? null) ?? "";
+  startWatcher($, {
+    ...rest,
+    root,
+    repo,
+    hello: {
+      ...base,
+      session: id,
+      worktree: root,
+      ...repo ? { repo } : {}
+    }
+  });
 }
 async function tick($) {
   await followSession($);

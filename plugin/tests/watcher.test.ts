@@ -140,6 +140,22 @@ test("/clear: the next tick restarts the watcher for the new session id", async 
   expect(JSON.parse(last?.input ?? "{}").session).toBe("session-2");
 });
 
+test("a moved session root restarts the watcher in the new worktree", async ($, on) => {
+  const w = world(on, mock);
+  await start($, w);
+  w.root = "/w/reflex-wt";
+  await w.exit();
+  await w.clock.advance(MINUTE);
+  await w.idle(w.spawns.length);
+  const last = w.spawns.at(-1);
+  expect(last?.cwd).toBe("/w/reflex-wt");
+  expect(JSON.parse(last?.input ?? "{}")).toMatchObject({
+    session: "session-1",
+    worktree: "/w/reflex-wt",
+    repo: "doiteng/reflex",
+  });
+});
+
 test("a non-interactive session starts no watcher", async ($, on) => {
   const w = world(on, mock);
   await $.session.start({

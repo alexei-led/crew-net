@@ -30,6 +30,8 @@ export interface HookDeps {
   cli: RunCli;
   /** `CREW_NET_ROLE`; `worker` sessions are never routed to. */
   role: string | undefined;
+  /** The Claude Code process; the CLI's own parent is this hook, not the session. */
+  sessionPid?: number | undefined;
 }
 
 /** What the hook writes: JSON on stdout, or nothing. Exit code is always 0. */
@@ -57,6 +59,59 @@ function sessionFlags(input: Input, deps: HookDeps): string[] | null {
   return ["--session", session, "--harness", "claude-code", "--role", role];
 }
 
+/** The heartbeat; `prompt` marks a prompt the developer sent, for idle detection. */
+function beat(
+  flags: string[],
+  cwd: string,
+  deps: HookDeps,
+  prompt: boolean,
+): void {
+  const pid =
+    deps.sessionPid === undefined ? [] : ["--pid", String(deps.sessionPid)];
+  deps.cli(
+    ["session", "beat", ...flags, ...pid, ...(prompt ? ["--prompt"] : [])],
+    { cwd, timeoutMs: QUICK_MS },
+  );
+}
+
+export interface ProcessInfo {
+  ppid: number;
+  command: string;
+}
+
+const SHELL = /^-?(?:.*\/)?(?:sh|bash|zsh|dash|ksh|fish)$/;
+const MAX_HOPS = 4;
+
+/**
+ * The session's pid from the hook's parent: the engine may run the hook
+ * through a shell, so shells are skipped. Undefined when it cannot tell.
+ */
+export function sessionPidFrom(
+  start: number,
+  lookup: (pid: number) => ProcessInfo | undefined,
+): number | undefined {
+  let pid = start;
+  for (let hop = 0; hop < MAX_HOPS && pid > 1; hop++) {
+    const info = lookup(pid);
+    if (info === undefined) return undefined;
+    if (!SHELL.test(info.command)) return pid;
+    pid = info.ppid;
+  }
+  return undefined;
+}
+
+/** Parent pid and command of a process, from `ps`; undefined when it is gone or ps fails. */
+export function processInfo(pid: number): ProcessInfo | undefined {
+  const ran = spawnSync("ps", ["-o", "ppid=,comm=", "-p", String(pid)], {
+    encoding: "utf8",
+    timeout: QUICK_MS,
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  const m = /^\s*(\d+)\s+(.+?)\s*$/.exec(ran.stdout ?? "");
+  if (ran.status !== 0 || !m) return undefined;
+  return { ppid: Number(m[1]), command: m[2] ?? "" };
+}
+
 /** Stdout of a successful run, else "" (context hooks never fail a prompt). */
 function output(result: CliResult): string {
   return result.code === 0 ? result.stdout : "";
@@ -80,8 +135,7 @@ function context(
 
 function sessionStart(input: Input, cwd: string, deps: HookDeps): HookOutput {
   const flags = sessionFlags(input, deps);
-  if (flags)
-    deps.cli(["session", "beat", ...flags], { cwd, timeoutMs: QUICK_MS });
+  if (flags) beat(flags, cwd, deps, false);
   // Detached: returns at once; the digest below reads the store only.
   deps.cli(["sync", "--detach"], { cwd, timeoutMs: QUICK_MS });
   const digest = output(
@@ -93,11 +147,13 @@ function sessionStart(input: Input, cwd: string, deps: HookDeps): HookOutput {
 function promptSubmit(input: Input, cwd: string, deps: HookDeps): HookOutput {
   const flags = sessionFlags(input, deps);
   if (flags === null) return null;
-  deps.cli(["session", "beat", ...flags], { cwd, timeoutMs: QUICK_MS });
+  // A wake turn is the mod's, not the developer's: the session stays idle.
+  const wake = isWakePrompt(input.prompt);
+  beat(flags, cwd, deps, !wake);
   deps.cli(["sync", "--detach"], { cwd, timeoutMs: QUICK_MS });
   // A worker is never a target; its lead speaks for it. A wake turn answers
   // its one item: items that arrive meanwhile wait for the next prompt.
-  if (deps.role === "worker" || isWakePrompt(input.prompt)) return null;
+  if (deps.role === "worker" || wake) return null;
   const items = output(
     deps.cli(
       ["inbox", "--session", flags[1] ?? "", "--claim", "--format", "context"],

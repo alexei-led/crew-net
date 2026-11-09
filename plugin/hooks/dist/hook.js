@@ -952,6 +952,35 @@ function sessionFlags(input, deps) {
   const role = deps.role === "worker" ? "worker" : "lead";
   return ["--session", session, "--harness", "claude-code", "--role", role];
 }
+function beat(flags, cwd, deps, prompt) {
+  const pid = deps.sessionPid === undefined ? [] : ["--pid", String(deps.sessionPid)];
+  deps.cli(["session", "beat", ...flags, ...pid, ...prompt ? ["--prompt"] : []], { cwd, timeoutMs: QUICK_MS });
+}
+var SHELL = /^-?(?:.*\/)?(?:sh|bash|zsh|dash|ksh|fish)$/;
+var MAX_HOPS = 4;
+function sessionPidFrom(start, lookup) {
+  let pid = start;
+  for (let hop = 0;hop < MAX_HOPS && pid > 1; hop++) {
+    const info = lookup(pid);
+    if (info === undefined)
+      return;
+    if (!SHELL.test(info.command))
+      return pid;
+    pid = info.ppid;
+  }
+  return;
+}
+function processInfo(pid) {
+  const ran = spawnSync("ps", ["-o", "ppid=,comm=", "-p", String(pid)], {
+    encoding: "utf8",
+    timeout: QUICK_MS,
+    stdio: ["ignore", "pipe", "ignore"]
+  });
+  const m = /^\s*(\d+)\s+(.+?)\s*$/.exec(ran.stdout ?? "");
+  if (ran.status !== 0 || !m)
+    return;
+  return { ppid: Number(m[1]), command: m[2] ?? "" };
+}
 function output(result) {
   return result.code === 0 ? result.stdout : "";
 }
@@ -968,7 +997,7 @@ function context(event, parts) {
 function sessionStart(input, cwd, deps) {
   const flags = sessionFlags(input, deps);
   if (flags)
-    deps.cli(["session", "beat", ...flags], { cwd, timeoutMs: QUICK_MS });
+    beat(flags, cwd, deps, false);
   deps.cli(["sync", "--detach"], { cwd, timeoutMs: QUICK_MS });
   const digest = output(deps.cli(["--format", "context"], { cwd, timeoutMs: DIGEST_MS }));
   return context("SessionStart", [digest]);
@@ -977,9 +1006,10 @@ function promptSubmit(input, cwd, deps) {
   const flags = sessionFlags(input, deps);
   if (flags === null)
     return null;
-  deps.cli(["session", "beat", ...flags], { cwd, timeoutMs: QUICK_MS });
+  const wake = isWakePrompt(input.prompt);
+  beat(flags, cwd, deps, !wake);
   deps.cli(["sync", "--detach"], { cwd, timeoutMs: QUICK_MS });
-  if (deps.role === "worker" || isWakePrompt(input.prompt))
+  if (deps.role === "worker" || wake)
     return null;
   const items = output(deps.cli(["inbox", "--session", flags[1] ?? "", "--claim", "--format", "context"], { cwd, timeoutMs: DIGEST_MS }));
   return context("UserPromptSubmit", [items]);
@@ -1107,7 +1137,8 @@ if (!HOOK_EVENTS.some((e) => e === event)) {
   const here = dirname(fileURLToPath(import.meta.url));
   const out = handleSafely(event, parseInput(raw), {
     cli: nodeCli(join(here, "..", "..", "bin", "crew-net")),
-    role: process.env.CREW_NET_ROLE
+    role: process.env.CREW_NET_ROLE,
+    sessionPid: sessionPidFrom(process.ppid, processInfo)
   });
   if (out !== null)
     process.stdout.write(`${JSON.stringify(out)}

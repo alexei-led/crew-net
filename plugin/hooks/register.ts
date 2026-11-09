@@ -413,15 +413,36 @@ async function connect($: Engine, options: PluginOptions): Promise<void> {
   });
 }
 
-/** After /clear the id changes and no session.start fires: start the watcher for the new id. */
+/**
+ * After /clear the id changes and no session.start fires; `/cd` or a
+ * worktree move changes the root. Either way the watcher starts again for
+ * the new id, in the new worktree.
+ */
 async function followSession($: Engine): Promise<void> {
   const r = run;
   if (r === undefined) return;
   const id = await $.session.id();
-  if (id === r.hello.session) return;
-  await change($, (s) => ({ ...s, sessionId: id }));
-  const { stop: _old, ...rest } = r;
-  startWatcher($, { ...rest, hello: { ...r.hello, session: id } });
+  const root = await $.session.root();
+  if (id === r.hello.session && root === r.root) return;
+  if (id !== r.hello.session) await change($, (s) => ({ ...s, sessionId: id }));
+  const { stop: _old, repo: _repo, hello: _hello, ...rest } = r;
+  const { repo: _helloRepo, ...base } = r.hello;
+  // A new root may be another repo; the wake gate checks against it.
+  const repo =
+    root === r.root
+      ? r.repo
+      : (repoFromRemote((await $.session.repo())?.remote ?? null) ?? "");
+  startWatcher($, {
+    ...rest,
+    root,
+    repo,
+    hello: {
+      ...base,
+      session: id,
+      worktree: root,
+      ...(repo ? { repo } : {}),
+    },
+  });
 }
 
 async function tick($: Engine): Promise<void> {
