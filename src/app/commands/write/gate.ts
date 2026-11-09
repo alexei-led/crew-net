@@ -39,6 +39,17 @@ function commandLine(argv: readonly string[]): string {
 
 class GateFailure extends Error {}
 
+/** False when the command cannot merge a PR: the caller may allow it without reading anything. */
+export function mayMerge(
+  argv: readonly string[],
+  aliases?: ReadonlyMap<string, string>,
+): boolean {
+  return (
+    detectMerge(commandLine(argv), aliases === undefined ? {} : { aliases })
+      .kind !== "none"
+  );
+}
+
 async function resolve(
   ctx: WriteContext,
   target: MergeTarget,
@@ -165,6 +176,8 @@ export async function gate(
   } finally {
     clearTimeout(timer);
   }
+  // A command that merges nothing is not a gate decision worth a stats line.
+  if (result.decision === "allow" && result.checked.length === 0) return result;
   await ctx.store.events
     .append({
       type: "gate",

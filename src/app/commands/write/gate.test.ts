@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { BRANCH, FakeGit, harness, pull, REPO } from "./fixtures/fakes";
-import { type GateResult, gate, gateExitCode, renderGate } from "./index";
+import {
+  type GateResult,
+  gate,
+  gateExitCode,
+  mayMerge,
+  renderGate,
+} from "./index";
 
 const deps = (...refs: string[]) =>
   `Body.\n\n<!-- crew-net\nstate: review\ndepends-on: ${refs.join(", ")}\n-->`;
@@ -216,6 +222,21 @@ describe("gate fails closed", () => {
         atMs: 1_000_000,
       },
     ]);
+  });
+
+  test("a command that merges nothing is not logged", async () => {
+    const h = world("");
+    await run(h, "gh pr view 10");
+    expect(h.store.eventLog).toEqual([]);
+  });
+
+  test.each([
+    ["gh pr view 10", false],
+    ["git merge main", false],
+    ["gh pr merge 10", true],
+    ['eval "$X"', true],
+  ])("mayMerge(%p) is %p", (line, expected) => {
+    expect(mayMerge([line])).toBe(expected);
   });
 
   test("a failing event log does not change the decision", async () => {
