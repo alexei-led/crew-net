@@ -8,8 +8,8 @@ import { join } from "node:path";
 const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const MAIN_SOURCE = "src/cli/main.ts";
-const JSON_VERSION = /"version": "[^"]*"/;
-const JSON_VERSION_ALL = /("version": ")[^"]*(")/g;
+const JSON_VERSION = /"version"\s*:\s*"[^"]*"/;
+const JSON_VERSION_ALL = /("version"\s*:\s*")[^"]*(")/g;
 const VERSION_CONST = /(export const VERSION = ")[^"]*(")/;
 
 const JSON_FILES = [
