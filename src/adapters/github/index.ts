@@ -1,27 +1,83 @@
 import type {
+  BudgetWindow,
+  CachedResponse,
+  CommentCursor,
   GitHubPort,
+  HttpCachePort,
   IssueComment,
+  MergedPull,
+  NotificationPage,
+  NotificationReason,
+  NotificationThread,
   PullRequest,
+  PullReview,
   RequestStats,
+  WriteBudgetPort,
 } from "../../ports/index";
 
+/** GitHub allows 80/min and 500/h content writes per user; crew-net keeps well under (design §9.1). */
+export const WRITE_WINDOWS: readonly BudgetWindow[] = [
+  { windowMs: 60_000, max: 20 },
+  { windowMs: 3_600_000, max: 200 },
+];
+
+const SECONDARY_BACKOFF_MS = 60_000;
+const REQUEST_TIMEOUT_MS = 30_000;
+const MERGED_LIMIT = 50;
+
+const REASONS: ReadonlySet<string> = new Set<NotificationReason>([
+  "mention",
+  "team_mention",
+  "author",
+  "comment",
+  "review_requested",
+  "assign",
+]);
+
+/** Token rejected after one re-read, or no token at all. Latched for the process. */
 export class AuthError extends Error {
-  constructor() {
-    super("GitHub authentication failed after token refresh");
+  constructor(readonly host: string) {
+    super(
+      `GitHub authentication failed for ${host}. Run: gh auth refresh --hostname ${host}`,
+    );
     this.name = "AuthError";
   }
 }
 
+/** The organization enforces SAML SSO and the token is not authorized for it. */
+export class SsoError extends Error {
+  constructor(
+    readonly host: string,
+    readonly authorizeUrl: string | undefined,
+  ) {
+    super(
+      `GitHub SSO authorization required on ${host}. ${
+        authorizeUrl
+          ? `Authorize the token: ${authorizeUrl}`
+          : `Run: gh auth refresh --hostname ${host}`
+      }`,
+    );
+    this.name = "SsoError";
+  }
+}
+
 export class RateLimitError extends Error {
-  constructor(readonly retryAfterMs: number) {
-    super("GitHub rate limit reached");
+  constructor(
+    readonly retryAfterMs: number,
+    readonly secondary: boolean,
+  ) {
+    super(
+      `GitHub ${secondary ? "secondary " : ""}rate limit reached; retry in ${Math.ceil(retryAfterMs / 1000)} s`,
+    );
     this.name = "RateLimitError";
   }
 }
 
 export class BudgetError extends Error {
   constructor(readonly retryAfterMs: number) {
-    super("GitHub content-write budget exhausted");
+    super(
+      `crew-net write budget exhausted (20/min, 200/h); retry in ${Math.ceil(retryAfterMs / 1000)} s`,
+    );
     this.name = "BudgetError";
   }
 }
@@ -39,14 +95,38 @@ export class GitHubResponseError extends Error {
 export type Fetch = (url: string, init: RequestInit) => Promise<Response>;
 
 export interface GitHubOptions {
-  owner: string;
-  repo: string;
+  /** github.com, a GHE.com data-residency host (`*.ghe.com`) or a GHES host. */
+  host: string;
   tokenProvider: () => Promise<string>;
-  baseUrl?: string;
+  cache: HttpCachePort;
+  budget: WriteBudgetPort;
   fetch?: Fetch;
   now?: () => number;
-  writesPerMinute?: number;
-  writesPerHour?: number;
+}
+
+function validHost(host: string): string {
+  if (!/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/.test(host))
+    throw new Error("Invalid GitHub host");
+  return host;
+}
+
+/** REST and GraphQL endpoints for a host. */
+export function apiUrls(host: string): { rest: string; graphql: string } {
+  validHost(host);
+  if (host === "github.com")
+    return {
+      rest: "https://api.github.com",
+      graphql: "https://api.github.com/graphql",
+    };
+  if (host.endsWith(".ghe.com"))
+    return {
+      rest: `https://api.${host}`,
+      graphql: `https://api.${host}/graphql`,
+    };
+  return {
+    rest: `https://${host}/api/v3`,
+    graphql: `https://${host}/api/graphql`,
+  };
 }
 
 function object(value: unknown): Record<string, unknown> {
@@ -71,17 +151,44 @@ function boolean(value: unknown): boolean {
   return value;
 }
 
+/** Deleted accounts come back as `user: null`; GitHub shows them as ghost. */
+function login(value: unknown): string {
+  return value === null ? "ghost" : string(object(value).login);
+}
+
+function repoPath(repo: string): string {
+  const parts = repo.split("/");
+  const [owner, name] = parts;
+  if (
+    parts.length !== 2 ||
+    !owner ||
+    !name ||
+    !/^[A-Za-z0-9_.-]+$/.test(owner) ||
+    !/^[A-Za-z0-9_.-]+$/.test(name) ||
+    owner === "." ||
+    owner === ".." ||
+    name === "." ||
+    name === ".."
+  )
+    throw new Error("Repository must be owner/repo");
+  return `/repos/${owner}/${name}`;
+}
+
 function pull(value: unknown): PullRequest {
   const raw = object(value);
   const head = object(raw.head);
+  const state = string(raw.state);
+  if (state !== "open" && state !== "closed")
+    throw new Error("Invalid GitHub pull state");
   return {
     number: integer(raw.number),
     nodeId: string(raw.node_id),
     title: string(raw.title),
-    author: string(object(raw.user).login),
+    author: login(raw.user),
     headRef: string(head.ref),
     headSha: string(head.sha),
     baseRef: string(object(raw.base).ref),
+    state,
     draft: boolean(raw.draft),
     body: raw.body === null ? "" : string(raw.body),
     updatedAt: string(raw.updated_at),
@@ -93,13 +200,14 @@ function pull(value: unknown): PullRequest {
 
 function comment(value: unknown): IssueComment {
   const raw = object(value);
-  const issueUrl = new URL(string(raw.issue_url));
-  const issue = issueUrl.pathname.match(/\/issues\/(\d+)$/)?.[1];
+  const issue = new URL(string(raw.issue_url)).pathname.match(
+    /\/issues\/(\d+)$/,
+  )?.[1];
   if (!issue) throw new Error("Invalid GitHub comment issue URL");
   return {
     id: integer(raw.id),
     issueNumber: integer(Number(issue)),
-    author: string(object(raw.user).login),
+    author: login(raw.user),
     body: string(raw.body),
     createdAt: string(raw.created_at),
     updatedAt: string(raw.updated_at),
@@ -107,20 +215,84 @@ function comment(value: unknown): IssueComment {
   };
 }
 
-/** Fetch-only transport. Scheduling and retry sleeps belong to the app. */
+function review(value: unknown): PullReview {
+  const raw = object(value);
+  return {
+    id: integer(raw.id),
+    author: login(raw.user),
+    state: string(raw.state),
+    body: raw.body == null ? "" : string(raw.body),
+    submittedAt: raw.submitted_at == null ? null : string(raw.submitted_at),
+    url: string(raw.html_url),
+  };
+}
+
+/** Pull and issue threads with a crew-net reason; everything else is dropped. */
+function thread(value: unknown): NotificationThread | undefined {
+  const raw = object(value);
+  const reason = string(raw.reason);
+  if (!REASONS.has(reason)) return undefined;
+  const subject = object(raw.subject);
+  const type = string(subject.type);
+  const kind =
+    type === "PullRequest" ? "pull" : type === "Issue" ? "issue" : undefined;
+  if (!kind || typeof subject.url !== "string") return undefined;
+  const number = new URL(subject.url).pathname.match(
+    /\/(?:pulls|issues)\/(\d+)$/,
+  )?.[1];
+  if (!number) throw new Error("Invalid GitHub notification subject URL");
+  return {
+    threadId: string(raw.id),
+    repo: string(object(raw.repository).full_name),
+    kind,
+    number: integer(Number(number)),
+    reason: reason as NotificationReason,
+    updatedAt: string(raw.updated_at),
+  };
+}
+
+/** Comments strictly after the cursor; GitHub `since` is inclusive and second-granular. */
+function after(cursor: CommentCursor, c: IssueComment): boolean {
+  return (
+    c.updatedAt > cursor.updatedAt ||
+    (c.updatedAt === cursor.updatedAt && c.id > cursor.id)
+  );
+}
+
+function byCursor(a: IssueComment, b: IssueComment): number {
+  return a.updatedAt < b.updatedAt
+    ? -1
+    : a.updatedAt > b.updatedAt
+      ? 1
+      : a.id - b.id;
+}
+
+interface Page {
+  body: unknown;
+  next?: string;
+  modified: boolean;
+  pollIntervalMs: number | null;
+}
+
+interface Call {
+  method?: "GET" | "POST" | "PATCH";
+  body?: unknown;
+  /** Content-creating write that spends the shared budget. */
+  budgeted?: boolean;
+}
+
+/** Fetch-only transport for one GitHub host. Scheduling and sleeps belong to the app. */
 export class GitHubAdapter implements GitHubPort {
-  private readonly baseUrl: string;
-  private readonly repoUrl: string;
+  private readonly host: string;
+  private readonly rest: string;
+  private readonly graphql: string;
   private readonly fetcher: Fetch;
   private readonly now: () => number;
-  private readonly minuteCap: number;
-  private readonly hourCap: number;
   private token: Promise<string> | undefined;
-  private readonly cache = new Map<
-    string,
-    { etag: string; body: unknown; next?: string }
-  >();
-  private writeTimes: number[] = [];
+  private reread = false;
+  private authFailure: AuthError | undefined;
+  private blockedUntil = 0;
+  private blockedSecondary = false;
   private readonly stats: RequestStats = {
     requests: 0,
     notModified: 0,
@@ -129,109 +301,133 @@ export class GitHubAdapter implements GitHubPort {
   };
 
   constructor(private readonly options: GitHubOptions) {
-    this.baseUrl = (options.baseUrl ?? "https://api.github.com").replace(
-      /\/$/,
-      "",
-    );
-    this.repoUrl = `${this.baseUrl}/repos/${encodeURIComponent(options.owner)}/${encodeURIComponent(options.repo)}`;
+    this.host = validHost(options.host);
+    ({ rest: this.rest, graphql: this.graphql } = apiUrls(this.host));
     this.fetcher = options.fetch ?? globalThis.fetch;
     this.now = options.now ?? Date.now;
-    this.minuteCap = options.writesPerMinute ?? 20;
-    this.hourCap = options.writesPerHour ?? 200;
-    for (const cap of [this.minuteCap, this.hourCap]) {
-      if (!Number.isSafeInteger(cap) || cap < 1)
-        throw new Error("Write caps must be positive integers");
-    }
   }
 
   requestStats(): RequestStats {
     return { ...this.stats };
   }
 
-  private reserveWrite(): void {
-    const now = this.now();
-    this.writeTimes = this.writeTimes.filter((at) => at > now - 3_600_000);
-    const minute = this.writeTimes.filter((at) => at > now - 60_000);
-    const waits: number[] = [];
-    if (minute.length >= this.minuteCap)
-      waits.push((minute[0] ?? now) + 60_000 - now);
-    if (this.writeTimes.length >= this.hourCap)
-      waits.push((this.writeTimes[0] ?? now) + 3_600_000 - now);
-    if (waits.length) throw new BudgetError(Math.max(...waits));
-    this.writeTimes.push(now);
+  private async currentToken(): Promise<string> {
+    this.token ??= this.options.tokenProvider().then((token) => {
+      if (!token) throw new Error("empty token");
+      return token;
+    });
+    try {
+      return await this.token;
+    } catch {
+      // No further gh calls in this process: the fix needs the developer.
+      this.authFailure = new AuthError(this.host);
+      throw this.authFailure;
+    }
   }
 
   private nextLink(response: Response, url: string): string | undefined {
-    const link = response.headers.get("link");
-    const next = link
+    const next = response.headers
+      .get("link")
       ?.split(",")
       .find((part) => /rel="next"/.test(part))
       ?.match(/<([^>]+)>/)?.[1];
     if (!next) return undefined;
     const resolved = new URL(next, url);
-    // Never send the token to a host or endpoint supplied by an arbitrary Link.
-    const expected = new URL(url);
-    if (
-      resolved.origin !== expected.origin ||
-      resolved.pathname !== expected.pathname
-    )
+    // GitHub may switch to /repositories/{id}/… paths; never follow to another origin with the token.
+    if (resolved.origin !== new URL(url).origin)
       throw new Error("Invalid GitHub pagination URL");
     return resolved.href;
   }
 
-  private async request(
-    url: string,
-    method = "GET",
-    body?: unknown,
-    contentWrite = false,
-  ): Promise<{ body: unknown; next?: string }> {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      this.token ??= this.options.tokenProvider();
-      const token = await this.token;
-      const cached = method === "GET" ? this.cache.get(url) : undefined;
+  private backOff(ms: number, secondary: boolean): never {
+    const wait = Number.isFinite(ms) ? Math.max(0, ms) : SECONDARY_BACKOFF_MS;
+    this.blockedUntil = this.now() + wait;
+    this.blockedSecondary = secondary;
+    throw new RateLimitError(wait, secondary);
+  }
+
+  private async limited(response: Response): Promise<void> {
+    if (response.status !== 403 && response.status !== 429) return;
+    const sso = response.headers.get("x-github-sso");
+    if (response.status === 403 && sso?.startsWith("required"))
+      throw new SsoError(this.host, sso.match(/url=(\S+)/)?.[1]);
+    const now = this.now();
+    const retry = response.headers.get("retry-after");
+    const remaining = response.headers.get("x-ratelimit-remaining");
+    if (retry !== null) {
+      const secondary = remaining !== "0";
+      this.backOff(
+        /^\d+(\.\d+)?$/.test(retry)
+          ? Number(retry) * 1000
+          : Date.parse(retry) - now,
+        secondary,
+      );
+    }
+    if (remaining === "0") {
+      const reset = Number(response.headers.get("x-ratelimit-reset"));
+      this.backOff(
+        reset > 0 ? reset * 1000 - now : SECONDARY_BACKOFF_MS,
+        false,
+      );
+    }
+    if (response.status === 429) this.backOff(SECONDARY_BACKOFF_MS, true);
+    // A secondary limit may come as a plain 403; only its message tells it from a permission error.
+    const text = await response.text().catch(() => "");
+    if (/secondary rate limit|abuse detection/i.test(text))
+      this.backOff(SECONDARY_BACKOFF_MS, true);
+  }
+
+  private async request(url: string, call: Call = {}): Promise<Page> {
+    if (this.authFailure) throw this.authFailure;
+    const wait = this.blockedUntil - this.now();
+    if (wait > 0) throw new RateLimitError(wait, this.blockedSecondary);
+    const method = call.method ?? "GET";
+    if (call.budgeted) {
+      // Reserved once per logical write: a 401 retry is the same write.
+      const decision = await this.options.budget.reserve(
+        this.now(),
+        WRITE_WINDOWS,
+      );
+      if (!decision.ok) throw new BudgetError(decision.retryAfterMs);
+    }
+    const cached: CachedResponse | undefined =
+      method === "GET" ? await this.options.cache.get(url) : undefined;
+    for (;;) {
+      const token = await this.currentToken();
       const headers: Record<string, string> = {
         Accept: "application/vnd.github+json",
         Authorization: `Bearer ${token}`,
         "X-GitHub-Api-Version": "2022-11-28",
       };
-      if (cached) headers["If-None-Match"] = cached.etag;
-      if (body !== undefined) headers["Content-Type"] = "application/json";
-      if (contentWrite) this.reserveWrite();
+      if (cached?.etag) headers["If-None-Match"] = cached.etag;
+      if (cached?.lastModified)
+        headers["If-Modified-Since"] = cached.lastModified;
+      if (call.body !== undefined) headers["Content-Type"] = "application/json";
       this.stats.requests++;
       if (method !== "GET") this.stats.writes++;
       const response = await this.fetcher(url, {
         method,
         headers,
         redirect: "error",
-        signal: AbortSignal.timeout(30_000),
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        ...(call.body === undefined ? {} : { body: JSON.stringify(call.body) }),
       });
       const remaining = response.headers.get("x-ratelimit-remaining");
       if (remaining !== null && /^\d+$/.test(remaining))
         this.stats.rateLimitRemaining = Number(remaining);
       if (response.status === 401) {
-        if (attempt === 1) throw new AuthError();
+        if (this.reread) {
+          this.authFailure = new AuthError(this.host);
+          throw this.authFailure;
+        }
+        this.reread = true;
         this.token = undefined;
         continue;
       }
-      if (response.status === 403 || response.status === 429) {
-        const retry = response.headers.get("retry-after");
-        if (retry !== null || remaining === "0" || response.status === 429) {
-          const now = this.now();
-          const reset = Number(response.headers.get("x-ratelimit-reset"));
-          const wait =
-            retry !== null
-              ? /^\d+(\.\d+)?$/.test(retry)
-                ? Number(retry) * 1000
-                : Date.parse(retry) - now
-              : remaining === "0" && reset > 0
-                ? reset * 1000 - now
-                : 60_000;
-          throw new RateLimitError(
-            Number.isFinite(wait) ? Math.max(0, wait) : 60_000,
-          );
-        }
-      }
+      await this.limited(response);
+      const poll = response.headers.get("x-poll-interval");
+      const pollIntervalMs =
+        poll && /^\d+$/.test(poll) ? Number(poll) * 1000 : null;
       if (response.status === 304) {
         this.stats.notModified++;
         if (!cached)
@@ -239,93 +435,190 @@ export class GitHubAdapter implements GitHubPort {
             304,
             "GitHub returned 304 without a cached body",
           );
-        return cached;
+        return {
+          body: cached.body,
+          ...(cached.next === undefined ? {} : { next: cached.next }),
+          modified: false,
+          pollIntervalMs,
+        };
       }
       if (!response.ok) throw new GitHubResponseError(response.status);
-      const data: unknown =
+      const body: unknown =
         response.status === 204 ? null : await response.json();
       const next = this.nextLink(response, url);
-      const result = { body: data, ...(next === undefined ? {} : { next }) };
-      const etag = response.headers.get("etag");
       if (method === "GET") {
-        if (etag) this.cache.set(url, { etag, ...result });
-        else this.cache.delete(url);
-      } else {
-        // Body edits and comments can change any cached list or individual PR.
-        this.cache.clear();
+        const etag = response.headers.get("etag");
+        const lastModified = response.headers.get("last-modified");
+        if (etag || lastModified)
+          await this.options.cache.set(url, {
+            ...(etag ? { etag } : {}),
+            ...(lastModified ? { lastModified } : {}),
+            body,
+            ...(next === undefined ? {} : { next }),
+          });
       }
-      return result;
+      return {
+        body,
+        ...(next === undefined ? {} : { next }),
+        modified: true,
+        pollIntervalMs,
+      };
     }
-    throw new AuthError();
   }
 
-  private async list<T>(
+  /** Reads every page (or until `stop` says so); `modified` is true when any page was a 200. */
+  private async pages(
     url: string,
-    parse: (value: unknown) => T,
-  ): Promise<T[]> {
-    const result: T[] = [];
+    stop: (items: unknown[]) => boolean = () => false,
+  ): Promise<{
+    items: unknown[];
+    modified: boolean;
+    pollIntervalMs: number | null;
+  }> {
+    const items: unknown[] = [];
     const visited = new Set<string>();
+    let modified = false;
+    let pollIntervalMs: number | null = null;
     let next: string | undefined = url;
     while (next) {
       if (visited.has(next)) throw new Error("GitHub pagination cycle");
       visited.add(next);
       const page = await this.request(next);
       if (!Array.isArray(page.body)) throw new Error("Invalid GitHub list");
-      result.push(...page.body.map(parse));
+      modified ||= page.modified;
+      pollIntervalMs ??= page.pollIntervalMs;
+      items.push(...page.body);
+      if (stop(page.body)) break;
       next = page.next;
     }
+    return { items, modified, pollIntervalMs };
+  }
+
+  private async list<T>(
+    url: string,
+    parse: (value: unknown) => T,
+  ): Promise<T[]> {
+    return (await this.pages(url)).items.map(parse);
+  }
+
+  async notifications(since: string): Promise<NotificationPage> {
+    const query = new URLSearchParams({ all: "true", since, per_page: "50" });
+    const { items, modified, pollIntervalMs } = await this.pages(
+      `${this.rest}/notifications?${query}`,
+    );
+    return {
+      modified,
+      threads: items.flatMap((value) => thread(value) ?? []),
+      pollIntervalMs,
+    };
+  }
+
+  async listOpenPulls(repo: string): Promise<PullRequest[]> {
+    return this.list(
+      `${this.rest}${repoPath(repo)}/pulls?state=open&per_page=100`,
+      pull,
+    );
+  }
+
+  async listMergedPulls(repo: string, sinceIso: string): Promise<MergedPull[]> {
+    const since = Date.parse(sinceIso);
+    if (!Number.isFinite(since)) throw new Error("Invalid merged-since date");
+    const result: MergedPull[] = [];
+    await this.pages(
+      `${this.rest}${repoPath(repo)}/pulls?state=closed&sort=updated&direction=desc&per_page=100`,
+      (page) => {
+        for (const value of page) {
+          const raw = object(value);
+          // Sorted by updated_at: everything after this is older than `since`.
+          if (Date.parse(string(raw.updated_at)) < since) return true;
+          if (raw.merged_at == null) continue;
+          const mergedAt = string(raw.merged_at);
+          if (Date.parse(mergedAt) < since) continue;
+          result.push({ ...pull(value), merged: true, mergedAt });
+          if (result.length === MERGED_LIMIT) return true;
+        }
+        return false;
+      },
+    );
     return result;
   }
 
-  listOpenPulls(): Promise<PullRequest[]> {
-    return this.list(`${this.repoUrl}/pulls?state=open&per_page=100`, pull);
+  async getPull(repo: string, number: number): Promise<PullRequest> {
+    return pull(
+      (
+        await this.request(
+          `${this.rest}${repoPath(repo)}/pulls/${integer(number)}`,
+        )
+      ).body,
+    );
   }
 
-  listCommentsSince(cursor: string): Promise<IssueComment[]> {
+  async listThreadComments(
+    repo: string,
+    number: number,
+    cursor: CommentCursor,
+  ): Promise<IssueComment[]> {
     const query = new URLSearchParams({
-      since: cursor,
-      sort: "updated",
-      direction: "asc",
+      since: cursor.updatedAt,
       per_page: "100",
     });
-    return this.list(`${this.repoUrl}/issues/comments?${query}`, comment);
+    const comments = await this.list(
+      `${this.rest}${repoPath(repo)}/issues/${integer(number)}/comments?${query}`,
+      comment,
+    );
+    return comments.filter((c) => after(cursor, c)).sort(byCursor);
   }
 
-  async getPull(number: number): Promise<PullRequest> {
-    return pull(
-      (await this.request(`${this.repoUrl}/pulls/${integer(number)}`)).body,
+  async listReviews(repo: string, number: number): Promise<PullReview[]> {
+    return this.list(
+      `${this.rest}${repoPath(repo)}/pulls/${integer(number)}/reviews?per_page=100`,
+      review,
     );
   }
 
-  async postComment(number: number, body: string): Promise<void> {
+  async postComment(repo: string, number: number, body: string): Promise<void> {
     await this.request(
-      `${this.repoUrl}/issues/${integer(number)}/comments`,
-      "POST",
-      { body },
-      true,
+      `${this.rest}${repoPath(repo)}/issues/${integer(number)}/comments`,
+      { method: "POST", body: { body }, budgeted: true },
     );
   }
 
-  async updatePullBody(number: number, body: string): Promise<void> {
+  async updatePullBody(
+    repo: string,
+    number: number,
+    body: string,
+  ): Promise<void> {
     await this.request(
-      `${this.repoUrl}/pulls/${integer(number)}`,
-      "PATCH",
-      { body },
-      true,
+      `${this.rest}${repoPath(repo)}/pulls/${integer(number)}`,
+      { method: "PATCH", body: { body }, budgeted: true },
     );
   }
 
-  async disableAutoMerge(number: number): Promise<void> {
-    const pr = await this.getPull(number);
-    const url = this.baseUrl.endsWith("/api/v3")
-      ? `${this.baseUrl.slice(0, -7)}/api/graphql`
-      : `${this.baseUrl}/graphql`;
+  async createIssue(
+    repo: string,
+    title: string,
+    body: string,
+  ): Promise<number> {
+    const page = await this.request(`${this.rest}${repoPath(repo)}/issues`, {
+      method: "POST",
+      body: { title, body },
+      budgeted: true,
+    });
+    return integer(object(page.body).number);
+  }
+
+  /** Not a content write: it spends no budget. */
+  async disableAutoMerge(repo: string, number: number): Promise<void> {
+    const pr = await this.getPull(repo, number);
     const response = object(
       (
-        await this.request(url, "POST", {
-          query:
-            "mutation($id: ID!) { disablePullRequestAutoMerge(input: {pullRequestId: $id}) { pullRequest { id } } }",
-          variables: { id: pr.nodeId },
+        await this.request(this.graphql, {
+          method: "POST",
+          body: {
+            query:
+              "mutation($id: ID!) { disablePullRequestAutoMerge(input: {pullRequestId: $id}) { pullRequest { id } } }",
+            variables: { id: pr.nodeId },
+          },
         })
       ).body,
     );

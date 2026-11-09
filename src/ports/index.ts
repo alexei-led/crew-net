@@ -9,6 +9,7 @@ export interface PullRequest {
   headRef: string;
   headSha: string;
   baseRef: string;
+  state: "open" | "closed";
   draft: boolean;
   body: string;
   updatedAt: string;
@@ -33,14 +34,112 @@ export interface RequestStats {
   rateLimitRemaining: number | null;
 }
 
-/** GitHub operations used by the application. */
+/** Reasons that make a notification a crew-net inbound candidate (design §8.2). */
+export type NotificationReason =
+  | "mention"
+  | "team_mention"
+  | "author"
+  | "comment"
+  | "review_requested"
+  | "assign";
+
+export interface NotificationThread {
+  threadId: string;
+  /** owner/repo of the thread's subject. */
+  repo: string;
+  kind: "pull" | "issue";
+  number: number;
+  reason: NotificationReason;
+  updatedAt: string;
+}
+
+export interface NotificationPage {
+  /** False when GitHub answered 304: nothing changed since the last poll. */
+  modified: boolean;
+  threads: NotificationThread[];
+  /** From X-Poll-Interval, in milliseconds; null when GitHub sent none. */
+  pollIntervalMs: number | null;
+}
+
+export interface PullReview {
+  id: number;
+  author: string;
+  /** GitHub review state, e.g. APPROVED, CHANGES_REQUESTED, COMMENTED. */
+  state: string;
+  body: string;
+  /** Null for pending reviews. */
+  submittedAt: string | null;
+  url: string;
+}
+
+export interface MergedPull extends PullRequest {
+  merged: true;
+  mergedAt: string;
+}
+
+/** Position in a thread's comments: strictly after this (updatedAt, id) pair. */
+export interface CommentCursor {
+  updatedAt: string;
+  id: number;
+}
+
+/** A conditional-request validator and the body it validates. */
+export interface CachedResponse {
+  etag?: string;
+  lastModified?: string;
+  body: unknown;
+  /** Next-page URL that came with this body. */
+  next?: string;
+}
+
+/** Persistent HTTP cache shared by every process on the laptop. Keys are request URLs. */
+export interface HttpCachePort {
+  get(key: string): Promise<CachedResponse | undefined>;
+  set(key: string, value: CachedResponse): Promise<void>;
+}
+
+export interface BudgetWindow {
+  windowMs: number;
+  max: number;
+}
+
+export type BudgetDecision = { ok: true } | { ok: false; retryAfterMs: number };
+
+/** Content-write counter shared by every process on the laptop (design §9.1). */
+export interface WriteBudgetPort {
+  /**
+   * Atomically records one write at `nowMs` when every window has room.
+   * Otherwise records nothing and returns the wait until the fullest window frees.
+   */
+  reserve(
+    nowMs: number,
+    windows: readonly BudgetWindow[],
+  ): Promise<BudgetDecision>;
+}
+
+/**
+ * GitHub operations for one host. Every repository argument is `owner/repo`.
+ * Adapters are per host; the token and any GHES base URL belong to the adapter.
+ */
 export interface GitHubPort {
-  listOpenPulls(): Promise<PullRequest[]>;
-  listCommentsSince(cursor: string): Promise<IssueComment[]>;
-  getPull(number: number): Promise<PullRequest>;
-  postComment(number: number, body: string): Promise<void>;
-  updatePullBody(number: number, body: string): Promise<void>;
-  disableAutoMerge(number: number): Promise<void>;
+  /** Notification threads updated after `since`, filtered to crew-net reasons. */
+  notifications(since: string): Promise<NotificationPage>;
+  listOpenPulls(repo: string): Promise<PullRequest[]>;
+  /** Pulls merged at or after `sinceIso`, newest first. */
+  listMergedPulls(repo: string, sinceIso: string): Promise<MergedPull[]>;
+  getPull(repo: string, number: number): Promise<PullRequest>;
+  /** Every comment on the issue or PR after `after`, ordered by (updatedAt, id). */
+  listThreadComments(
+    repo: string,
+    number: number,
+    after: CommentCursor,
+  ): Promise<IssueComment[]>;
+  listReviews(repo: string, number: number): Promise<PullReview[]>;
+  postComment(repo: string, number: number, body: string): Promise<void>;
+  updatePullBody(repo: string, number: number, body: string): Promise<void>;
+  disableAutoMerge(repo: string, number: number): Promise<void>;
+  /** Opens an issue and returns its number. */
+  createIssue(repo: string, title: string, body: string): Promise<number>;
   requestStats(): RequestStats;
 }
 
@@ -50,16 +149,36 @@ export interface MergeTreeResult {
   conflictedPaths: string[];
 }
 
+export interface WorktreeBranch {
+  path: string;
+  branch: string;
+}
+
+/** A remote-tracking branch, with the facts a bare branch's owner is inferred from. */
+export interface RemoteBranch {
+  /** Branch name without the remote prefix. */
+  name: string;
+  /** Committer date of the branch tip, ISO 8601. */
+  lastCommitAt: string;
+  authorEmail: string;
+  /** GitHub login from a users.noreply.github.com address, else null. */
+  loginHint: string | null;
+}
+
 /** Git operations used by the application. */
 export interface GitPort {
-  /** Fetch remote refs. */
+  /** Fetch and prune remote refs. */
   fetch(): Promise<void>;
-  /** List branches checked out in worktrees. */
-  worktreeBranches(): Promise<string[]>;
+  /** Branches checked out in linked worktrees, with their paths. */
+  worktreeBranches(): Promise<WorktreeBranch[]>;
+  /** Remote-tracking branches on origin. */
+  remoteBranches(): Promise<RemoteBranch[]>;
+  /** Merge base of two refs, or undefined when they share no history. */
+  mergeBase(a: string, b: string): Promise<string | undefined>;
   /** Inspect the merge of two refs. */
   mergeTree(a: string, b: string): Promise<MergeTreeResult>;
-  /** List paths changed from base to a. */
-  changedPaths(a: string, base: string): Promise<string[]>;
+  /** Paths changed on head since it forked from base. */
+  changedFiles(base: string, head: string): Promise<string[]>;
 }
 
 export type JsonValue =
@@ -212,10 +331,21 @@ export type ManagedHooksPolicy =
   | { status: "known"; enabled: boolean }
   | { status: "unknown"; reason: string };
 
+export interface RepoIdentity {
+  /** Host of the origin remote, lowercase, without port. */
+  host: string;
+  /** owner/repo. */
+  repo: string;
+}
+
 /** Machine facts needed by the application. */
 export interface EnvPort {
-  githubToken(): Promise<string>;
-  /** owner/repo, parsed from the origin remote. */
-  repoIdentity(): Promise<string>;
+  /** Token for `host` from `gh auth token --hostname`. */
+  githubToken(host: string): Promise<string>;
+  repoIdentity(): Promise<RepoIdentity>;
   managedHooksOnly(): Promise<ManagedHooksPolicy>;
+  /** `${XDG_STATE_HOME:-~/.local/state}/crew-net`. */
+  stateDir(): string;
+  /** `${XDG_CONFIG_HOME:-~/.config}/crew-net`. */
+  configDir(): string;
 }

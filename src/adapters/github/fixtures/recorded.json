@@ -1,14 +1,157 @@
-[
-  {
-    "path": "/pulls?state=open&per_page=100",
+{
+  "notifications": {
+    "path": "/notifications?all=true&since=2026-11-01T00%3A00%3A00Z&per_page=5",
     "status": 200,
     "headers": {
-      "etag": "\"4027abe1b5b05f3a06a2b967c91c5db80b5a585dd8c3fa3e0cc0e1e1b3927129\""
+      "etag": "W/\"89a05c6b7368d9b980b9d2bf0b34d294cc6589f4c943edd1d3deb7b0b0a419f7\"",
+      "last-modified": "Mon, 09 Nov 2026 09:01:44 GMT",
+      "x-poll-interval": "60"
     },
-    "body": []
+    "body": [
+      {
+        "id": "1000",
+        "reason": "author",
+        "updated_at": "2026-11-09T09:01:44Z",
+        "unread": true,
+        "repository": {
+          "full_name": "alexei-led/crew-net-sandbox"
+        },
+        "subject": {
+          "type": "PullRequest",
+          "title": "[redacted]",
+          "url": "https://api.github.com/repos/alexei-led/crew-net-sandbox/pulls/375"
+        }
+      },
+      {
+        "id": "1001",
+        "reason": "author",
+        "updated_at": "2026-11-09T08:51:51Z",
+        "unread": true,
+        "repository": {
+          "full_name": "alexei-led/crew-net-sandbox"
+        },
+        "subject": {
+          "type": "PullRequest",
+          "title": "[redacted]",
+          "url": "https://api.github.com/repos/alexei-led/crew-net-sandbox/pulls/374"
+        }
+      },
+      {
+        "id": "1002",
+        "reason": "subscribed",
+        "updated_at": "2026-11-09T06:57:51Z",
+        "unread": true,
+        "repository": {
+          "full_name": "alexei-led/crew-net-sandbox"
+        },
+        "subject": {
+          "type": "PullRequest",
+          "title": "[redacted]",
+          "url": "https://api.github.com/repos/alexei-led/crew-net-sandbox/pulls/382"
+        }
+      },
+      {
+        "id": "1003",
+        "reason": "review_requested",
+        "updated_at": "2026-11-09T03:22:20Z",
+        "unread": false,
+        "repository": {
+          "full_name": "alexei-led/crew-net-sandbox"
+        },
+        "subject": {
+          "type": "PullRequest",
+          "title": "[redacted]",
+          "url": "https://api.github.com/repos/alexei-led/crew-net-sandbox/pulls/408"
+        }
+      },
+      {
+        "id": "1004",
+        "reason": "subscribed",
+        "updated_at": "2026-11-09T02:26:12Z",
+        "unread": true,
+        "repository": {
+          "full_name": "alexei-led/crew-net-sandbox"
+        },
+        "subject": {
+          "type": "PullRequest",
+          "title": "[redacted]",
+          "url": "https://api.github.com/repos/alexei-led/crew-net-sandbox/pulls/381"
+        }
+      }
+    ]
   },
-  {
-    "path": "/issues/comments?since=2026-01-01T00%3A00%3A00Z&sort=updated&direction=asc&per_page=100",
+  "notificationsNotModified": {
+    "path": "/notifications?all=true&since=2026-11-01T00%3A00%3A00Z&per_page=5",
+    "status": 304,
+    "headers": {
+      "etag": "\"1de9553a7d28c7ea7b20228d7911c9c2b2ae19eaf0a073dd762261694091b283\"",
+      "last-modified": "Mon, 09 Nov 2026 09:01:44 GMT",
+      "x-poll-interval": "60"
+    },
+    "body": null
+  },
+  "mergedPull": {
+    "path": "/repos/alexei-led/crew-net-sandbox/pulls/2",
+    "status": 200,
+    "headers": {
+      "etag": "\"40ed6c6d78c5588417cb32b0bd0aa91b8e432c7a78e487d65b9524a4f74b4e12\"",
+      "last-modified": "Sun, 08 Nov 2026 07:50:10 GMT"
+    },
+    "body": {
+      "number": 2,
+      "node_id": "PR_kwDOVmByAs8AAAABNfB5uQ",
+      "state": "closed",
+      "draft": false,
+      "updated_at": "2026-11-07T08:36:02Z",
+      "merged": true,
+      "merged_at": "2026-11-07T08:35:15Z",
+      "auto_merge": null,
+      "title": "[redacted]",
+      "body": "[redacted]",
+      "user": {
+        "login": "alexei-led"
+      },
+      "head": {
+        "ref": "crew-deps-validation-a",
+        "sha": "da349ddd7bbfe6f53e1d04243354e603cadf8366"
+      },
+      "base": {
+        "ref": "main"
+      }
+    }
+  },
+  "closedPull": {
+    "path": "/repos/alexei-led/crew-net-sandbox/pulls/3",
+    "status": 200,
+    "headers": {
+      "etag": "\"304b066c660bc980dca57a64eef6027439664ac165180f53dfdf0b4bc4dbddb4\"",
+      "last-modified": "Sun, 08 Nov 2026 07:50:10 GMT"
+    },
+    "body": {
+      "number": 3,
+      "node_id": "PR_kwDOVmByAs8AAAABNfB8aQ",
+      "state": "closed",
+      "draft": false,
+      "updated_at": "2026-11-07T08:36:02Z",
+      "merged": false,
+      "merged_at": null,
+      "auto_merge": null,
+      "title": "[redacted]",
+      "body": "[redacted]",
+      "user": {
+        "login": "alexei-led"
+      },
+      "head": {
+        "ref": "crew-deps-validation-b",
+        "sha": "cc31e02e6ff597e24fe5188c1fd967615f3be6ed"
+      },
+      "base": {
+        "ref": "crew-deps-validation-a"
+      }
+    }
+  },
+  "comments": {
+    "path": "/repos/alexei-led/crew-net-sandbox/issues/1/comments?since=2026-01-01T00%3A00%3A00Z&per_page=100",
     "status": 200,
     "headers": {
       "etag": "W/\"00868c4e0c27b3f16feac9918f4360305ecf1672d27ee122f9a04fa2d529f37c\""
@@ -16,15 +159,23 @@
     "body": [
       {
         "id": 6704379443,
-        "user": {
-          "login": "fixture-user"
-        },
-        "body": "[redacted fixture body]",
         "created_at": "2026-11-07T08:16:11Z",
         "updated_at": "2026-11-07T08:16:18Z",
         "issue_url": "https://api.github.com/repos/alexei-led/crew-net-sandbox/issues/1",
-        "html_url": "https://github.com/alexei-led/crew-net-sandbox/issues/1#issuecomment-6704379443"
+        "html_url": "https://github.com/alexei-led/crew-net-sandbox/issues/1#issuecomment-6704379443",
+        "user": {
+          "login": "alexei-led"
+        },
+        "body": "[redacted fixture body]"
       }
     ]
+  },
+  "reviews": {
+    "path": "/repos/alexei-led/crew-net-sandbox/pulls/2/reviews?per_page=100",
+    "status": 200,
+    "headers": {
+      "etag": "\"4027abe1b5b05f3a06a2b967c91c5db80b5a585dd8c3fa3e0cc0e1e1b3927129\""
+    },
+    "body": []
   }
-]
+}

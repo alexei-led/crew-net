@@ -1,11 +1,19 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  defaultPolicySources,
   EnvAdapter,
   EnvCommandError,
   type EnvRunner,
+  type PolicySource,
   parseRepoIdentity,
 } from "./index";
 
@@ -18,13 +26,30 @@ afterEach(() => {
 });
 
 test.each([
-  ["https://github.com/alexei-led/crew-net.git", "alexei-led/crew-net"],
-  ["https://github.com/alexei-led/crew-net", "alexei-led/crew-net"],
-  ["git@github.com:alexei-led/crew-net.git", "alexei-led/crew-net"],
-  ["ssh://git@github.example:2222/owner/repo.git", "owner/repo"],
-  ["https://github.example/Owner/my.repo/", "Owner/my.repo"],
-])("repo identity: %s", (remote, expected) => {
-  expect(parseRepoIdentity(remote)).toBe(expected);
+  [
+    "https://github.com/alexei-led/crew-net.git",
+    "github.com",
+    "alexei-led/crew-net",
+  ],
+  [
+    "https://github.com/alexei-led/crew-net",
+    "github.com",
+    "alexei-led/crew-net",
+  ],
+  [
+    "git@github.com:alexei-led/crew-net.git",
+    "github.com",
+    "alexei-led/crew-net",
+  ],
+  [
+    "ssh://git@github.example:2222/owner/repo.git",
+    "github.example",
+    "owner/repo",
+  ],
+  ["https://GitHub.Example/Owner/my.repo/", "github.example", "Owner/my.repo"],
+  ["git@acme.ghe.com:acme/app.git", "acme.ghe.com", "acme/app"],
+])("repo identity: %s", (remote, host, repo) => {
+  expect(parseRepoIdentity(remote)).toEqual({ host, repo });
 });
 
 test.each([
@@ -33,6 +58,8 @@ test.each([
   "https://github.com/owner",
   "git@host:owner/repo/extra",
   "https://host/a/b/c",
+  "git@:owner/repo",
+  "git@bad_host:owner/repo",
 ])("rejects unsupported origin %s", (remote) => {
   expect(() => parseRepoIdentity(remote)).toThrow();
 });
@@ -48,10 +75,13 @@ test("token and repository commands use argv, cwd, and no shell", async () => {
     };
   };
   const env = new EnvAdapter({ repoDir: dir, runner });
-  expect(await env.githubToken()).toBe("test-secret");
-  expect(await env.repoIdentity()).toBe("owner/repo");
+  expect(await env.githubToken("github.example")).toBe("test-secret");
+  expect(await env.repoIdentity()).toEqual({
+    host: "github.com",
+    repo: "owner/repo",
+  });
   expect(calls).toEqual([
-    ["gh", ["auth", "token"], dir],
+    ["gh", ["auth", "token", "--hostname", "github.example"], dir],
     ["git", ["remote", "get-url", "origin"], dir],
   ]);
 });
@@ -64,7 +94,7 @@ test("command failures never propagate token-like stderr or causes", async () =>
     },
   });
   try {
-    await env.githubToken();
+    await env.githubToken("github.com");
     throw new Error("Expected error");
   } catch (error) {
     expect(error).toBeInstanceOf(EnvCommandError);
@@ -78,18 +108,22 @@ test.each([
   { stdout: "private-token", exitCode: 1 },
 ])("missing or failed token is rejected", async (result) => {
   const env = new EnvAdapter({ repoDir: dir, runner: async () => result });
-  await expect(env.githubToken()).rejects.toBeInstanceOf(EnvCommandError);
+  await expect(env.githubToken("github.com")).rejects.toBeInstanceOf(
+    EnvCommandError,
+  );
 });
 
 function policy(
-  paths: string[],
-  outputs: Record<string, string>,
+  paths: (string | PolicySource)[],
+  outputs: Record<string, string> = {},
   failure = false,
 ) {
   const calls: string[][] = [];
   const env = new EnvAdapter({
     repoDir: dir,
-    policyPaths: paths,
+    policySources: paths.map((path) =>
+      typeof path === "string" ? { kind: "plist", path } : path,
+    ),
     runner: async (command, args) => {
       calls.push([command, ...args]);
       if (failure) throw new Error("unreadable");
@@ -166,4 +200,122 @@ test("unreadable plist returns unknown even if device policy would be false", as
   writeFileSync(user, "fixture");
   const { env } = policy([user], {}, true);
   expect((await env.managedHooksOnly()).status).toBe("unknown");
+});
+
+const json = (path: string): PolicySource => ({ kind: "json", path });
+const drop = (path: string): PolicySource => ({ kind: "json-dir", path });
+
+test("managed-settings.json sets the policy when no plist does", async () => {
+  const file = join(dir, "managed-settings.json");
+  writeFileSync(file, '{"allowManagedHooksOnly":true}');
+  const { env, calls } = policy([join(dir, "missing.plist"), json(file)]);
+  expect(await env.managedHooksOnly()).toEqual({
+    status: "known",
+    enabled: true,
+  });
+  expect(calls).toEqual([]);
+});
+
+test("the last drop-in that sets the key wins over managed-settings.json", async () => {
+  const dropIns = join(dir, "managed-settings.d");
+  mkdirSync(dropIns);
+  writeFileSync(
+    join(dropIns, "10-base.json"),
+    '{"allowManagedHooksOnly":true}',
+  );
+  writeFileSync(
+    join(dropIns, "20-team.json"),
+    '{"allowManagedHooksOnly":false}',
+  );
+  writeFileSync(join(dropIns, "30-other.json"), '{"env":{}}');
+  writeFileSync(join(dropIns, "40-notes.txt"), "not json");
+  writeFileSync(
+    join(dropIns, ".hidden.json"),
+    '{"allowManagedHooksOnly":true}',
+  );
+  const file = join(dir, "managed-settings.json");
+  writeFileSync(file, '{"allowManagedHooksOnly":true}');
+  const { env } = policy([drop(dropIns), json(file)]);
+  expect(await env.managedHooksOnly()).toEqual({
+    status: "known",
+    enabled: false,
+  });
+});
+
+test.each([
+  ["malformed settings file", (p: string) => writeFileSync(p, "{oops"), json],
+  ["non-object settings file", (p: string) => writeFileSync(p, "[]"), json],
+  [
+    "malformed drop-in",
+    (p: string) => {
+      mkdirSync(p);
+      writeFileSync(join(p, "a.json"), "{oops");
+    },
+    drop,
+  ],
+  [
+    "unreadable settings file",
+    (p: string) => {
+      writeFileSync(p, '{"allowManagedHooksOnly":false}');
+      chmodSync(p, 0o000);
+    },
+    json,
+  ],
+] as const)("%s is unknown, never off", async (_name, plant, kind) => {
+  const path = join(dir, "managed");
+  plant(path);
+  const fallback = join(dir, "fallback.json");
+  writeFileSync(fallback, '{"allowManagedHooksOnly":false}');
+  const { env } = policy([kind(path), json(fallback)]);
+  expect((await env.managedHooksOnly()).status).toBe("unknown");
+});
+
+test("an unsupported platform reports unknown policy", async () => {
+  expect(defaultPolicySources("win32", "u")).toBeUndefined();
+  const env = new EnvAdapter({ repoDir: dir, platform: "win32" });
+  expect(await env.managedHooksOnly()).toEqual({
+    status: "unknown",
+    reason: "Managed policy locations are unknown on this platform",
+  });
+});
+
+test.each([
+  [
+    "darwin",
+    [
+      "plist:/Library/Managed Preferences/me/com.anthropic.claudecode.plist",
+      "plist:/Library/Managed Preferences/com.anthropic.claudecode.plist",
+      "json-dir:/Library/Application Support/ClaudeCode/managed-settings.d",
+      "json:/Library/Application Support/ClaudeCode/managed-settings.json",
+    ],
+  ],
+  [
+    "linux",
+    [
+      "json-dir:/etc/claude-code/managed-settings.d",
+      "json:/etc/claude-code/managed-settings.json",
+    ],
+  ],
+] as const)("default policy sources on %s", (platform, expected) => {
+  expect(
+    defaultPolicySources(platform, "me")?.map((s) => `${s.kind}:${s.path}`),
+  ).toEqual([...expected]);
+});
+
+test.each([
+  [{}, "/home/me/.local/state/crew-net", "/home/me/.config/crew-net"],
+  [
+    { XDG_STATE_HOME: "/x/state", XDG_CONFIG_HOME: "/x/config" },
+    "/x/state/crew-net",
+    "/x/config/crew-net",
+  ],
+  [
+    { XDG_STATE_HOME: "relative", XDG_CONFIG_HOME: "" },
+    "/home/me/.local/state/crew-net",
+    "/home/me/.config/crew-net",
+  ],
+])("XDG dirs for %j", (vars, state, config) => {
+  const env = new EnvAdapter({ repoDir: dir, env: vars, home: "/home/me" });
+  expect(env.stateDir()).toBe(state);
+  expect(env.configDir()).toBe(config);
 });
