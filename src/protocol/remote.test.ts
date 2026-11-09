@@ -42,5 +42,5 @@ test.each([
   "git@:owner/repo",
   "git@bad_host:owner/repo",
 ])("rejects unsupported origin %s", (remote) => {
-  expect(() => parseRepoIdentity(remote)).toThrow();
+  expect(() => parseRepoIdentity(remote)).toThrow(/origin/i);
 });

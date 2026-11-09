@@ -1,4 +1,4 @@
-.PHONY: check typecheck lint fmt test build plugin plugin-fresh plugin-test workflows help
+.PHONY: check typecheck lint fmt test test-fast build plugin plugin-fresh plugin-test workflows help
 
 PLUGIN := plugin
 PLUGIN_CLI := $(PLUGIN)/bin/crew-net
@@ -25,8 +25,14 @@ fmt: ## Apply Biome fixes and formatting
 	bun x biome check --write .
 
 # plugin/tests run inside the Claude Code engine (plugin-test), not under bun.
+# Test files run in parallel worker processes, so no test may share a path with another file.
+TEST := bun test --parallel --path-ignore-patterns='plugin/tests/**'
+
 test: ## Bun tests
-	bun test --path-ignore-patterns='plugin/tests/**'
+	$(TEST)
+
+test-fast: ## Bun tests affected by changes against origin/main (local loop)
+	$(TEST) --changed=origin/main
 
 build: ## dist/crew-net.js for Pi, Codex and manual installs
 	bun build src/cli/index.ts --target=node --outfile=dist/crew-net.js --banner='#!/usr/bin/env node'

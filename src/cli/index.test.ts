@@ -51,12 +51,6 @@ describe("main", () => {
     expect(io.out()).toBe(`${VERSION}\n`);
   });
 
-  test("unknown command is a usage error with exit 2", async () => {
-    const io = capture();
-    expect(await main(["nope"], runtime, io.io, [echo])).toBe(2);
-    expect(io.err()).toContain("unknown command nope");
-  });
-
   test("runs the named command with global flags parsed", async () => {
     const io = capture();
     const code = await main(
@@ -74,22 +68,18 @@ describe("main", () => {
     });
   });
 
-  test("a flag the command does not declare is a usage error", async () => {
-    const io = capture();
-    expect(await main(["echo", "--bogus"], runtime, io.io, [echo])).toBe(2);
-    expect(io.err()).toContain("unknown flag --bogus");
-  });
-
-  test("repeated --repo is a usage error", async () => {
-    const io = capture();
-    const code = await main(
+  test.each([
+    ["unknown command", ["nope"], "unknown command nope"],
+    ["undeclared flag", ["echo", "--bogus"], "unknown flag --bogus"],
+    [
+      "repeated --repo",
       ["echo", "--repo", "a/b", "--repo", "c/d"],
-      runtime,
-      io.io,
-      [echo],
-    );
-    expect(code).toBe(2);
-    expect(io.err()).toContain("--repo given more than once");
+      "--repo given more than once",
+    ],
+  ])("%s is a usage error with exit 2", async (_name, argv, message) => {
+    const io = capture();
+    expect(await main(argv, runtime, io.io, [echo])).toBe(2);
+    expect(io.err()).toContain(message);
   });
 
   test("--help prints the command usage and runs nothing", async () => {

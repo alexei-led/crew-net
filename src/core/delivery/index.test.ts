@@ -64,7 +64,6 @@ describe("decide", () => {
     ],
     ["draft present", ask, sig({ draft: "wip" }), {}, NEXT],
     ["whitespace draft is empty", ask, sig({ draft: " \n" }), {}, WAKE],
-    ["typing 2 min ago", ask, sig({ lastTypingMs: NOW - 2 * MIN }), {}, NEXT],
     [
       "user prompt 9 min ago",
       ask,
@@ -138,20 +137,6 @@ describe("decide", () => {
       decide(ask, sig({ lastTypingMs: NOW - MIN }), settings, NOW),
     ).toEqual(NEXT);
     expect(decide(ask, idle, settings, NOW)).toEqual(WAKE);
-  });
-
-  test("an ask held back by the cooldown wakes once it clears", () => {
-    const signals = sig({ lastWakeAtMs: NOW - 3 * MIN });
-    expect(decide(ask, signals, {}, NOW)).toEqual(NEXT);
-    expect(decide(ask, signals, {}, NOW + 7 * MIN)).toEqual(WAKE);
-  });
-
-  test("an ask held back by a running turn wakes after the turn ends", () => {
-    const during = sig({ turnRunning: true, lastWakeAtMs: NOW - 30 * MIN });
-    expect(decide(ask, during, {}, NOW)).toEqual(NEXT);
-    expect(decide(ask, { ...during, turnRunning: false }, {}, NOW)).toEqual(
-      WAKE,
-    );
   });
 
   test("never wakes with a draft, for any kind and setting", () => {

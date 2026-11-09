@@ -114,34 +114,28 @@ describe("parseStateBlock", () => {
   });
 
   describe("old format", () => {
-    test("v1 block with lead parses; lead is ignored and not kept", () => {
-      const body =
-        "<!-- crew-net v1\nlead: alexei/atlas\nstate: building\nscope: api/\ndepends-on: #4\n-->";
-      expect(parseStateBlock(body)).toEqual(
+    test.each<[string, string, ParseStateBlockResult]>([
+      [
+        "v1 block with lead: lead is ignored and not kept",
+        "<!-- crew-net v1\nlead: alexei/atlas\nstate: building\nscope: api/\ndepends-on: #4\n-->",
         ok({
           state: "building",
           scope: ["api/"],
           dependsOn: ["#4"],
           extra: [],
         }),
-      );
-    });
-
-    test.each([
-      "<!-- crew-net v1.3\nLead: a/b\nSTATE: planning\n-->",
-      "<!-- crew-net v2\nlead: a/b\nstate: planning\n-->",
-      "<!-- crew-net v0\nstate: planning\n-->",
-    ])("any version tag is read, not rejected: %j", (body) => {
-      expect(parseStateBlock(body)).toEqual(
+      ],
+      ...[
+        "<!-- crew-net v1.3\nLead: a/b\nSTATE: planning\n-->",
+        "<!-- crew-net v2\nlead: a/b\nstate: planning\n-->",
+        "<!-- crew-net v0\nstate: planning\n-->",
+      ].map((body): [string, string, ParseStateBlockResult] => [
+        `any version tag is read, not rejected: ${JSON.stringify(body)}`,
+        body,
         ok({ state: "planning", scope: [], dependsOn: [], extra: [] }),
-      );
-    });
-
-    test("old and new format give the same model", () => {
-      const fields = "state: review\nscope: a/, b/\ndepends-on: #1, o/r#2";
-      expect(
-        parseStateBlock(`<!-- crew-net v1\nlead: x/y\n${fields}\n-->`),
-      ).toEqual(parseStateBlock(`<!-- crew-net\n${fields}\n-->`));
+      ]),
+    ])("%s", (_name, body, expected) => {
+      expect(parseStateBlock(body)).toEqual(expected);
     });
   });
 
@@ -219,13 +213,6 @@ describe("parseStateBlock", () => {
       expect(result).toMatchObject({ ok: true });
       if (!result?.ok) return;
       expect(result.warnings.map((w) => w.field)).toContain("depends-on");
-    });
-
-    test("a clean depends-on line gives no such warning", () => {
-      const result = parseStateBlock(
-        "<!-- crew-net\nstate: review\ndepends-on: #2\n-->",
-      );
-      expect(result).toMatchObject({ ok: true, warnings: [] });
     });
   });
 

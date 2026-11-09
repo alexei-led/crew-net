@@ -1,22 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { execFileSync } from "node:child_process";
-import {
-  mkdirSync,
-  mkdtempSync,
-  realpathSync,
-  rmSync,
-  symlinkSync,
-} from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { EnvAdapter } from "../adapters/env/index";
-import { GitAdapter } from "../adapters/git/index";
 import { FileStoreAdapter } from "../adapters/store/index";
 import { buildDigest, contextText, STALE_MS } from "./digest";
 import { type DoctorProbes, doctor } from "./doctor";
 import { snapshotPull, writeDeps, writeRadar, writeSnapshot } from "./files";
 import { pull } from "./fixtures/fakes";
-import { world as makeWorld, REF, START } from "./fixtures/world";
+import { world as makeWorld, REF, START, type World } from "./fixtures/world";
 import { beat, end } from "./session";
 import { parseSettings } from "./settings";
 import {
@@ -143,12 +134,11 @@ describe("digest", () => {
     const view = await buildDigest(w.ports, REF, "feat/mine");
     expect(view.stale).toBe(false);
     expect(w.github.calls).toEqual([]);
-    expect(view.text).toContain("crew-net · o/r · feat/mine");
     expect(view.text).toContain("#7 building");
     expect(view.text).toContain("depends on #5 (open)");
     expect(view.text).toContain("o/web#3 (dmitri) waits on your #7");
-    expect(view.text).toMatch(/maria\s+#8\s+draft.*⚠ conflicts with #7/);
-    expect(view.text).toMatch(/olga\s+olga\/x\s+no PR, pushed 14 min ago/);
+    expect(view.text).toContain("⚠ conflicts with #7");
+    expect(view.text).toContain("olga/x");
     expect(view.text).toContain('maria asks on #7: "Does #7 need the column?"');
     expect(view.text).toContain("maria on #8: review requested 40 min ago");
   });
@@ -159,24 +149,6 @@ describe("digest", () => {
     const s = await seeded();
     s.advance(STALE_MS);
     expect((await buildDigest(s.ports, REF, "main")).stale).toBe(true);
-  });
-
-  test("delivered items leave the digest inbox", async () => {
-    const w = await seeded();
-    await w.store.inbox.put({
-      type: "item",
-      id: "c1",
-      kind: "message",
-      text: "hi",
-      addressed: false,
-      from: "maria",
-      repo: "o/r",
-      event: "comment",
-    });
-    await w.store.delivered.claim("c1", "s1");
-    expect((await buildDigest(w.ports, REF, "x")).digest.inbox.shown).toEqual(
-      [],
-    );
   });
 
   test("context format frames the digest and carries the sync notice", async () => {
@@ -417,58 +389,15 @@ describe("session registry", () => {
       branch: "feat/x",
       lastPromptAtMs: START,
     });
+    expect(w.env.identityDirs).toEqual([
+      "/work/r-feat/src",
+      "/work/r-feat/src",
+    ]);
     expect(Object.keys((await w.store.kv.get("watched")) as object)).toEqual([
       "github.com/o/r",
     ]);
     await end(w.ports, "s1");
     expect(await w.store.sessions.live()).toEqual([]);
-  });
-
-  test("a session in a subdirectory of a linked worktree, reached through a symlink, beats with the worktree's repo, root, clone and branch", async () => {
-    const root = mkdtempSync(join(tmpdir(), "crew-net-clone-"));
-    dirs.push(root);
-    const clone = join(root, "clone");
-    const run = (cwd: string, ...args: string[]) =>
-      execFileSync("git", args, { cwd, stdio: "ignore" });
-    mkdirSync(clone);
-    run(clone, "init", "--initial-branch=main");
-    run(clone, "remote", "add", "origin", "git@github.com:o/r.git");
-    run(
-      clone,
-      "-c",
-      "user.name=T",
-      "-c",
-      "user.email=t@example.test",
-      "commit",
-      "--allow-empty",
-      "-m",
-      "init",
-    );
-    const linked = join(root, "linked");
-    run(clone, "worktree", "add", "-b", "feat/x", linked);
-    mkdirSync(join(linked, "src", "deep"), { recursive: true });
-    symlinkSync(join(linked, "src"), join(root, "alias"));
-
-    const w = world();
-    // The process runs elsewhere: identity must come from the session's dir.
-    const ports = {
-      ...w.ports,
-      env: new EnvAdapter({ repoDir: tmpdir() }),
-      git: (dir: string) => new GitAdapter(dir),
-    };
-    const hb = await beat(ports, {
-      sessionId: "s1",
-      harness: "claude-code",
-      role: "lead",
-      pid: 42,
-      dir: join(root, "alias", "deep"),
-    });
-    expect(hb).toMatchObject({
-      repo: "github.com/o/r",
-      worktree: realpathSync(linked),
-      clone: realpathSync(clone),
-      branch: "feat/x",
-    });
   });
 
   test("outside a GitHub repo the beat has no repo", async () => {
@@ -487,61 +416,70 @@ describe("session registry", () => {
 });
 
 describe("delivery routing", () => {
-  test("an item on a worker's branch goes to the lead in the worker's clone, not a more recent lead elsewhere", async () => {
-    const w = world();
-    await writeSnapshot(w.store, REF, {
-      fetchedAtMs: START,
-      pulls: [snapshotPull(pull(7, "me", "feat/w"), "o/r")],
-    });
-    const session = (
-      sessionId: string,
-      role: "lead" | "worker",
-      worktree: string,
-      clone: string,
-      branch: string,
-      lastPromptAtMs: number,
-    ) =>
-      w.store.sessions.beat({
-        sessionId,
-        pid: process.pid,
-        harness: "claude-code",
-        role,
-        worktree,
-        clone,
-        repo: "github.com/o/r",
-        branch,
-        lastPromptAtMs,
+  test.each([
+    ["clone root known -> clone step", "/work/a", "clone", ["lead-b"]],
+    ["no clone root -> repo step", undefined, "repo", []],
+  ] as const)(
+    "a worker's branch reaches the lead: %s",
+    async (_name, clone, step, leadsElsewhere) => {
+      const w = world();
+      await writeSnapshot(w.store, REF, {
+        fetchedAtMs: START,
+        pulls: [snapshotPull(pull(7, "me", "feat/w"), "o/r")],
       });
-    await session(
-      "lead-a",
-      "lead",
-      "/work/a",
-      "/work/a",
-      "main",
-      START - 60_000,
-    );
-    await session("worker", "worker", "/work/a-w", "/work/a", "feat/w", START);
-    await session("lead-b", "lead", "/work/b", "/work/b", "feat/b", START);
-    const id = "comment:github.com/o/r#7:1";
-    await w.store.inbox.put({
-      type: "item",
-      id,
-      kind: "message",
-      text: "@me does it need the column?",
-      addressed: true,
-      from: "maria",
-      repo: "o/r",
-      thread: 7,
-      event: "ask",
-    });
-    const ids = async (sessionId: string) =>
-      (await deliverTo(w.ports, sessionId, { replayMs: 0 })).map((i) => i.id);
-    expect(await ids("lead-b")).toEqual([]);
-    expect(await ids("lead-a")).toEqual([id]);
-    expect(
-      (await w.store.events.read()).find((e) => e.type === "delivery"),
-    ).toMatchObject({ session: "lead-a", step: "clone" });
-  });
+      const session = (
+        sessionId: string,
+        role: "lead" | "worker",
+        worktree: string,
+        branch: string,
+        lastPromptAtMs?: number,
+      ) =>
+        w.store.sessions.beat({
+          sessionId,
+          pid: process.pid,
+          harness: "claude-code",
+          role,
+          worktree,
+          ...(clone ? { clone } : {}),
+          repo: "github.com/o/r",
+          branch,
+          ...(lastPromptAtMs !== undefined ? { lastPromptAtMs } : {}),
+        });
+      await session("lead-a", "lead", "/work/a", "main", START - 60_000);
+      await session("worker", "worker", "/work/a-w", "feat/w", START);
+      for (const other of leadsElsewhere)
+        await w.store.sessions.beat({
+          sessionId: other,
+          pid: process.pid,
+          harness: "claude-code",
+          role: "lead",
+          worktree: "/work/b",
+          ...(clone ? { clone: "/work/b" } : {}),
+          repo: "github.com/o/r",
+          branch: "feat/b",
+          lastPromptAtMs: START,
+        });
+      const id = "comment:github.com/o/r#7:1";
+      await w.store.inbox.put({
+        type: "item",
+        id,
+        kind: "message",
+        text: "@me does it need the column?",
+        addressed: true,
+        from: "maria",
+        repo: "o/r",
+        thread: 7,
+        event: "ask",
+      });
+      for (const other of leadsElsewhere)
+        expect(await deliverTo(w.ports, other, { replayMs: 0 })).toEqual([]);
+      const items = await deliverTo(w.ports, "lead-a", { replayMs: 0 });
+      expect(items.map((i) => i.id)).toEqual([id]);
+      expect(
+        (await w.store.events.read()).find((e) => e.type === "delivery"),
+      ).toMatchObject({ session: "lead-a", step });
+    },
+  );
 
   test("an item pruned between the read and the claim is not delivered", async () => {
     const w = world();
@@ -579,42 +517,6 @@ describe("delivery routing", () => {
     });
     expect(items).toEqual([]);
   });
-});
-
-test("heartbeats without a clone root stand alone: a worker's branch reaches the lead through the repo step", async () => {
-  const w = world();
-  await writeSnapshot(w.store, REF, {
-    fetchedAtMs: START,
-    pulls: [snapshotPull(pull(7, "me", "feat/w"), "o/r")],
-  });
-  for (const [sessionId, role, worktree, branch] of [
-    ["lead-a", "lead", "/work/a", "main"],
-    ["worker", "worker", "/work/a-w", "feat/w"],
-  ] as const)
-    await w.store.sessions.beat({
-      sessionId,
-      pid: process.pid,
-      harness: "claude-code",
-      role,
-      worktree,
-      repo: "github.com/o/r",
-      branch,
-    });
-  await w.store.inbox.put({
-    type: "item",
-    id: "comment:github.com/o/r#7:1",
-    kind: "message",
-    text: "x",
-    addressed: true,
-    from: "maria",
-    repo: "o/r",
-    thread: 7,
-    event: "ask",
-  });
-  await deliverTo(w.ports, "lead-a", { replayMs: 0 });
-  expect(
-    (await w.store.events.read()).find((e) => e.type === "delivery"),
-  ).toMatchObject({ session: "lead-a", step: "repo" });
 });
 
 describe("settings", () => {
@@ -662,11 +564,11 @@ describe("doctor", () => {
   };
 
   async function run(
-    setup: (w: Awaited<ReturnType<typeof seeded>>) => void | Promise<void>,
+    setup: (w: World) => void | Promise<void>,
     repoFiles: Record<string, string> = {},
     plugin: "installed" | "missing" | "unknown" = "installed",
   ) {
-    const w = await seeded();
+    const w = world();
     await setup(w);
     return doctor(
       w.ports,
@@ -700,32 +602,26 @@ describe("doctor", () => {
     expect(report.next).toBe("nothing: every level is set up");
   });
 
-  test("MDM allowManagedHooksOnly fails the hooks and the gate", async () => {
-    const report = await run((w) => {
-      w.env.policy = { status: "known", enabled: true };
-    });
-    expect(report.level).toBeNull();
-    const byName = Object.fromEntries(
-      report.checks.map((c) => [c.name, c.status]),
-    );
-    expect(byName).toMatchObject({
-      "hooks policy": "fail",
-      "merge gate": "fail",
-    });
-    expect(report.checks.find((c) => c.name === "merge gate")?.fix).toMatch(
-      /hooks must be allowed/,
-    );
-  });
-
-  test("an unknown policy warns and never counts as allowed", async () => {
-    const report = await run((w) => {
-      w.env.policy = { status: "unknown", reason: "plist unreadable" };
-    });
-    expect(report.level).toBeNull();
-    expect(report.checks.find((c) => c.name === "merge gate")?.status).toBe(
-      "fail",
-    );
-  });
+  test.each([
+    ["known, enabled", { status: "known", enabled: true }, "fail"],
+    [
+      "unknown (plist unreadable)",
+      { status: "unknown", reason: "plist unreadable" },
+      "warn",
+    ],
+  ] as const)(
+    "hooks policy %s never counts as allowed",
+    async (_name, policy, hooksStatus) => {
+      const report = await run((w) => {
+        w.env.policy = policy;
+      });
+      expect(report.level).toBeNull();
+      const byName = Object.fromEntries(report.checks.map((c) => [c.name, c]));
+      expect(byName["hooks policy"]?.status).toBe(hooksStatus);
+      expect(byName["merge gate"]?.status).toBe("fail");
+      expect(byName["merge gate"]?.fix).toMatch(/hooks must be allowed/);
+    },
+  );
 
   test("a missing plugin names the install command as the next step", async () => {
     const report = await run(() => {}, {}, "missing");

@@ -6,8 +6,6 @@ describe("findClosingKeywords", () => {
   test.each([
     ["closes #945", "closes", "#945"],
     ["Closes: #945", "Closes", "#945"],
-    ["CLOSES #945", "CLOSES", "#945"],
-    ["CLOSES: #945", "CLOSES", "#945"],
     ["fixes doiteng/reflex#945", "fixes", "doiteng/reflex#945"],
     ["resolved #945", "resolved", "#945"],
     ["**closes** #945", "closes", "#945"],

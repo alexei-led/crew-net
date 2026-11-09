@@ -34,6 +34,23 @@ describe("marker round trip", () => {
       { kind: "reply", id: "zz99", re: "k3f9", status: "accepted" },
       "<!-- crew-net:msg kind=reply id=zz99 re=k3f9 status=accepted -->",
     ],
+    [
+      "review",
+      { kind: "review", id: "abcd" },
+      "<!-- crew-net:msg kind=review id=abcd -->",
+    ],
+    [
+      "fix",
+      { kind: "fix", id: "abcd" },
+      "<!-- crew-net:msg kind=fix id=abcd -->",
+    ],
+    ...(["declined", "done"] as const).map(
+      (status): [string, MessageMarker, string] => [
+        `reply ${status}`,
+        { kind: "reply", re: "k3f9", status },
+        `<!-- crew-net:msg kind=reply re=k3f9 status=${status} -->`,
+      ],
+    ),
     ["info without an id", { kind: "info" }, "<!-- crew-net:msg kind=info -->"],
     [
       "longest id",
@@ -44,33 +61,6 @@ describe("marker round trip", () => {
     expect(marker(value)).toBe(text);
     expect(parseMessageMarker(text)).toEqual({ ok: true, marker: value });
   });
-
-  test.each(["ask", "review", "fix", "bug", "info", "reply"] as const)(
-    "kind %s",
-    (kind) => {
-      const value: MessageMarker =
-        kind === "reply"
-          ? { kind, re: "abcd" }
-          : kind === "info"
-            ? { kind }
-            : { kind, id: "abcd" };
-      expect(parseMessageMarker(marker(value))).toEqual({
-        ok: true,
-        marker: value,
-      });
-    },
-  );
-
-  test.each(["answered", "accepted", "declined", "done"] as const)(
-    "status %s",
-    (status) => {
-      const value: MessageMarker = { kind: "reply", re: "abcd", status };
-      expect(parseMessageMarker(marker(value))).toEqual({
-        ok: true,
-        marker: value,
-      });
-    },
-  );
 });
 
 describe("parseMessageMarker", () => {

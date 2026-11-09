@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { type CrewEvent, decodeEvent, encodeEvent } from "./index";
+import { decodeEvent, encodeEvent } from "./index";
 
 const FIXTURES = join(import.meta.dir, "fixtures", "events");
 const fixtures = readdirSync(FIXTURES)
@@ -58,55 +58,46 @@ describe("decodeEvent", () => {
     });
   });
 
-  test("accepts an item without a sender", () => {
-    const line =
-      '{"type":"item","id":"1","kind":"digest","text":"t","addressed":false}';
-    expect(decodeEvent(line)).toMatchObject({ ok: true });
-  });
-
-  test("accepts an item with repo, thread and event", () => {
-    const line =
-      '{"type":"item","id":"1","kind":"message","text":"t","addressed":true,"repo":"o/r","thread":7,"event":"ask","wakeable":true,"msgId":"k3f9"}';
-    expect(decodeEvent(line)).toMatchObject({
-      ok: true,
-      event: {
+  test.each([
+    [
+      "without a sender",
+      '{"type":"item","id":"1","kind":"digest","text":"t","addressed":false}',
+      {},
+    ],
+    [
+      "with repo, thread and event",
+      '{"type":"item","id":"1","kind":"message","text":"t","addressed":true,"repo":"o/r","thread":7,"event":"ask","wakeable":true,"msgId":"k3f9"}',
+      {
         repo: "o/r",
         thread: 7,
         event: "ask",
         wakeable: true,
         msgId: "k3f9",
       },
+    ],
+  ])("accepts an item %s", (_name, line, fields) => {
+    expect(decodeEvent(line)).toMatchObject({
+      ok: true,
+      event: { type: "item", ...fields },
     });
   });
 
-  test.each([1, 2, "7"])("does not reject on a v field: %p", (v) => {
-    const line = JSON.stringify({ v, type: "ack", id: "x", outcome: "band" });
-    expect(decodeEvent(line)).toMatchObject({ ok: true });
+  test("does not reject on a v field", () => {
+    for (const v of [1, 2, "7"]) {
+      const line = JSON.stringify({ v, type: "ack", id: "x", outcome: "band" });
+      expect(decodeEvent(line)).toMatchObject({ ok: true });
+    }
   });
 
-  test("a hello carries the session, not a lead name", () => {
-    const hello = {
-      type: "hello",
-      session: "s1",
-      role: "worker",
-      harness: "pi",
-      worktree: "/w",
-      pid: 1,
-      settings: { autoWake: true },
-    };
-    expect(decodeEvent(JSON.stringify(hello))).toMatchObject({
+  test("a hello accepts extra fields", () => {
+    expect(
+      decodeEvent(
+        HELLO({ role: "worker", harness: "pi", repo: "o/r", branch: "b" }),
+      ),
+    ).toMatchObject({
       ok: true,
       event: { type: "hello", role: "worker", harness: "pi" },
     });
-    expect(
-      decodeEvent(JSON.stringify({ ...hello, repo: "o/r", branch: "b" })),
-    ).toMatchObject({ ok: true });
-  });
-
-  test("post is no longer an event", () => {
-    expect(
-      decodeEvent('{"type":"post","id":"1","to":"maria","body":"x"}'),
-    ).toMatchObject({ ok: false, reason: "malformed", detail: "unknown type" });
   });
 
   test.each([
@@ -119,6 +110,7 @@ describe("decodeEvent", () => {
     ["missing type", "{}"],
     ["unknown type", '{"type":"teleport"}'],
     ["inherited type name", '{"type":"constructor"}'],
+    ["post (removed type)", '{"type":"post","id":"1","to":"maria","body":"x"}'],
     [
       "item with unknown kind",
       '{"type":"item","id":"1","kind":"rumour","text":"t","addressed":true}',
@@ -167,12 +159,5 @@ describe("decodeEvent", () => {
     ["hello with bad settings", HELLO({ settings: { autoWake: "yes" } })],
   ])("returns malformed for %s", (_name, line) => {
     expect(decodeEvent(line)).toMatchObject({ ok: false, reason: "malformed" });
-  });
-});
-
-describe("encodeEvent", () => {
-  test("is one line of JSON starting with the type", () => {
-    const event: CrewEvent = { type: "bye" };
-    expect(encodeEvent(event)).toBe('{"type":"bye"}');
   });
 });

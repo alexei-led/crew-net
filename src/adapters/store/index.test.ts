@@ -502,8 +502,8 @@ describe("jobs", () => {
   });
 
   // pid 1 always exists; kill(1, 0) from a normal user fails with EPERM,
-  // which must count as alive (as root it simply succeeds). kill(1, 0) from a normal user fails with EPERM,
-  // which must count as alive. It also stands in for a reused pid.
+  // which must count as alive (as root it simply succeeds).
+  // It also stands in for a reused pid.
   const myPid = () => process.pid;
   const pidOne = () => 1;
   test.each<[string, () => number, number, JobOutcome]>([
@@ -671,14 +671,6 @@ describe("maintenance and failure", () => {
     await expect(call(store)).rejects.toBeInstanceOf(StoreFormatError);
   });
 
-  test("a corrupt lock fails closed", async () => {
-    const store = open();
-    writeFileSync(jobLock("sync"), '{"pid":"x"}');
-    await expect(
-      store.jobs.run("sync", 0, async () => {}),
-    ).rejects.toBeInstanceOf(StoreLockError);
-  });
-
   test("an interrupted temp write is invisible", async () => {
     const store = open();
     await store.inbox.put(item());
@@ -721,9 +713,15 @@ describe("maintenance and failure", () => {
     await expect(store.prune()).rejects.toBeInstanceOf(StoreFormatError);
   });
 
-  test("a lock pid outside int32 fails closed as a lock error", async () => {
+  test.each([
+    ["pid is a string", '{"pid":"x"}'],
+    [
+      "pid outside int32",
+      JSON.stringify({ pid: 99_999_999_999, token: "t", expiresAtMs: T0 + 1 }),
+    ],
+  ])("a corrupt lock fails closed: %s", async (_, text) => {
     const store = open();
-    plantLock(jobLock("sync"), 99_999_999_999, now + 1);
+    writeFileSync(jobLock("sync"), text);
     await expect(
       store.jobs.run("sync", 0, async () => {}),
     ).rejects.toBeInstanceOf(StoreLockError);

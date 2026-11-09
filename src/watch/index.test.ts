@@ -6,7 +6,7 @@ import { FileStoreAdapter } from "../adapters/store/index";
 import { pull } from "../app/fixtures/fakes";
 import { world as makeWorld } from "../app/fixtures/world";
 import { Watcher } from "../app/watch";
-import type { HelloEvent, ItemEvent } from "../protocol/index";
+import type { HelloEvent, HelperEvent, ItemEvent } from "../protocol/index";
 import { runWatch, sendToWatch } from "./index";
 
 const dirs: string[] = [];
@@ -51,9 +51,10 @@ class Stdin implements AsyncIterable<string> {
 }
 
 async function until(check: () => boolean | Promise<boolean>): Promise<void> {
-  for (let i = 0; i < 200; i++) {
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
     if (await check()) return;
-    await new Promise((r) => setTimeout(r, 5));
+    await new Promise((r) => setImmediate(r));
   }
   throw new Error("condition not reached");
 }
@@ -100,7 +101,7 @@ function start(
       parentAlive: alive,
       stopped,
     },
-    20,
+    5,
   );
   let finished = false;
   void done.then(() => {
@@ -122,13 +123,18 @@ async function twoSessions() {
 describe("watch", () => {
   test("ready, then hello; stdin EOF after hello is normal and it runs until a stop signal", async () => {
     const w = world();
-    const watch = start(w, "s1");
+    let parentChecks = 0;
+    const watch = start(w, "s1", () => {
+      parentChecks++;
+      return true;
+    });
     await until(() => watch.out.length > 0);
     expect(watch.out[0]).toEqual({ type: "ready" });
     watch.stdin.push(hello("s1", "/work/a"));
     watch.stdin.close();
     await until(() => watch.out.some((e) => e.type === "status"));
-    await new Promise((r) => setTimeout(r, 80));
+    const checksAtEof = parentChecks;
+    await until(() => parentChecks >= checksAtEof + 3);
     expect(watch.finished()).toBe(false);
     expect((await w.store.sessions.live()).map((s) => s.sessionId)).toEqual([
       "s1",
@@ -173,37 +179,37 @@ describe("watch", () => {
 
   test("an item goes to the session with its PR branch checked out, exactly once", async () => {
     const w = await twoSessions();
-    const a = start(w, "sa");
-    const b = start(w, "sb");
-    a.stdin.push(hello("sa", "/work/a"));
-    b.stdin.push(hello("sb", "/work/b"));
-    await until(async () => (await w.store.sessions.live()).length === 2);
+    const aOut: HelperEvent[] = [];
+    const bOut: HelperEvent[] = [];
+    const a = new Watcher(w.ports, "sa", (e) => aOut.push(e));
+    const b = new Watcher(w.ports, "sb", (e) => bOut.push(e));
+    await a.start(hello("sa", "/work/a"));
+    await b.start(hello("sb", "/work/b"));
     await w.store.inbox.put(ask);
-    await until(() => b.out.some((e) => e.type === "item"));
-    await new Promise((r) => setTimeout(r, 80));
-    expect(a.out.filter((e) => e.type === "item")).toEqual([]);
-    expect(b.out.filter((e) => e.type === "item") as unknown[]).toEqual([
+    await a.tick();
+    await b.tick();
+    await a.tick();
+    await b.tick();
+    expect(aOut.filter((e) => e.type === "item")).toEqual([]);
+    expect(bOut.filter((e) => e.type === "item")).toEqual([
       { ...ask, wakeable: true, ownPr: true },
     ]);
     expect((await w.store.delivered.get(ask.id))?.sessionId).toBe("sb");
-    a.signal();
-    b.signal();
-    await Promise.all([a.done, b.done]);
   });
 
   test("a restarted watcher replays its recent claims without a second delivery", async () => {
     const w = await twoSessions();
     await w.store.inbox.put(ask);
-    const first = start(w, "sb");
-    first.stdin.push(hello("sb", "/work/b"));
-    await until(() => first.out.some((e) => e.type === "item"));
-    first.signal();
-    await first.done;
-    const second = start(w, "sb");
-    second.stdin.push(hello("sb", "/work/b"));
-    await until(() => second.out.some((e) => e.type === "item"));
-    second.signal();
-    await second.done;
+    const firstOut: HelperEvent[] = [];
+    await new Watcher(w.ports, "sb", (e) => firstOut.push(e)).start(
+      hello("sb", "/work/b"),
+    );
+    const secondOut: HelperEvent[] = [];
+    await new Watcher(w.ports, "sb", (e) => secondOut.push(e)).start(
+      hello("sb", "/work/b"),
+    );
+    expect(firstOut.filter((e) => e.type === "item")).toHaveLength(1);
+    expect(secondOut.filter((e) => e.type === "item")).toHaveLength(1);
     const deliveries = (await w.store.events.read()).filter(
       (e) => e.type === "delivery",
     );

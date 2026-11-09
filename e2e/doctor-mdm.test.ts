@@ -9,7 +9,7 @@ import { doctor, renderDoctor } from "../src/app/doctor";
 import type { AppPorts } from "../src/app/ports";
 import { DEFAULT_SETTINGS } from "../src/app/settings";
 
-// Scenario 8 of docs/plan.md: `doctor` flags an MDM `allowManagedHooksOnly`.
+// Scenario 8a in e2e/README.md: `doctor` flags an MDM `allowManagedHooksOnly`.
 // The CLI reads the policy only from system paths, which need root to plant,
 // so this plants a real binary plist and reads it with the real plutil.
 

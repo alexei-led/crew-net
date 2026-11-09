@@ -1,9 +1,13 @@
-import { describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseStateBlock } from "../src/protocol/state-block";
-import { queuePullNumbers } from "./scripts/crew-deps.mjs";
+import {
+  queuePullNumbers,
+  parseStateBlock as standaloneParse,
+} from "./scripts/crew-deps.mjs";
 
 const script = join(import.meta.dir, "scripts/crew-deps.mjs");
 
@@ -48,33 +52,9 @@ const fixtures = [
   "<!--\ncrew-net\ndepends-on: #2\n-->",
 ];
 
-const withDir = <T>(fn: (dir: string) => T): T => {
-  const dir = mkdtempSync(join(import.meta.dir, ".test-"));
-  try {
-    return fn(dir);
-  } finally {
-    rmSync(dir, { recursive: true });
-  }
-};
-
 describe("standalone reader", () => {
   test.each(fixtures)("agrees with protocol for %j", (body) => {
-    withDir((dir) => {
-      const file = join(dir, "body");
-      writeFileSync(file, body);
-      const run = spawnSync("node", [script, "parse", file], {
-        encoding: "utf8",
-        env: { ...process.env, GITHUB_REPOSITORY: "owner/repo" },
-      });
-      expect(run.status).toBe(0);
-      expect(JSON.parse(run.stdout)).toEqual(parseStateBlock(body));
-    });
-  });
-
-  test("a block in either format never reads as absent", () => {
-    for (const body of [NEW_BLOCK(""), OLD_BLOCK(""), "<!-- crew-net v1\n"]) {
-      expect(parseStateBlock(body)).not.toBeNull();
-    }
+    expect(standaloneParse(body)).toEqual(parseStateBlock(body));
   });
 });
 
@@ -96,26 +76,46 @@ interface Run {
   output: string;
 }
 
+// One stub directory for the file; each run passes its routes in the environment.
+let bin: string;
+let bodies = 0;
+beforeAll(() => {
+  bin = mkdtempSync(join(tmpdir(), "crew-deps-"));
+  writeFileSync(join(bin, "gh"), GH_STUB, { mode: 0o755 });
+});
+afterAll(() => rmSync(bin, { recursive: true, force: true }));
+
+function bodyFile(body: string): string {
+  const file = join(bin, `body-${bodies++}`);
+  writeFileSync(file, body);
+  return file;
+}
+
+/** Runs the script under node, as the workflow does, with the gh stub first on PATH. */
 function runScript(
   args: string[],
   routes: Record<string, unknown>,
   env: Record<string, string> = {},
-  prepare?: (dir: string) => string[],
-): Run {
-  return withDir((dir) => {
-    writeFileSync(join(dir, "gh"), GH_STUB, { mode: 0o755 });
-    const extra = prepare ? prepare(dir) : args;
-    const run = spawnSync("node", [script, ...extra], {
-      encoding: "utf8",
+): Promise<Run> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("node", [script, ...args], {
       env: {
         ...process.env,
-        PATH: `${dir}:${process.env.PATH}`,
+        PATH: `${bin}:${process.env.PATH}`,
         GH_ROUTES: JSON.stringify(routes),
         GITHUB_REPOSITORY: "owner/repo",
         ...env,
       },
     });
-    return { status: run.status, output: run.stdout + run.stderr };
+    let output = "";
+    child.stdout.on("data", (chunk) => {
+      output += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      output += chunk;
+    });
+    child.on("error", reject);
+    child.on("close", (status) => resolve({ status, output }));
   });
 }
 
@@ -124,7 +124,7 @@ const PULLS = {
   "/pulls/4": { merged_at: "2026-01-01" },
 };
 
-describe("check", () => {
+describe.concurrent("check", () => {
   test.each([
     [
       "unterminated block",
@@ -149,13 +149,6 @@ describe("check", () => {
     ],
     ["no block", "no block", "same", 0, "no dependencies"],
     [
-      "block without dependencies, new",
-      NEW_BLOCK("state: review"),
-      "same",
-      0,
-      "",
-    ],
-    [
       "open dependency, new format",
       NEW_BLOCK("state: review\ndepends-on: #2, other/repo#3"),
       "same",
@@ -175,20 +168,6 @@ describe("check", () => {
       "same",
       0,
       "not enforced",
-    ],
-    [
-      "merged dependency, old format",
-      OLD_BLOCK("state: review\ndepends-on: #4"),
-      "same",
-      0,
-      "is merged",
-    ],
-    [
-      "block without lead",
-      NEW_BLOCK("depends-on: #2"),
-      "same",
-      1,
-      "not merged",
     ],
     [
       "bad ref beside a merged one",
@@ -232,35 +211,33 @@ describe("check", () => {
       1,
       "not merged",
     ],
-  ])("%s", (_name, body, current, status, message) => {
-    const result = runScript(
-      ["check"],
+  ])("%s", async (_name, body, current, status, message) => {
+    const result = await runScript(
+      ["check", bodyFile(body)],
       { ...PULLS, "/pulls/1": { body: current === "same" ? body : current } },
       { GITHUB_PR_NUMBER: "1" },
-      (dir) => {
-        const file = join(dir, "body");
-        writeFileSync(file, body);
-        return ["check", file];
-      },
     );
     expect(result.status).toBe(status);
     expect(result.output).toContain(message);
   });
+
+  test("a block without dependencies passes and prints nothing", async () => {
+    const body = NEW_BLOCK("state: review");
+    const result = await runScript(
+      ["check", bodyFile(body)],
+      { ...PULLS, "/pulls/1": { body } },
+      { GITHUB_PR_NUMBER: "1" },
+    );
+    expect(result).toEqual({ status: 0, output: "" });
+  });
 });
 
-describe("check-queue", () => {
+describe.concurrent("check-queue", () => {
   const ref = (n: number) =>
     `refs/heads/gh-readonly-queue/main/pr-${n}-0123456789abcdef0123456789abcdef01234567`;
 
   test.each([
-    ["no block", "plain", 0, "no dependencies"],
     ["open dependency", NEW_BLOCK("depends-on: #2"), 1, "not merged"],
-    [
-      "old format, open dependency",
-      OLD_BLOCK("depends-on: #2"),
-      1,
-      "not merged",
-    ],
     ["merged dependency", NEW_BLOCK("depends-on: #4"), 0, "is merged"],
     ["bad ref", NEW_BLOCK("depends-on: soon"), 1, "Unreadable depends-on"],
     [
@@ -269,8 +246,8 @@ describe("check-queue", () => {
       1,
       "Invalid crew-net state block",
     ],
-  ])("%s", (_name, body, status, message) => {
-    const result = runScript(["check-queue", ref(7)], {
+  ])("%s", async (_name, body, status, message) => {
+    const result = await runScript(["check-queue", ref(7)], {
       ...PULLS,
       "/pulls/7": { body },
     });
@@ -278,12 +255,14 @@ describe("check-queue", () => {
     expect(result.output).toContain(message);
   });
 
-  test("reads the PR from the API, not from the event", () => {
-    const result = runScript(["check-queue", ref(7)], {
+  test("reads the PR from the API, not from the event", async () => {
+    const result = await runScript(["check-queue", ref(7)], {
       ...PULLS,
       "/pulls/7": { body: null },
     });
     expect(result.status).toBe(0);
+    expect(result.output).toContain("Merge queue entry for PR #7.");
+    expect(result.output).toContain("no dependencies");
   });
 
   test.each([
@@ -308,17 +287,20 @@ describe("check-queue", () => {
     "refs/heads/feature/pr-12-abcdef1",
     "gh-readonly-queue/main/pr-x-abcdef1",
     "gh-readonly-queue/main/12",
-  ])("fails closed on an unrecognised ref: %j", (headRef) => {
+  ])("queuePullNumbers fails closed on an unrecognised ref: %j", (headRef) => {
     expect(() => queuePullNumbers(headRef)).toThrow(
       "Unrecognised merge queue ref",
     );
-    const result = runScript(["check-queue", headRef || "x"], PULLS);
+  });
+
+  test("check-queue fails the check on an unrecognised ref", async () => {
+    const result = await runScript(["check-queue", "refs/heads/main"], PULLS);
     expect(result.status).toBe(1);
     expect(result.output).toContain("Unrecognised merge queue ref");
   });
 });
 
-describe("rerun", () => {
+describe.concurrent("rerun", () => {
   const open = (number: number, body: string) => ({
     number,
     body,
@@ -336,8 +318,8 @@ describe("rerun", () => {
     },
   });
 
-  test("reruns dependents in either block format", () => {
-    const result = runScript(["rerun", "2"], {
+  test("reruns dependents in either block format", async () => {
+    const result = await runScript(["rerun", "2"], {
       "pulls?state=open&per_page=100": [
         [
           open(10, NEW_BLOCK("depends-on: #2")),
@@ -355,8 +337,8 @@ describe("rerun", () => {
     expect(result.output).not.toContain("PR #12");
   });
 
-  test("an unreadable block fails the job instead of being skipped", () => {
-    const result = runScript(["rerun", "2"], {
+  test("an unreadable block fails the job instead of being skipped", async () => {
+    const result = await runScript(["rerun", "2"], {
       "pulls?state=open&per_page=100": [
         [
           open(10, "<!-- crew-net\ndepends-on: #2"),

@@ -47,6 +47,7 @@ comments.
 ## Results: release 0.1.0
 
 crew-net 0.1.0 on `main` after #21. Claude Code 2.1.319, macOS. Sandbox PRs #7 to #9.
+These runs found the bugs fixed in #18 to #21; each row says what the run saw.
 
 | #   | Scenario                                                     | Result | Note                                                                                 |
 | --- | ------------------------------------------------------------ | ------ | ------------------------------------------------------------------------------------ |
@@ -66,4 +67,4 @@ crew-net 0.1.0 on `main` after #21. Claude Code 2.1.319, macOS. Sandbox PRs #7 t
 
 `claude plugin test plugin` passes 33 tests. `make check` runs them. CI does not.
 
-Bugs found by these runs were fixed in #18 to #21. See the [changelog](../CHANGELOG.md).
+The [changelog](../CHANGELOG.md) lists the fixes.

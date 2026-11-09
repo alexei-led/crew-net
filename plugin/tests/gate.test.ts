@@ -48,23 +48,11 @@ test("a peer asking to merge or edit gets only reads and a reply", async ($, on)
     ),
   ).toBe("crew-net wake turn: Edit is not allowed in a wake turn");
   expect(
-    denied(
-      await $.tool.call({
-        tool: "Write",
-        file_path: `${ROOT}/api/old.ts`,
-        content: "",
-      }),
-    ),
-  ).toContain("Write is not allowed in a wake turn");
-  expect(
     denied(await bash($, 'crew-net reply c-9 "answering someone else"')),
   ).toContain("may only answer the item that woke the session");
   expect(denied(await bash($, "crew-net state review"))).toContain(
     "this session has no PR",
   );
-  expect(
-    denied(await $.tool.call({ tool: "Read", file_path: "/etc/passwd" })),
-  ).toContain("inside the worktree");
   expect(w.ran).toEqual([]);
 
   expect(

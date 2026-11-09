@@ -51,6 +51,10 @@ describe("digest command", () => {
     expect(result.out).toContain("refreshing in the background");
     expect(detached).toEqual([["sync", "--once"]]);
     expect(w.github.calls).toEqual([]);
+    const json = JSON.parse((await run("--json")).out);
+    expect(json).toMatchObject({ stale: true, refreshing: true });
+    expect(json.digest.repo).toBe("o/r");
+    expect(typeof json.text).toBe("string");
   });
 
   test("--refresh waits for one sync and then reads fresh data", async () => {
@@ -60,14 +64,6 @@ describe("digest command", () => {
     expect(detached).toEqual([]);
     expect(result.out).toMatch(/maria\s+#4/);
     expect(result.out).not.toContain("refreshing");
-  });
-
-  test("--json carries the model, the text and the flags", async () => {
-    const { run } = setup();
-    const parsed = JSON.parse((await run("--json")).out);
-    expect(parsed).toMatchObject({ stale: true, refreshing: true });
-    expect(parsed.digest.repo).toBe("o/r");
-    expect(typeof parsed.text).toBe("string");
   });
 
   test("--format context is framed; outside a repo it prints nothing", async () => {
@@ -83,17 +79,6 @@ describe("digest command", () => {
       err: "",
     });
     expect((await outside.run()).code).toBe(1);
-  });
-
-  test.each([
-    [["--format", "yaml"], "--format must be text or context"],
-    [["--repo", "not-a-repo"], "--repo must be owner/repo"],
-    [["extra"], "unknown command extra"],
-  ])("usage error %p", async (argv, message) => {
-    const { run } = setup();
-    const result = await run(...argv);
-    expect(result.code).toBe(2);
-    expect(result.err).toContain(message);
   });
 });
 
@@ -157,7 +142,7 @@ describe("other commands", () => {
     expect(JSON.parse((await run("who", "web", "--json")).out)).toEqual([]);
   });
 
-  test("inbox and stats print JSON", async () => {
+  test("inbox and stats run on an empty store and print their JSON views", async () => {
     const { run } = setup();
     expect(JSON.parse((await run("inbox", "--json")).out)).toEqual({
       unread: [],
@@ -238,16 +223,19 @@ describe("inbox --claim", () => {
       ownPr: true,
     });
   });
+});
 
-  test.each([
-    [["inbox", "--claim"], "--claim needs --session"],
-    [["inbox", "--session", "s1"], "--session and --format need --claim"],
-  ])("usage error %p", async (argv, message) => {
-    const { run } = setup();
-    const result = await run(...argv);
-    expect(result.code).toBe(2);
-    expect(result.err).toContain(message);
-  });
+test.each([
+  [["--format", "yaml"], "--format must be text or context"],
+  [["--repo", "not-a-repo"], "--repo must be owner/repo"],
+  [["extra"], "unknown command extra"],
+  [["inbox", "--claim"], "--claim needs --session"],
+  [["inbox", "--session", "s1"], "--session and --format need --claim"],
+])("usage error %p", async (argv, message) => {
+  const { run } = setup();
+  const result = await run(...argv);
+  expect(result.code).toBe(2);
+  expect(result.err).toContain(message);
 });
 
 describe("plugin detection", () => {

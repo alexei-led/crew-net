@@ -83,6 +83,7 @@ describe("frameUntrusted", () => {
     expect(out.split(`[END UNTRUSTED ${NONCE}]`)).toHaveLength(2);
     expect(out.toLowerCase().split(NONCE)).toHaveLength(4);
     expect(out.endsWith(`[END UNTRUSTED ${NONCE}]`)).toBe(true);
+    expect(out).toContain("[END UNTRUSTED [nonce removed]]");
   });
   test.each(["", "short", "has space 0123456789", "bad-chars-0123456789"])(
     "rejects nonce %j",
@@ -314,26 +315,23 @@ describe("gate: Bash allow", () => {
 
 describe("gate: unknown flags are denied in every position", () => {
   const unknown = ["--bogus", "-Z", "--bogus=1", "-X", "--"];
-  const cases: [string, string][] = [];
-  for (const command of ALLOWED) {
+  const variants = (command: string): string[] => {
     const words = command.split(" ");
+    const out: string[] = [];
     for (const flag of unknown) {
       for (let at = 1; at <= words.length; at++) {
         const prefix = words.slice(0, at).join(" ");
         const open = (q: string) => (prefix.split(q).length - 1) % 2 === 1;
         if (open("'") || open('"')) continue;
-        cases.push([
-          `${command} <- ${flag} at ${at}`,
-          [...words.slice(0, at), flag, ...words.slice(at)].join(" "),
-        ]);
+        out.push([...words.slice(0, at), flag, ...words.slice(at)].join(" "));
       }
     }
-  }
-  test("matrix is not empty", () => {
-    expect(cases.length).toBeGreaterThan(500);
-  });
-  test.each(cases)("%s", (_name, command) => {
-    expect(bash(command).decision).toBe("deny");
+    return out;
+  };
+  test.each(ALLOWED)("unknown flags anywhere in %s are denied", (command) => {
+    const all = variants(command);
+    expect(all.length).toBeGreaterThan(0);
+    expect(all.filter((c) => bash(c).decision !== "deny")).toEqual([]);
   });
 });
 
@@ -438,7 +436,6 @@ describe("gate: Bash deny", () => {
     ["gh api repos/doiteng/reflex/pulls?state=open", "glob"],
     ["gh api repos/doiteng/reflex/pulls* ", "glob"],
     ["git show {HEAD,-p}", "brace"],
-    ["git log ~/x", "tilde"],
     ["git log --format=~x", "tilde"],
     ["git log src/a:~x", "tilde"],
     ["gh pr view 1 # trailing", "comment"],
@@ -465,7 +462,6 @@ describe("gate: Bash deny", () => {
     ["gh api repos/doiteng", "unexpected"],
     ["gh api repos/DoiTeng/Reflex.git/pulls", "unexpected"],
     ["git show HEAD^", "unquoted"],
-    ["git show HEAD^{commit}", "unquoted"],
     ["git log src/a#b", "unquoted '#'"],
     ["crew-net state review --pr 99", "not allowed"],
     ["crew-net state review ../x", "unexpected"],

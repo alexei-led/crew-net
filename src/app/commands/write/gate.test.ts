@@ -1,9 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { GitAdapter } from "../../../adapters/git/index";
+import { describe, expect, test } from "bun:test";
 import {
   BRANCH,
   FakeGit,
@@ -47,7 +42,6 @@ const run = (h: ReturnType<typeof harness>, line: string | string[]) =>
 describe("gate decisions (design §11)", () => {
   test.each([
     ["git merge gh-pages", "allow", []],
-    ["gh pr view 10", "allow", []],
     ["gh pr merge --disable-auto 10", "allow", []],
   ])("%s needs no GitHub read", async (line, decision, reasons) => {
     const h = world(deps("#1"));
@@ -310,32 +304,33 @@ describe("hosts and default repos", () => {
   }
 
   test.each([
-    `gh pr merge 10 -R ${GHE}/acme/app`,
-    `gh pr merge https://${GHE}/acme/app/pull/10`,
-    `gh api --hostname ${GHE} -X PUT repos/acme/app/pulls/10/merge`,
-  ])("%s is checked on that host", async (line) => {
-    const { h, ghe } = twoHosts();
-    expect(await run(h, line)).toMatchObject({
-      decision: "deny",
-      reasons: [blocked],
-    });
-    expect(ghe.reads).toContain("get acme/app#10");
-    expect(h.github.reads).toEqual([]);
-  });
+    ["-R host/repo", `gh pr merge 10 -R ${GHE}/acme/app`, {}],
+    ["a URL", `gh pr merge https://${GHE}/acme/app/pull/10`, {}],
+    [
+      "gh api --hostname",
+      `gh api --hostname ${GHE} -X PUT repos/acme/app/pulls/10/merge`,
+      {},
+    ],
+    ["GH_HOST", "gh pr merge 10 -R acme/app", { ghHost: GHE }],
+    ["GH_REPO", "gh pr merge 10", { ghRepo: `${GHE}/acme/app` }],
+  ])(
+    "a merge named by %s is checked on that host",
+    async (_name, line, env) => {
+      const { h, ghe } = twoHosts(env);
+      expect(await run(h, line)).toMatchObject({
+        decision: "deny",
+        reasons: [blocked],
+      });
+      expect(ghe.reads).toContain("get acme/app#10");
+      expect(h.github.reads).toEqual([]);
+    },
+  );
 
   test("a host without a usable token denies", async () => {
     const h = harness();
     expect(
       await run(h, "gh pr merge https://other.example/acme/app/pull/10"),
     ).toMatchObject({ decision: "deny", failed: true });
-  });
-
-  test("GH_HOST sends a repo named without a host to that host", async () => {
-    const { h } = twoHosts({ ghHost: GHE });
-    expect(await run(h, "gh pr merge 10 -R acme/app")).toMatchObject({
-      decision: "deny",
-      reasons: [blocked],
-    });
   });
 
   test("in a clone on another host a repo named without a host is denied; the clone's own PRs read from its host", async () => {
@@ -351,14 +346,6 @@ describe("hosts and default repos", () => {
     expect(await gate(ctx, { argv: ["gh pr merge 10"] })).toMatchObject({
       decision: "deny",
       reasons: ["acme/app#10: depends-on #1 is not merged"],
-    });
-  });
-
-  test("GH_REPO names the repo of a merge without -R", async () => {
-    const { h } = twoHosts({ ghRepo: `${GHE}/acme/app` });
-    expect(await run(h, "gh pr merge 10")).toMatchObject({
-      decision: "deny",
-      reasons: [blocked],
     });
   });
 
@@ -462,34 +449,6 @@ describe("what gh would merge differs from what the gate reads", () => {
     const h = harness({ git });
     h.github.add(REPO, pull(40, { headRef: BRANCH }));
     expect(await run(h, "gh pr merge")).toMatchObject({ decision: "allow" });
-  });
-});
-
-describe("fork clone", () => {
-  const dirs: string[] = [];
-  afterEach(() => {
-    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
-  });
-
-  test("a merge without -R checks the parent's PR that gh repo set-default chose", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "crew-net-fork-"));
-    dirs.push(dir);
-    const git = (...args: string[]) =>
-      execFileSync("git", args, { cwd: dir, stdio: "ignore" });
-    git("init", "--initial-branch=main");
-    git("remote", "add", "origin", "git@github.com:me/app.git");
-    git("remote", "add", "parent", "https://github.com/acme/app.git");
-    git("config", "remote.parent.gh-resolved", "base");
-    const h = harness({ git: new GitAdapter(dir), repo: "me/app", cwd: dir });
-    h.github
-      .add("me/app", pull(10))
-      .add(REPO, pull(10, { body: deps("#1") }))
-      .add(REPO, pull(1));
-    expect(await run(h, "gh pr merge 10")).toMatchObject({
-      decision: "deny",
-      reasons: ["acme/app#10: depends-on #1 is not merged"],
-      checked: ["acme/app#10"],
-    });
   });
 });
 

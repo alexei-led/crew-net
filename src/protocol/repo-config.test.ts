@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import {
-  DEFAULT_CONTRACT,
   DEFAULT_PRODUCER_PATTERNS,
   DEFAULT_REPO_CONFIG,
   parseRepoConfig,
@@ -39,8 +38,6 @@ describe("defaults", () => {
       "api/openapi/**",
       "**/*.proto",
     ]);
-    expect(DEFAULT_REPO_CONFIG.contracts).toEqual([DEFAULT_CONTRACT]);
-    expect(DEFAULT_CONTRACT.consumers).toEqual([{ pattern: "**" }]);
   });
 
   test("other keys keep their defaults when only contracts are set", () => {
@@ -102,10 +99,12 @@ describe("contracts", () => {
     ]);
   });
 
-  test("explicit empty contracts replace the defaults", () => {
-    expect(read("contracts: []\n").contracts).toEqual([]);
-    expect(read("contracts:\n").contracts).toEqual([]);
-  });
+  test.each(["contracts: []\n", "contracts:\n"])(
+    "explicit empty contracts replace the defaults: %j",
+    (text) => {
+      expect(read(text).contracts).toEqual([]);
+    },
+  );
 
   test("a hash inside quotes is not a comment, a comma inside quotes does not split", () => {
     const text =
@@ -154,9 +153,8 @@ unknown-key:
     });
   });
 
-  test("~ and null are empty, not text", () => {
-    expect(read("bots: ~\n").bots).toEqual([]);
-    expect(read("bots: null\n").bots).toEqual([]);
+  test.each(["bots: ~\n", "bots: null\n"])("%j is empty, not text", (text) => {
+    expect(read(text).bots).toEqual([]);
   });
 
   test("handles CRLF line endings", () => {

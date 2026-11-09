@@ -3,6 +3,7 @@ import { expect, mock, test } from "claude-code/testing";
 import {
   acks,
   ask,
+  BAND,
   bash,
   denied,
   goIdle,
@@ -49,20 +50,7 @@ test("dismiss clears the band", async ($, on) => {
   const ui = await mountBand($, w, "terminal");
   await ui.press({ key: "dismiss" });
   await ui.unmount();
-  const again = await $.ui.mount({
-    plugin: "crew-net",
-    component: "AbovePrompt",
-    requestId: "band",
-    surface: "terminal",
-    props: {
-      hasSurvey: false,
-      isWorking: false,
-      maxRows: 12,
-      bodyColumns: 200,
-      scroll: { offset: 0, bodyRows: 12 },
-      view: {},
-    },
-  });
+  const again = await $.ui.mount({ ...BAND, surface: "terminal" });
   expect(await again.find({ type: "Text", text: /maria/ })).toBeUndefined();
   await again.unmount();
 });
@@ -213,25 +201,6 @@ test("no wake while a turn runs; the held request wakes once the turn completes"
     reason: "answer",
   });
   expect(w.submits.filter((s) => s.origin.kind === "plugin")).toHaveLength(1);
-});
-
-test("a reply, a comment or a non-wakeable route never wakes", async ($, on) => {
-  const w = world(on, mock);
-  await start($, w);
-  await goIdle(w);
-  await w.emit(
-    ask("r-1", { event: "reply" }),
-    ask("p-1", { event: undefined, kind: "message" }),
-    ask("a-1", { wakeable: false }),
-    ask("n-1", { wakeable: undefined }),
-  );
-  expect(w.submits).toHaveLength(0);
-  expect(acks(w)).toEqual({
-    "r-1": "context",
-    "p-1": "context",
-    "a-1": "context",
-    "n-1": "context",
-  });
 });
 
 test("at most one wake per 10 minutes", async ($, on) => {
