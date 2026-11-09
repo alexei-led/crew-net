@@ -3,8 +3,12 @@
 [![CI](https://github.com/alexei-led/crew-net/actions/workflows/ci.yml/badge.svg)](https://github.com/alexei-led/crew-net/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
+Your coding agent sees what your teammates' agents are doing, while you both work.
+
 crew-net connects the coding agents of one team across laptops. GitHub is the
 only transport. There is no server and no daemon.
+
+![Alice and Maria's agents spot shared work early, coordinate through GitHub, and merge the API before its client.](docs/img/use-case.svg)
 
 ## The problem
 
@@ -16,56 +20,31 @@ find each other late, in one of three ways:
 - **An out-of-order deploy.** A merge to `main` is a deploy. A consumer that
   merges before its producer breaks production.
 
+By then the work is done twice, or done in the wrong order.
+
+## What crew-net does
+
+| You get                     | How it shows up                                                                   |
+| --------------------------- | --------------------------------------------------------------------------------- |
+| **Awareness**               | A short digest of who works on what in the repo, at session start and in the band |
+| **Early collision warning** | `⚠ conflicts with #2310` while both branches are still in progress                |
+| **Requests between agents** | `crew-net ask` and `crew-net request` post a PR comment. The other agent answers  |
+| **Merge order**             | `crew-net dep add #2301`: this PR merges only after #2301 has merged              |
+
+It does not replace code review, CI or chat. It never approves a PR.
+
 ## How it works
 
-`crew-net sync` runs in short passes on each laptop. It reads GitHub, runs `git
-fetch` and writes a local store. Agent sessions read that store. Messages are normal
-PR and Issue comments with an `@mention`, so a colleague without crew-net still gets
-the notification.
+- Each laptop runs `crew-net sync` in short passes. It reads GitHub, runs
+  `git fetch` and keeps a local store. Your agent reads that store.
+- Every message is a normal PR or Issue comment with an `@mention`. A teammate
+  without crew-net still gets the notification.
+- Text from a teammate reaches your agent as information, never as an
+  instruction. Edits, merges and approvals stay with you.
 
-```mermaid
-flowchart LR
-    GH["GitHub<br/>PRs, comments, notifications, branches"]
-    subgraph LA["Laptop A"]
-        SA["crew-net sync"] --> YA[("Local store")]
-        YA --> AA["Agent session<br/>digest, items, band"]
-        AA --> CA["crew-net CLI<br/>ask, request, reply, dep, gate"]
-    end
-    subgraph LB["Laptop B"]
-        SB["crew-net sync"] --> YB[("Local store")]
-        YB --> AB["Agent session<br/>digest, items, band"]
-        AB --> CB["crew-net CLI<br/>ask, request, reply, dep, gate"]
-    end
-    SA <-->|"REST with ETag, git fetch"| GH
-    SB <-->|"REST with ETag, git fetch"| GH
-    CA -->|"comments, PR body"| GH
-    CB -->|"comments, PR body"| GH
-
-    classDef store fill:#dbeafe,stroke:#1d4ed8,color:#0f172a
-    classDef agent fill:#dcfce7,stroke:#15803d,color:#052e16
-    classDef gh fill:#fef3c7,stroke:#b45309,color:#451a03
-    class YA,YB store
-    class AA,AB agent
-    class GH gh
-```
-
-```mermaid
-sequenceDiagram
-    participant A as Alice's session
-    participant GH as GitHub
-    participant M as Maria's session
-    A->>GH: crew-net request PR 2318 review
-    GH-->>M: notification (mention)
-    M->>M: sync stores the item and routes it to PR 2318
-    M->>GH: crew-net reply --done
-    GH-->>A: notification
-    A->>A: the reply reaches the next prompt as information
-```
+The architecture and the reasons are in the [design](docs/design.md#overview).
 
 ## What the agent sees
-
-At session start, the agent gets a short digest of the repo. The band above the
-prompt shows it too:
 
 ```text
 crew-net · acme/app · feat/users-tier
@@ -74,6 +53,13 @@ Others  maria   #2318 review   api/openapi/users.yaml  ⚠ conflicts with #2310
         dmitri  feat/billing  no PR, pushed 14 min ago  web/billing/
 Inbox   maria asks on #2310: "Does #2310 need the new column first?"  12 min
 ```
+
+## Start alone
+
+crew-net is useful on one laptop: you get the digest, the radar and a merge
+gate. Each teammate who installs it adds requests and replies. A repo admin can
+make merge order a required check. See the
+[adoption levels](docs/user-guide.md#adoption-levels).
 
 ## Install
 
