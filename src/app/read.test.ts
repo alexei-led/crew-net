@@ -675,6 +675,9 @@ describe("doctor", () => {
       "hooks policy": "fail",
       "merge gate": "fail",
     });
+    expect(report.checks.find((c) => c.name === "merge gate")?.fix).toMatch(
+      /hooks must be allowed/,
+    );
   });
 
   test("an unknown policy warns and never counts as allowed", async () => {
@@ -691,6 +694,9 @@ describe("doctor", () => {
     const report = await run(() => {}, {}, "missing");
     expect(report.level).toBeNull();
     expect(report.next).toContain("claude plugin install crew-net@crew-net");
+    expect(report.checks.find((c) => c.name === "merge gate")?.fix).toContain(
+      "claude plugin install crew-net@crew-net",
+    );
   });
 
   test("a failing token read names gh auth login", async () => {
@@ -698,6 +704,9 @@ describe("doctor", () => {
       w.env.token = new Error("gh: not logged in");
     });
     expect(report.next).toBe("gh auth login --hostname github.com");
+    expect(report.checks.find((c) => c.name === "gh token")?.detail).toMatch(
+      /^gh has no token for github.com: gh is not installed or not signed in/,
+    );
   });
 
   test("an invalid repo config fails with its line", async () => {

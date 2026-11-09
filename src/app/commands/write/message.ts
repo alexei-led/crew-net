@@ -281,7 +281,11 @@ export async function reply(
   const text = args.text.trim();
   if (text === "") throw new CommandError("usage", "the reply is empty");
   const entry = await ctx.store.inbox.get(args.item);
-  if (!entry) throw new CommandError("not-found", `no inbox item ${args.item}`);
+  if (!entry)
+    throw new CommandError(
+      "not-found",
+      `no inbox item ${args.item}; \`crew-net inbox\` lists the item ids`,
+    );
   const { from, repo, thread, event, msgId } = entry.item;
   if (
     from === undefined ||

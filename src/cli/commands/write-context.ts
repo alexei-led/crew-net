@@ -65,7 +65,7 @@ export async function runWrite<T>(
   } catch (error) {
     if (!(error instanceof CommandError)) throw error;
     if (error.code === "usage") throw new UsageError(error.message);
-    ctx.io.err(`${error.message}\n`);
+    ctx.io.err(`crew-net: ${error.message}\n`);
     if (ctx.json)
       ctx.io.out(
         `${JSON.stringify({ error: error.code, message: error.message })}\n`,

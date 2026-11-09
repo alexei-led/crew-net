@@ -418,6 +418,12 @@ describe("reply (design §7.2, §7.3)", () => {
     expect(error.code).toBe(code as CommandError["code"]);
     expect(h.github.writes).toEqual([]);
   });
+
+  test("an unknown item names the command that lists ids", async () => {
+    const h = team();
+    const error = await refusal(reply(h.ctx, { item: "nope", text: "x" }));
+    expect(error.message).toContain("`crew-net inbox` lists the item ids");
+  });
 });
 
 function rawPull(number: number, author: string) {

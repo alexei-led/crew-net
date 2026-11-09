@@ -290,7 +290,7 @@ var DEFAULT_PRODUCER_PATTERNS = [
   "**/*.proto"
 ];
 var DEFAULT_CONTRACT = {
-  name: "default",
+  name: "schema",
   producer: DEFAULT_PRODUCER_PATTERNS,
   consumers: [{ pattern: "**" }]
 };
@@ -1855,6 +1855,7 @@ async function gate2(ctx, args) {
     decision: result.decision,
     failed: result.failed,
     checked: result.checked,
+    ...result.checked[0] ? { repo: result.checked[0].split("#")[0] } : {},
     reasons: result.reasons.length,
     atMs: ctx.clock.now()
   }).catch(() => {
@@ -2065,7 +2066,7 @@ async function reply(ctx, args) {
     throw new CommandError("usage", "the reply is empty");
   const entry = await ctx.store.inbox.get(args.item);
   if (!entry)
-    throw new CommandError("not-found", `no inbox item ${args.item}`);
+    throw new CommandError("not-found", `no inbox item ${args.item}; \`crew-net inbox\` lists the item ids`);
   const { from, repo, thread, event, msgId } = entry.item;
   if (from === undefined || repo === undefined || thread === undefined || msgId === undefined || !REQUEST_KINDS.some((k) => k === event))
     throw new CommandError("refused", `item ${args.item} is not a crew request; answer it on GitHub`);
@@ -2312,7 +2313,7 @@ async function runWrite(ctx, action, render) {
       throw error;
     if (error.code === "usage")
       throw new UsageError(error.message);
-    ctx.io.err(`${error.message}
+    ctx.io.err(`crew-net: ${error.message}
 `);
     if (ctx.json)
       ctx.io.out(`${JSON.stringify({ error: error.code, message: error.message })}
@@ -3999,7 +4000,7 @@ async function doctor(ports, probes, here) {
     add({
       name: "gh token",
       status: "fail",
-      detail: message3(error),
+      detail: `gh has no token for ${host}: gh is not installed or not signed in (${message3(error)})`,
       fix: `gh auth login --hostname ${host}`
     });
   }
@@ -4060,7 +4061,10 @@ async function doctor(ports, probes, here) {
   add({
     name: "merge gate",
     status: gateActive ? "ok" : "fail",
-    detail: gateActive ? "the PreToolUse hook checks depends-on before gh pr merge" : "inactive: agents can merge a PR whose dependencies are open"
+    detail: gateActive ? "the PreToolUse hook checks depends-on before gh pr merge" : "inactive: agents can merge a PR whose dependencies are open",
+    ...gateActive ? {} : {
+      fix: hooksAllowed ? INSTALL : "the plugin hooks must be allowed to run (see hooks policy above)"
+    }
   });
   let configOk = false;
   let draftGate = false;

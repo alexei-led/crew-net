@@ -264,6 +264,7 @@ describe("gate fails closed", () => {
         decision: "deny",
         failed: false,
         checked: ["acme/app#10"],
+        repo: "acme/app",
         reasons: 1,
         atMs: 1_000_000,
       },
