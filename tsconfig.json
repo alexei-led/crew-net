@@ -13,6 +13,6 @@
     "types": ["bun", "node"],
     "skipLibCheck": true
   },
-  "include": ["src/**/*.ts", "plugin/**/*.ts", "e2e/**/*.ts"],
+  "include": ["src/**/*.ts", "plugin/**/*.ts", "e2e/**/*.ts", "scripts/**/*.ts"],
   "exclude": ["plugin/hooks/register.ts", "plugin/tests/**", "plugin/types/**"]
 }

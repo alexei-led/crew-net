@@ -22,4 +22,5 @@ jobs:
       - run: make check
       - run: make plugin-fresh
       - run: make build
-      - run: test "$(node dist/crew-net.js --version)" = 0.1.0
+      - name: The shipped bundle reports the package version
+        run: test "$(node plugin/bin/crew-net --version)" = "$(jq -r .version package.json)"

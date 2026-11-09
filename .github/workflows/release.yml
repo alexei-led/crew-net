@@ -1,0 +1,123 @@
+name: Release
+
+# Runs when a release tag is pushed. docs/releasing.md has the full procedure.
+# The tag only records and publishes a release; the version bump that ships it
+# to plugin users is the `release X.Y.Z` commit already merged to main.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  TAG: ${{ github.ref_name }}
+
+jobs:
+  validate:
+    name: Validate tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          # the next step fetches the tag object; this job's token is read-only
+          persist-credentials: true
+      - name: Tag is MAJOR.MINOR.PATCH, annotated, and on main
+        run: |
+          set -euo pipefail
+          if [[ ! "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "tag must match vMAJOR.MINOR.PATCH: $TAG" >&2; exit 1
+          fi
+          # checkout can turn an annotated tag into a lightweight one; fetch the real object
+          git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
+          if [[ "$(git cat-file -t "refs/tags/$TAG")" != "tag" ]]; then
+            echo "tag $TAG must be annotated: git tag -a" >&2; exit 1
+          fi
+          if [[ "$(git rev-parse "$TAG^{commit}")" != "$GITHUB_SHA" ]]; then
+            echo "tag $TAG does not point at the commit that triggered this run" >&2; exit 1
+          fi
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "tag $TAG must point to a commit on main" >&2; exit 1
+          fi
+      - name: CI passed on this exact commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          url="repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push&status=success&per_page=100"
+          gh api "$url" | jq -e --arg sha "$GITHUB_SHA" '
+            .workflow_runs | any(.head_sha == $sha and .head_branch == "main" and .conclusion == "success")' >/dev/null || {
+            echo "release needs a successful CI run on main for commit $GITHUB_SHA" >&2; exit 1; }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+        with:
+          bun-version: 1.4.4
+      - run: bun install --frozen-lockfile
+      - run: make check
+      - run: make plugin-fresh
+      - name: Versions, bundle and CHANGELOG agree with the tag
+        run: bun scripts/release.ts check "$TAG"
+
+  release:
+    name: Publish GitHub release
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+        with:
+          bun-version: 1.4.4
+      - name: Assets and notes
+        run: |
+          set -euo pipefail
+          mkdir release
+          # the committed bundle, which plugin-fresh proved matches the sources
+          cp plugin/bin/crew-net release/crew-net.js
+          (cd release && sha256sum crew-net.js > checksums.txt)
+          bun scripts/release.ts notes "$TAG" > release/notes.md
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$TAG" release/crew-net.js release/checksums.txt \
+            --verify-tag --title "$TAG" --notes-file release/notes.md
+
+  verify:
+    name: Verify published release
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - name: Download, check the checksum, run it
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir check
+          cd check
+          sha256sum -c checksums.txt
+          test "$(node crew-net.js --version)" = "${TAG#v}"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease \
+            --jq '"draft=\(.isDraft) prerelease=\(.isPrerelease)"'
