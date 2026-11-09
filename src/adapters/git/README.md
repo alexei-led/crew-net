@@ -24,7 +24,7 @@ Git 2.38 or later is required for `merge-tree --write-tree`.
   detached HEAD.
 - `remoteBranches` skips the `origin/HEAD` symref. `loginHint` is the login in
   a `[id+]login@users.noreply.<host>` author email, else `null`; it is a hint
-  for a bare branch's owner (design §10), not an identity. `branchAuthor`
+  for a bare branch's owner (design: Radar), not an identity. `branchAuthor`
   skips merge commits, so merging the base into a branch does not make the
   merger its owner.
 - Timeouts: `fetch` 120 s, every other command 30 s. A killed command throws

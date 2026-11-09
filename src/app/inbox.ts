@@ -60,7 +60,7 @@ export function mentions(visible: string, login: string): boolean {
 export const isBotLogin = (login: string): boolean =>
   /\[bot\]$/i.test(login) || isBot(login, DEFAULT_BOTS);
 
-/** Errors that stop the whole pass with the cursor unmoved (design §17-18). */
+/** Errors that stop the whole pass with the cursor unmoved (design: Sync-18). */
 const STOP_ERRORS = new Set(["RateLimitError", "AuthError", "SsoError"]);
 /** A thread that fails this many passes in a row is skipped. */
 export const THREAD_GIVE_UP = 3;
@@ -69,7 +69,7 @@ const isRequest = (marker: MessageMarker): boolean =>
   REQUEST_KINDS.some((kind) => kind === marker.kind);
 
 /**
- * One inbox pass for a host (design §8.2): notifications since the cursor,
+ * One inbox pass for a host (design: Sync): notifications since the cursor,
  * then new comments and reviews of each kept thread. Items are written
  * before any cursor moves.
  */
@@ -225,7 +225,7 @@ async function commentItem(
 
 /**
  * A reply to one of my open requests moves it along its lifecycle (design
- * §7.3): `accepted` → in progress; `answered`, `declined`, `done` → closed.
+ * "Protocol on GitHub"): `accepted` → in progress; `answered`, `declined`, `done` → closed.
  * Only the recipient of the request can move it. Idempotent on replay.
  */
 async function applyReply(

@@ -18,7 +18,7 @@ typecheck: ## TypeScript: the repo, pure core/protocol, the mod
 	bun x tsc --noEmit -p tsconfig.pure.json
 	bun x tsc --noEmit -p $(PLUGIN)/tsconfig.json
 
-lint: ## Biome lint, format and design §19 import rules; warnings fail
+lint: ## Biome lint, format and design: Code structure import rules; warnings fail
 	bun x biome check --error-on-warnings .
 
 fmt: ## Apply Biome fixes and formatting

@@ -14,7 +14,7 @@ import type {
   ThreadState,
 } from "../../ports/index";
 
-/** GitHub allows 80/min and 500/h content writes per user; crew-net keeps well under (design §9.1). */
+/** GitHub allows 80/min and 500/h content writes per user; crew-net keeps well under (design: Sync). */
 export const WRITE_WINDOWS: readonly { windowMs: number; max: number }[] = [
   { windowMs: 60_000, max: 20 },
   { windowMs: 3_600_000, max: 200 },

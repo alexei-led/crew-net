@@ -39,7 +39,7 @@ function world(body: string) {
 const run = (h: ReturnType<typeof harness>, line: string | string[]) =>
   gate(h.ctx, { argv: Array.isArray(line) ? line : [line] });
 
-describe("gate decisions (design §11)", () => {
+describe("gate decisions (design: Order)", () => {
   test.each([
     ["git merge gh-pages", "allow", []],
     ["gh pr merge --disable-auto 10", "allow", []],

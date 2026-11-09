@@ -29,7 +29,7 @@ export interface LiveSession {
 }
 
 /**
- * Which rule picked the session (design §9.3):
+ * Which rule picked the session (design: Delivery):
  * `checkout`: the session has the PR branch checked out.
  * `clone`: the PR branch is checked out in another worktree of the session's clone.
  * `repo`: most recently active session in the item's repo.

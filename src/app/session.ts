@@ -17,8 +17,8 @@ export interface BeatInput {
 }
 
 /**
- * Write a session heartbeat (design §8.3): the repo, branch and clone of
- * the working copy that holds `dir`, so routing can find it (§9.3). Git
+ * Write a session heartbeat (design: Local store): the repo, branch and clone of
+ * the working copy that holds `dir`, so routing can find it ("Delivery"). Git
  * resolves the paths, so a subdirectory or a symlinked path names its
  * worktree. Keeps the last prompt time unless
  * this beat is a prompt. Marks the repo watched.

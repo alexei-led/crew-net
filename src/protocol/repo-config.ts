@@ -28,7 +28,7 @@ export type ParseRepoConfigResult =
   | { ok: true; config: RepoConfig }
   | { ok: false; line: number | null; detail: string };
 
-/** Producers used when the repo declares no `contracts` (design §10.1). */
+/** Producers used when the repo declares no `contracts` (design: Radar). */
 export const DEFAULT_PRODUCER_PATTERNS = [
   "**/migrations/**",
   "**/*migration*",
@@ -340,7 +340,7 @@ function toConfig(root: Node): RepoConfig {
 }
 
 /**
- * Read `.github/crew-net.yml`. Missing keys take the defaults of design §10.1;
+ * Read `.github/crew-net.yml`. Missing keys take the defaults of design: Radar;
  * unknown keys are ignored. Text this subset cannot read gives an error with
  * the line when there is one. Never throws.
  */

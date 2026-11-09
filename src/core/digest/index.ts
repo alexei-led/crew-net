@@ -256,7 +256,7 @@ function capped<T>(items: T[]): Section<T> {
 }
 
 /**
- * Compose the digest model for `me` in `repo` (design §5.1). All peer text
+ * Compose the digest model for `me` in `repo` (design: user guide). All peer text
  * (branches, scopes, paths, messages) is cleaned and capped here.
  */
 export function compose(input: DigestInput, nowMs: number): Digest {

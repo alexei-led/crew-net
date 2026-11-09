@@ -4,11 +4,11 @@ Use cases of `crew-net`: the sync jobs, the read commands, the session
 registry and the watcher. Depends on `core`, `protocol` and `ports` only;
 `cli` and `watch` build the [`AppPorts`](ports.ts) from adapters.
 
-## Sync (design §8.2)
+## Sync (design: Sync)
 
 `runSync(ports, here?)` runs every due job once, each through
 `store.jobs.run(name, interval, fn)`. The intervals are in
-[design §8.2](../../docs/design.md#82-sync-without-a-daemon). A job another
+[design: Sync](../../docs/design.md#sync). A job another
 process runs is `busy`. A job that ran within its interval on this laptop is
 `fresh`. A failing job is
 logged (`sync-error` in `events.ndjson`) and the others still run; after a
@@ -44,11 +44,11 @@ becomes the notice `crew-net: rate-limited until HH:MM` in `sync:status`.
   comments are `comment`, reviews `pr-review`. Requests carry `msgId`, the
   marker id `crew-net reply` answers with `re=`. My own comments, GitHub Apps
   (`*[bot]`) and the built-in bots are skipped.
-- **Request lifecycle (§7.3).** The repo state job reads each of my
+- **Request lifecycle ("Protocol on GitHub").** The repo state job reads each of my
   requests whose thread is not an open PR (`GET /issues/{n}`). Closed or
   merged: a `request-closed` item, then the request leaves the outbox. The
   item shows in the digest until a session delivers it. A sender-side close
-  command does not exist yet (design §5.3 has none). Only active and
+  command does not exist yet (design: user guide has none). Only active and
   watched repos are checked. A thread gone (404, 410) closes the request; a
   rate limit or auth error fails the job.
 - **Radar.** Mine: the branches of this clone's worktrees (not a deploy
@@ -66,7 +66,7 @@ becomes the notice `crew-net: rate-limited until HH:MM` in `sync:status`.
   into it does not make the merger its owner. A bare branch whose changed
   paths already read the same on the default branch was squash- or
   rebase-merged and not deleted; it is left out.
-- **Cross-repo contracts (§10.1).** A contract consumer `owner/repo:glob`
+- **Cross-repo contracts ("Radar").** A contract consumer `owner/repo:glob`
   names another repo. When that repo is watched, others' open PRs there
   (from its snapshot) are compared with my work for `order` only, whatever
   their base; their files come from `GET /pulls/{n}/files`, as there is no
@@ -101,7 +101,7 @@ minutes. `crew-net reply` sets kv `replied:<item-id>`; such a request leaves
 repo (`host/owner/repo`) of the working copy that holds the session's
 directory, as git resolves it (a subdirectory or symlinked path works),
 keeps the last prompt time unless the beat is a prompt, and marks the repo
-watched. Routing matches the clone root for step 2 of design §9.3. `end` removes it. `Watcher` (see
+watched. Routing matches the clone root for step 2 of design: Delivery. `end` removes it. `Watcher` (see
 [watch](../watch/README.md)) heartbeats, syncs, routes unclaimed items with
 `core/routing`, claims them and emits them.
 

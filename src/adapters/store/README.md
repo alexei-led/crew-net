@@ -1,13 +1,13 @@
 # Store adapter
 
 `new FileStoreAdapter(root, clock)` implements [StorePort](../../ports/index.ts):
-the local store of [design §8.3](../../../docs/design.md#83-local-store) on one
+the local store of [design: Local store](../../../docs/design.md#local-store) on one
 host's filesystem. The composition root passes
 `defaultStateDir(process.env, homedir())`, which is
 `${XDG_STATE_HOME:-~/.local/state}/crew-net` (a relative `XDG_STATE_HOME` is
 ignored), and a `ClockPort`. Every age, expiry and timestamp uses that clock.
 
-The directory layout is in [design §8.3](../../../docs/design.md#83-local-store).
+The directory layout is in [design: Local store](../../../docs/design.md#local-store).
 This table gives the content of each file.
 
 | File                     | Content                                                     |

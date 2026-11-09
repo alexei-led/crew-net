@@ -81,7 +81,7 @@ const REMOTE_RANK: Record<string, number> = {
 };
 
 /**
- * The repo gh merges in when the command names none (design §11): `GH_REPO`,
+ * The repo gh merges in when the command names none (design: Order): `GH_REPO`,
  * else the remote `gh repo set-default` resolved (`gh-resolved`), else the
  * first remote in gh's order (upstream, github, origin, the rest). In a fork
  * clone that can be the parent, not origin.
@@ -275,7 +275,7 @@ async function decide(
 }
 
 /**
- * `crew-net gate --json -- <command>` (design §11): may this Bash command
+ * `crew-net gate --json -- <command>` (design: Order): may this Bash command
  * merge now? Reads the PR and every dependency, in any repo, from GitHub at
  * call time. Anything it cannot read or decide denies (fail closed).
  */

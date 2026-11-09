@@ -1,6 +1,6 @@
 # protocol
 
-The language shared across machines and processes (design §7, §10.1, §14): state block, message marker, closing-keyword guard, repo config subset, and watcher↔mod events.
+The language shared across machines and processes (design: Protocol on GitHub, Radar, user guide): state block, message marker, closing-keyword guard, repo config subset, and watcher↔mod events.
 
 Pure TypeScript: no I/O, no `node:` imports, no clock. The mod bundles it.
 
@@ -14,7 +14,7 @@ Pure TypeScript: no I/O, no `node:` imports, no clock. The mod bundles it.
 | `findClosingKeywords(text)`                           | GitHub's closing keywords with `#N`, `owner/repo#N`, `GH-N` or an issue URL (`github.com`, `www.github.com`, `*.ghe.com`); scans HTML comments; mirrors reflex's `check-pr-body.py`                          |
 | `parseMessageMarker(body)` / `renderMessageMarker(m)` | `<!-- crew-net:msg kind=… id=… re=… status=… -->` at the start of a comment. `null` when there is no marker; `malformed` for an unknown kind, bad id or missing required key                                 |
 | `mentionLine(login, text)`                            | The visible first line, `@login text`; `null` for a bad login or empty text                                                                                                                                  |
-| `parseRepoConfig(text)`                               | `.github/crew-net.yml` subset: `contracts`, `deploy-branches`, `bots`, `early-drafts`, `agents-merge`. Defaults from design §10.1; an error with the line for syntax it cannot read                          |
+| `parseRepoConfig(text)`                               | `.github/crew-net.yml` subset: `contracts`, `deploy-branches`, `bots`, `early-drafts`, `agents-merge`. Defaults from design: Radar; an error with the line for syntax it cannot read                         |
 | `encodeEvent(event)` / `decodeEvent(line)`            | NDJSON watcher↔mod events `{"type":...}`. Decoding returns `ok` or `malformed`, never throws                                                                                                                 |
 
 ## Rules

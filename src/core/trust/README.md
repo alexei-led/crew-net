@@ -4,7 +4,7 @@ What an inbound item may cause, how peer text is framed, and which tool calls a 
 
 - `allowedEffects(source)`: peer text may only `reply` or `propose-own-state`.
 - `frameUntrusted(text, { from, pr? }, nonce)`: labelled block naming sender and PR. Start and end markers carry `nonce` (at least 16 alphanumerics, generated per frame by the caller; throws otherwise). Copies of the nonce inside the text are removed.
-- `gate({ tool, input }, turn) → allow | deny(reason)`: the wake-turn tool gate (design §13). `turn` is `{ kind: "normal" }` (always allow; the merge gate is separate) or `{ kind: "wake", root, repo, item, hasOwnPr }`. The caller runs wake-turn Bash with its cwd at `root`. Strict allowlists, fail closed.
+- `gate({ tool, input }, turn) → allow | deny(reason)`: the wake-turn tool gate (design: Trust and autonomy). `turn` is `{ kind: "normal" }` (always allow; the merge gate is separate) or `{ kind: "wake", root, repo, item, hasOwnPr }`. The caller runs wake-turn Bash with its cwd at `root`. Strict allowlists, fail closed.
 
 ## Wake-turn allowlist
 

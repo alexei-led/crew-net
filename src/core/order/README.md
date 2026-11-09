@@ -1,6 +1,6 @@
 # order
 
-The client merge gate (design §11, §12). Pure. The caller (`crew-net gate`) reads GitHub; these functions decide.
+The client merge gate (design: Order, Order). Pure. The caller (`crew-net gate`) reads GitHub; these functions decide.
 
 1. `detectMerge(command, { aliases? }) → none | merge(targets) | deny(reason)` reads a Bash command line.
 2. For each target, the caller resolves the PR (`host` missing: gh's default host for a named repo, the remote's for the default repo; `repo` missing: gh's default repo of the Bash tool's cwd at call time; `pr` and `branch` missing: the PR of the current branch), reads its body, calls `dependencies(pr)` to learn which PRs to read, reads their state, and calls `gate(pr, states)`.

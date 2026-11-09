@@ -72,7 +72,7 @@ const isWakeKind = (kind: string): boolean =>
   (REQUEST_KINDS as readonly string[]).includes(kind);
 
 /**
- * Decide what to do with one inbound item now (design §9.4).
+ * Decide what to do with one inbound item now (design: Delivery).
  * - Starting: `digest`.
  * - Wake: idle, a crew request (`ask review fix bug`), wakeable route,
  *   auto-wake `reply`, and no wake turn in the last 10 min: `band` + `wake`.

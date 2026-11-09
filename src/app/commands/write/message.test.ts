@@ -22,7 +22,7 @@ function team() {
   return h;
 }
 
-describe("ask: thread choice (design §7.2)", () => {
+describe("ask: thread choice (design: Protocol on GitHub)", () => {
   test.each([
     ["their PR by ref", "#20", undefined, 20, "maria"],
     ["their PR by qualified ref", "acme/app#20", undefined, 20, "maria"],
@@ -208,7 +208,7 @@ describe("ask: posting and tracking", () => {
   });
 });
 
-describe("closing keywords (design §7.1)", () => {
+describe("closing keywords (design: Protocol on GitHub)", () => {
   test.each([
     [
       "ask",
@@ -293,7 +293,7 @@ describe("request", () => {
   );
 });
 
-describe("write budget (design §9.1)", () => {
+describe("write budget (design: Sync)", () => {
   test("an exhausted budget posts nothing and tracks nothing", async () => {
     const h = team();
     const posts: string[] = [];
@@ -337,7 +337,7 @@ function inboundAsk(over: Record<string, unknown> = {}) {
   };
 }
 
-describe("reply (design §7.2, §7.3)", () => {
+describe("reply (design: Protocol on GitHub, Protocol on GitHub)", () => {
   test.each([
     [undefined, "answered"],
     ["done", "done"],

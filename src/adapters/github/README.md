@@ -67,7 +67,7 @@ updated before `since`. A malformed entry counts as a miss.
 `postComment`, `updatePullBody` and `createIssue` are content writes. Each one
 records itself in `github:writes:<host>` through `kv.update` (atomic under the
 store lock) before the first attempt, if `WRITE_WINDOWS` (20 a minute, 200 an
-hour, design §9.1) has room. Otherwise it throws `BudgetError.retryAfterMs`
+hour, design: Sync) has room. Otherwise it throws `BudgetError.retryAfterMs`
 without a request. A 401 retry is the same write and is not counted again.
 `disableAutoMerge` (GraphQL) spends no budget and does nothing when auto-merge
 is already off.

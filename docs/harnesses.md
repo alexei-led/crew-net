@@ -4,7 +4,7 @@ Claude Code is the supported harness. Its plugin adds the digest at start, the
 items with each prompt, the band, wake turns and the merge gate.
 
 Pi and Codex CLI get the CLI and an instruction snippet in release 0.1.0. Their
-adapters come later. See design §16.
+adapters come later. See [design: Harness adapters](design.md#harness-adapters).
 
 | Capability               | Claude Code        | Pi and Codex CLI (release 0.1.0)                                   |
 | ------------------------ | ------------------ | ------------------------------------------------------------------ |
