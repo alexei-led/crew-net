@@ -1,5 +1,28 @@
 {
   "name": "crew-net",
   "version": "0.1.0-dev",
-  "description": "Coordinate developer leads across machines."
+  "description": "See who works on what in shared GitHub repos, catch collisions early, ask other developers' agents, and merge in depends-on order.",
+  "author": {
+    "name": "Alexei Ledenev",
+    "url": "https://github.com/alexei-led"
+  },
+  "repository": "https://github.com/alexei-led/crew-net",
+  "license": "MIT",
+  "keywords": ["coordination", "github", "pull-requests", "merge-order"],
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "autoWake": {
+      "type": "string",
+      "title": "Auto-wake",
+      "description": "reply: when a direct request arrives while the session is idle (empty draft, no prompt for idleMinutes), start a turn that may only read and reply. off: the request waits for your next prompt.",
+      "options": ["reply", "off"],
+      "default": "reply"
+    },
+    "idleMinutes": {
+      "type": "number",
+      "title": "Idle minutes",
+      "description": "Minutes without typing or a prompt before the session counts as idle.",
+      "default": 10
+    }
+  }
 }

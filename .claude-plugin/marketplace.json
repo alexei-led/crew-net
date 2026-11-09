@@ -1,0 +1,15 @@
+{
+  "name": "crew-net",
+  "owner": {
+    "name": "Alexei Ledenev",
+    "url": "https://github.com/alexei-led"
+  },
+  "description": "crew-net: coding-agent sessions on different laptops coordinate through GitHub.",
+  "plugins": [
+    {
+      "name": "crew-net",
+      "description": "Digest at session start, collision radar, requests between developers' agents, guarded wake turns, and a depends-on merge gate.",
+      "source": "./plugin"
+    }
+  ]
+}

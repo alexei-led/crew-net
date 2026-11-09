@@ -2,8 +2,10 @@ import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -42,8 +44,11 @@ test("architecture gates reject planted violations", () => {
     const plant = (path: string, source: string) => {
       const file = join(fixture, path);
       mkdirSync(join(file, ".."), { recursive: true });
+      // Planting over a real file (the mod) puts it back afterwards.
+      const original = existsSync(file) ? readFileSync(file) : undefined;
       writeFileSync(file, source);
-      return () => rmSync(file);
+      return () =>
+        original === undefined ? rmSync(file) : writeFileSync(file, original);
     };
 
     const cases = [
@@ -74,9 +79,15 @@ test("architecture gates reject planted violations", () => {
       ],
       [
         "plugin/hooks/plant.ts",
-        'import "../../src/core/radar/index";',
-        "plugin-only-depends-on-delivery-trust-protocol",
+        'import "../../src/app/index";',
+        "plugin-only-depends-on-core-and-protocol",
       ],
+      [
+        "plugin/hooks/plant.ts",
+        'import "../../src/adapters/store/index";',
+        "plugin-only-depends-on-core-and-protocol",
+      ],
+      ["plugin/hooks/mod.ts", 'import "node:fs";', "mod-has-no-node"],
     ];
     for (const [path, source, rule] of cases) {
       if (!path || !source || !rule) throw new Error("Invalid fixture");
@@ -94,7 +105,7 @@ test("architecture gates reject planted violations", () => {
       ),
       plant(
         "plugin/hooks/plant.ts",
-        'import "../../src/core/delivery/index"; import "../../src/core/trust/index"; import "../../src/protocol/index";',
+        'import "node:fs"; import "../../src/core/order/index"; import "../../src/core/trust/index"; import "../../src/protocol/index";',
       ),
     ];
     const allowedResult = run("depcruise", "src", "plugin");

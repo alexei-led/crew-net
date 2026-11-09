@@ -29,10 +29,22 @@ module.exports = {
       },
     },
     {
-      name: "plugin-only-depends-on-delivery-trust-protocol",
+      // Design §19 rule 6: the plugin reaches GitHub, git and the store only
+      // through crew-net processes. The command-hook script runs in Node and
+      // may use Node built-ins; the mod has no Node (next rule).
+      name: "plugin-only-depends-on-core-and-protocol",
       severity: "error",
-      from: { path: "^plugin/", pathNot: "\\.test\\.ts$" },
-      to: { pathNot: "^(plugin/|src/protocol/|src/core/(delivery|trust)/)" },
+      from: { path: "^plugin/", pathNot: "\\.(test|spec)\\.ts$" },
+      to: {
+        dependencyTypesNot: ["core"],
+        pathNot: "^(plugin/|src/protocol/|src/core/)",
+      },
+    },
+    {
+      name: "mod-has-no-node",
+      severity: "error",
+      from: { path: "^plugin/hooks/(register|mod)\\.ts$" },
+      to: { dependencyTypes: ["core"] },
     },
   ],
   options: {

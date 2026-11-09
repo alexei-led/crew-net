@@ -1,7 +1,16 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.6.6/schema.json",
   "files": {
-    "includes": ["**", "!!node_modules", "!!dist", "!!.pi", "!!docs"]
+    "includes": [
+      "**",
+      "!!node_modules",
+      "!!dist",
+      "!!.pi",
+      "!!docs",
+      "!!types/claude-code",
+      "!!plugin/hooks/dist",
+      "!!plugin/bin"
+    ]
   },
   "formatter": {
     "indentStyle": "space"
