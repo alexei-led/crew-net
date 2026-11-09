@@ -271,12 +271,23 @@ async function readReviews(
 ): Promise<void> {
   const { store, clock } = ports;
   const name = reviewCursor(host, repo, number);
-  const after = (await store.cursors.get(name)) ?? since;
-  const reviews = (await ports.github(host).listReviews(repo, number)).filter(
-    (r): r is PullReview & { submittedAt: string } =>
-      // Inclusive: second-granular times; putItem dedupes the review seen last time.
-      r.submittedAt !== null && r.submittedAt >= after,
-  );
+  const after = reviewPosition(await store.cursors.get(name), since);
+  // Times are second-granular, so the id breaks ties. The cursor itself
+  // dedupes: the item may be pruned long before the thread is read again.
+  const reviews = (await ports.github(host).listReviews(repo, number))
+    .filter(
+      (r): r is PullReview & { submittedAt: string } =>
+        r.submittedAt !== null &&
+        (r.submittedAt > after.submittedAt ||
+          (r.submittedAt === after.submittedAt && r.id > after.id)),
+    )
+    .sort((a, b) =>
+      a.submittedAt === b.submittedAt
+        ? a.id - b.id
+        : a.submittedAt < b.submittedAt
+          ? -1
+          : 1,
+    );
   for (const review of reviews) {
     if (sameLogin(review.author, me) || isBotLogin(review.author)) continue;
     const body = review.body.trim();
@@ -299,9 +310,25 @@ async function readReviews(
       clock.now(),
     );
   }
-  const newest = reviews
-    .map((r) => r.submittedAt)
-    .sort()
-    .at(-1);
-  if (newest) await store.cursors.set(name, newest);
+  const newest = reviews.at(-1);
+  if (newest)
+    await store.cursors.set(
+      name,
+      JSON.stringify({ submittedAt: newest.submittedAt, id: newest.id }),
+    );
+}
+
+/** The last review read; a plain time (older cursors, or none yet) admits every id at it. */
+function reviewPosition(
+  cursor: string | undefined,
+  since: string,
+): { submittedAt: string; id: number } {
+  if (cursor?.startsWith("{")) {
+    try {
+      const v = JSON.parse(cursor) as { submittedAt?: unknown; id?: unknown };
+      if (typeof v.submittedAt === "string" && typeof v.id === "number")
+        return { submittedAt: v.submittedAt, id: v.id };
+    } catch {}
+  }
+  return { submittedAt: cursor ?? since, id: Number.NEGATIVE_INFINITY };
 }
