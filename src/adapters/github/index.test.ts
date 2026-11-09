@@ -214,6 +214,34 @@ describe("viewer", () => {
   });
 });
 
+describe("head repo", () => {
+  test("names the head repo of a fork; a deleted fork is empty", async () => {
+    const base = {
+      number: 5,
+      node_id: "PR_5",
+      title: "t",
+      user: { login: "alice" },
+      base: { ref: "main" },
+      state: "open",
+      draft: false,
+      body: null,
+      updated_at: "2026-11-09T10:00:00Z",
+      auto_merge: null,
+    };
+    const { adapter } = setup([
+      json([
+        {
+          ...base,
+          head: { ref: "dev", sha: "a", repo: { full_name: "alice/r" } },
+        },
+        { ...base, number: 6, head: { ref: "x", sha: "b", repo: null } },
+      ]),
+    ]);
+    const pulls = await adapter.listOpenPulls(REPO);
+    expect(pulls.map((p) => p.headRepo)).toEqual(["alice/r", ""]);
+  });
+});
+
 describe("pulls, comments and reviews", () => {
   test("recorded merged and closed pulls carry state, merged and branches", async () => {
     const { adapter, calls } = setup([

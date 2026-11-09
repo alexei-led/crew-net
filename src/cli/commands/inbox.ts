@@ -24,7 +24,7 @@ export const inbox: Command = {
     if (!ctx.args.switches.has("--claim")) {
       if (session !== undefined || format !== "text")
         throw new UsageError("--session and --format need --claim");
-      const view = await inboxView(ports.store, ports.clock.now());
+      const view = await inboxView(ports.store, ports.clock.now(), ctx.repo);
       print(ctx, view, renderInbox(view));
       return 0;
     }

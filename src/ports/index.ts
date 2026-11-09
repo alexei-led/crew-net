@@ -8,6 +8,8 @@ export interface PullRequest {
   author: string;
   headRef: string;
   headSha: string;
+  /** `owner/repo` of the head branch; "" when its fork was deleted. Absent when unknown. */
+  headRepo?: string;
   baseRef: string;
   state: "open" | "closed";
   draft: boolean;

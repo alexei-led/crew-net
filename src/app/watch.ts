@@ -132,8 +132,15 @@ export class Watcher {
     private readonly emit: (event: HelperEvent) => void,
   ) {}
 
+  private stopped = false;
+
   get started(): boolean {
-    return this.hello !== undefined;
+    return this.hello !== undefined && !this.stopped;
+  }
+
+  /** No more heartbeats or claims: the session ended or the process is stopping. */
+  stop(): void {
+    this.stopped = true;
   }
 
   async start(hello: HelloEvent): Promise<void> {
@@ -151,7 +158,7 @@ export class Watcher {
   /** One tick: heartbeat, sync what is due, deliver. Errors become `error` events. */
   async tick(): Promise<void> {
     const hello = this.hello;
-    if (!hello) return;
+    if (!hello || this.stopped) return;
     const { ports } = this;
     let notice: string | undefined;
     try {
@@ -210,6 +217,7 @@ export class Watcher {
 
   /** The session ends: it is no longer a routing target. */
   async bye(): Promise<void> {
+    this.stop();
     await end(this.ports, this.sessionId);
   }
 }

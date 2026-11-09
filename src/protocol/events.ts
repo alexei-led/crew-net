@@ -30,10 +30,10 @@ export interface ItemEvent extends Tagged<"item"> {
    * `unblocked`, `dependency-closed`, `waits-on-you` or a finding kind.
    */
   event?: string;
+  /** Marker `id` of a crew request, for `crew-net reply` to answer with `re=`. */
+  msgId?: string;
   /** From routing: false when the session got the item only because no session is in its repo. Never wake without it. */
   wakeable?: boolean;
-  /** Marker id of a crew request, so a reply can point at it. */
-  msgId?: string;
   /** The receiving session's branch has an open PR (a wake turn may update its state). */
   ownPr?: boolean;
 }

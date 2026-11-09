@@ -11,6 +11,6 @@ export async function snapshotJob(
   const pulls = await ports.github(ref.host).listOpenPulls(repoSlug(ref));
   await writeSnapshot(ports.store, ref, {
     fetchedAtMs: ports.clock.now(),
-    pulls: pulls.map(snapshotPull),
+    pulls: pulls.map((p) => snapshotPull(p, repoSlug(ref))),
   });
 }

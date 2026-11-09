@@ -185,6 +185,12 @@ function pull(value: unknown): PullRequest {
     author: login(raw.user),
     headRef: string(head.ref),
     headSha: string(head.sha),
+    ...(head.repo === undefined
+      ? {}
+      : {
+          headRepo:
+            head.repo === null ? "" : string(object(head.repo).full_name),
+        }),
     baseRef: string(object(raw.base).ref),
     state,
     draft: boolean(raw.draft),

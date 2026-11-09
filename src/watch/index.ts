@@ -46,12 +46,18 @@ export async function runWatch(
     stop = resolve;
   });
   void io.stopped.then(() => stop(0));
+  let ticking = false;
   const timer = setInterval(() => {
     if (!io.parentAlive()) {
       stop(0);
       return;
     }
-    if (watcher.started) void serial(() => watcher.tick());
+    // A tick slower than the interval (a 120 s fetch) is not stacked behind.
+    if (!watcher.started || ticking) return;
+    ticking = true;
+    void serial(() => watcher.tick()).finally(() => {
+      ticking = false;
+    });
   }, tickMs);
   emit({ type: "ready" });
 
@@ -85,6 +91,7 @@ export async function runWatch(
   })();
   const code = await done;
   clearInterval(timer);
+  watcher.stop();
   await queue;
   return code;
 }

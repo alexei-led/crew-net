@@ -60,6 +60,11 @@ export function mentions(visible: string, login: string): boolean {
 export const isBotLogin = (login: string): boolean =>
   /\[bot\]$/i.test(login) || isBot(login, DEFAULT_BOTS);
 
+/** Errors that stop the whole pass with the cursor unmoved (design §17-18). */
+const STOP_ERRORS = new Set(["RateLimitError", "AuthError", "SsoError"]);
+/** A thread that fails this many passes in a row is skipped. */
+export const THREAD_GIVE_UP = 3;
+
 const isRequest = (marker: MessageMarker): boolean =>
   REQUEST_KINDS.some((kind) => kind === marker.kind);
 
@@ -85,11 +90,48 @@ export async function inboxJob(ports: AppPorts, host: string): Promise<void> {
   const threads = [...page.threads].sort((a, b) =>
     a.updatedAt.localeCompare(b.updatedAt),
   );
+  let holdAt: string | undefined;
   for (const thread of threads) {
     if (muted.has(thread.repo.toLowerCase())) continue;
-    await readThread(ports, host, me, since, thread);
+    const failKey = `inbox:fail:${host}/${thread.repo.toLowerCase()}#${thread.number}`;
+    try {
+      await readThread(ports, host, me, since, thread);
+      if ((await store.kv.get(failKey)) !== undefined)
+        await store.kv.set(failKey, 0);
+    } catch (error) {
+      if (error instanceof Error && STOP_ERRORS.has(error.name)) throw error;
+      const failed = await store.kv.update(failKey, (n) =>
+        typeof n === "number" ? n + 1 : 1,
+      );
+      await store.events.append({
+        type: "sync-error",
+        job: `inbox:${host}`,
+        thread: `${thread.repo}#${thread.number}`,
+        message: error instanceof Error ? error.message : String(error),
+        atMs: clock.now(),
+      });
+      // Hold the cursor before a thread that failed, so its comments are
+      // read next pass; after THREAD_GIVE_UP failures in a row (a deleted
+      // issue, lost access) let it go so the host's inbox does not stall.
+      if (typeof failed === "number" && failed < THREAD_GIVE_UP) {
+        holdAt ??= thread.updatedAt;
+        // The retry runs with a later `since`; keep this pass's lower bound.
+        const name = threadCursor(host, thread.repo, thread.number);
+        if ((await store.cursors.get(name)) === undefined)
+          await store.cursors.set(
+            name,
+            JSON.stringify({ updatedAt: since, id: 0 }),
+          );
+      }
+    }
   }
-  await store.cursors.set(cursorName, iso(startedMs));
+  // GitHub's clock, not the laptop's: the newest thread time seen. A laptop
+  // clock running ahead would otherwise skip threads updated meanwhile.
+  const newest = threads.at(-1)?.updatedAt;
+  const next = holdAt ? iso(Date.parse(holdAt) - 1000) : newest;
+  if (next && next > since) await store.cursors.set(cursorName, next);
+  else if ((await store.cursors.get(cursorName)) === undefined)
+    await store.cursors.set(cursorName, since);
 }
 
 async function readThread(
@@ -174,7 +216,9 @@ async function commentItem(
     repo,
     thread: comment.issueNumber,
     event,
-    ...(marker?.id !== undefined ? { msgId: marker.id } : {}),
+    ...(marker && isRequest(marker) && marker.id !== undefined
+      ? { msgId: marker.id }
+      : {}),
   };
   return reply ? { item, reply } : { item };
 }
@@ -227,7 +271,8 @@ async function readReviews(
   const after = (await store.cursors.get(name)) ?? since;
   const reviews = (await ports.github(host).listReviews(repo, number)).filter(
     (r): r is PullReview & { submittedAt: string } =>
-      r.submittedAt !== null && r.submittedAt > after,
+      // Inclusive: second-granular times; putItem dedupes the review seen last time.
+      r.submittedAt !== null && r.submittedAt >= after,
   );
   for (const review of reviews) {
     if (sameLogin(review.author, me) || isBotLogin(review.author)) continue;

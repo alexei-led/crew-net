@@ -82,7 +82,7 @@ describe("inbox job", () => {
       },
     ]);
     expect(await w.store.cursors.get(notificationsCursor("github.com"))).toBe(
-      "2026-11-09T12:00:00Z",
+      "2026-11-09T11:59:00Z",
     );
   });
 
@@ -125,6 +125,31 @@ describe("inbox job", () => {
       "comment:github.com/o/r#3:12",
     ]);
     expect(await w.itemEvents()).toHaveLength(2);
+  });
+
+  test("a thread that keeps failing is given up after 3 passes; others still arrive", async () => {
+    const w = world();
+    w.github.threads = [thread(2, "2026-11-09T11:58:00Z"), thread(3)];
+    w.github.comments.set(`${REPO}#3`, [comment(3, 12, "dmitri", "hi")]);
+    const real = w.github.listThreadComments.bind(w.github);
+    w.github.listThreadComments = async (repo, n, after) => {
+      if (n === 2) throw new Error("HTTP 404");
+      return real(repo, n, after);
+    };
+    const cursor = () => w.store.cursors.get(notificationsCursor("github.com"));
+    await w.sync();
+    expect((await w.items()).map((i) => i.id)).toEqual([
+      "comment:github.com/o/r#3:12",
+    ]);
+    expect(await cursor()).toBe("2026-11-09T11:57:59Z");
+    for (let i = 0; i < 2; i++) {
+      w.advance(INTERVALS.inbox);
+      await w.sync();
+    }
+    expect(await cursor()).toBe("2026-11-09T11:59:00Z");
+    expect(
+      (await w.store.events.read()).filter((e) => e.type === "sync-error"),
+    ).toHaveLength(3);
   });
 
   test("a second trigger within the interval is a no-op", async () => {
@@ -405,6 +430,28 @@ describe("fetch and radar", () => {
     expect(await readRadar(w.store, REF)).toBeDefined();
   });
 
+  test("a colleague's bare branch I checked out is not compared with itself", async () => {
+    const w = world();
+    w.git.local("maria-x", ["web/a.ts"]);
+    w.git.remote("maria-x", ["web/a.ts"], { loginHint: "maria" });
+    await w.sync();
+    expect((await readRadar(w.store, REF))?.findings).toEqual([]);
+  });
+
+  test("a fork PR is not matched to a same-named origin branch", async () => {
+    const w = world();
+    w.git.local("feat/mine", ["api/x.ts"]);
+    w.github.open.set(REPO, [pull(9, "alice", "dev", { headRepo: "alice/r" })]);
+    w.git.remote("dev", ["api/x.ts"], { loginHint: "dmitri" });
+    await w.sync();
+    const radar = await readRadar(w.store, REF);
+    expect(
+      radar?.work
+        .filter((x) => !x.mine)
+        .map((x) => `${x.owner} ${x.pr ?? x.branch}`),
+    ).toEqual(["dmitri dev"]);
+  });
+
   test("merge-tree runs only for pairs that share a file", async () => {
     const w = await seeded();
     w.git.remote("feat/other", ["docs/x.md"], { loginHint: "dmitri" });
@@ -541,6 +588,32 @@ describe("dependencies", () => {
     );
     expect(closed.map((i) => i.text)).toEqual([
       "#10 depends on #9, which was closed without merging",
+    ]);
+  });
+
+  test("a refused auto-merge change is logged and the other PRs still get their items", async () => {
+    const w = world();
+    w.github.open.set(REPO, [
+      pull(10, "me", "feat/b", {
+        body: "<!-- crew-net\ndepends-on: #9\n-->",
+        autoMerge: true,
+      }),
+      pull(11, "me", "feat/c", { body: "<!-- crew-net\ndepends-on: #8\n-->" }),
+    ]);
+    w.github.pulls.set(`${REPO}#9`, pull(9, "maria", "feat/a"));
+    w.github.pulls.set(
+      `${REPO}#8`,
+      pull(8, "maria", "feat/z", { state: "closed" }),
+    );
+    w.github.failing.set("disableAutoMerge", new Error("forbidden"));
+    const report = await w.sync();
+    expect(report.jobs.find((j) => j.job === "deps")?.outcome).toBe("ran");
+    expect((await w.items()).map((i) => i.event)).toEqual([
+      "dependency-closed",
+    ]);
+    expect(Object.keys((await readDeps(w.store)).prs).sort()).toEqual([
+      `${REPO}#10`,
+      `${REPO}#11`,
     ]);
   });
 

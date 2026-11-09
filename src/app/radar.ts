@@ -132,7 +132,9 @@ export async function radarJob(
   const deploy = new Set(config.deployBranches);
   const defaultBase =
     config.deployBranches.find((b) => remoteNames.has(b)) ?? "main";
-  const byHead = new Map(snapshot.pulls.map((p) => [p.headRef, p]));
+  // Fork PRs have no branch on origin; a same-named origin branch is other work.
+  const sameRepoPulls = snapshot.pulls.filter((p) => !p.fork);
+  const byHead = new Map(sameRepoPulls.map((p) => [p.headRef, p]));
   const bots = config.bots;
 
   const mine: Work[] = [];
@@ -172,7 +174,7 @@ export async function radarJob(
       pr?.number,
     );
   }
-  for (const pr of snapshot.pulls) {
+  for (const pr of sameRepoPulls) {
     if (!sameLogin(pr.author, me) || mineBranches.has(pr.headRef)) continue;
     if (!remoteNames.has(pr.headRef)) continue;
     await addMine(
@@ -184,7 +186,7 @@ export async function radarJob(
   }
 
   const theirs: Work[] = [];
-  for (const pr of snapshot.pulls) {
+  for (const pr of sameRepoPulls) {
     if (sameLogin(pr.author, me) || isBot(pr.author, bots)) continue;
     if (!remoteNames.has(pr.headRef)) continue;
     const ref = `refs/remotes/origin/${pr.headRef}`;
@@ -208,6 +210,7 @@ export async function radarJob(
     const owner = branch.loginHint;
     if (!owner || sameLogin(owner, me) || isBot(owner, bots)) continue;
     if (byHead.has(branch.name) || deploy.has(branch.name)) continue;
+    if (mineBranches.has(branch.name)) continue;
     if (branch.name === defaultBase) continue;
     const pushedAtMs = Date.parse(branch.lastCommitAt);
     if (!(nowMs - pushedAtMs <= BARE_BRANCH_MAX_AGE_MS)) continue;
@@ -284,7 +287,8 @@ async function landedOn(
     return [
       {
         repo: mine.repo,
-        owner: c.loginHint ?? c.authorEmail,
+        // Never an email in findings; a merge commit names whoever merged.
+        owner: c.loginHint ?? "someone",
         number,
         base: mine.base,
         changedPaths: c.paths,

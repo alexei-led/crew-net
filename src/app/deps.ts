@@ -75,8 +75,23 @@ export async function depsJob(
       const open = deps.filter((d) => statuses[d.key] === "open");
       const allKnown = deps.every((d) => statuses[d.key] !== undefined);
       const base = { repo: slug, thread: pr.number };
+      let autoMergeOff = false;
       if (pr.autoMerge && open.length > 0) {
-        await github.disableAutoMerge(slug, pr.number);
+        try {
+          await github.disableAutoMerge(slug, pr.number);
+          autoMergeOff = true;
+        } catch (error) {
+          // Logged and retried next pass; the other PRs still get their items.
+          await store.events.append({
+            type: "sync-error",
+            job: "deps",
+            pr: key,
+            message: error instanceof Error ? error.message : String(error),
+            atMs: clock.now(),
+          });
+        }
+      }
+      if (autoMergeOff) {
         const names = open.map((d) => label(d.key, slug));
         await put({
           ...base,

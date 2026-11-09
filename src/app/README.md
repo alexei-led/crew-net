@@ -28,21 +28,30 @@ becomes the notice `crew-net: rate-limited until HH:MM` in `sync:status`.
   finding items, then `radar.json`; the dependency items, then
   `deps:state`. A killed sync replays from the old position; `putItem`
   skips an id already in the inbox.
+- **Notification cursor.** Set to the newest thread `updatedAt` GitHub
+  returned, never the laptop clock. A thread that fails holds the cursor
+  just before it (and pins its comment cursor) so the next pass retries it;
+  after 3 failures in a row it is skipped (deleted issue, lost access) so
+  the host's inbox does not stall. Rate limits and auth errors stop the
+  pass with the cursor unmoved.
 - **Messages.** A comment with a crew marker becomes `ask`, `review`, `fix`,
   `bug` or `info`; `addressed` when its first line mentions me. A `reply`
   to one of my outbox requests from its recipient moves the request
   (`accepted` → in progress, else closed) after the item is stored. Other
-  comments are `comment`, reviews `pr-review`. My own comments, GitHub Apps
+  comments are `comment`, reviews `pr-review`. Requests carry `msgId`, the
+  marker id `crew-net reply` answers with `re=`. My own comments, GitHub Apps
   (`*[bot]`) and the built-in bots are skipped.
 - **Radar.** Mine: the branches of this clone's worktrees (not a deploy
   branch, not someone else's PR) and my open PRs. Theirs: others' open PRs
   on origin and remote branches without a PR pushed within 3 days whose
   commit email names a login. `merge-tree` runs only for pairs that change
-  a common file. `stale` comes from first-parent history since my fork
+  a common file. Fork PRs (head repo ≠ repo) are left out, and a colleague's
+  branch I have checked out counts as mine only. `stale` comes from first-parent history since my fork
   point; a commit names its PR by `(#N)` or `Merge pull request #N`. The
   repo config is `.github/crew-net.yml` on `origin/HEAD` (else `main`,
   `master`). Cross-repo `order` pairs are not built yet: they need the
-  changed files of PRs in repos without a clone.
+  changed files of PRs in repos without a clone. Bare branches are diffed
+  against the default base; a merge commit names whoever merged it.
 - **Item ids:** `comment:<host>/<o>/<r>#<n>:<id>`, `review:…`,
   `finding:<key>`, `automerge-off:…`, `dep-closed:…`, `unblocked:…`,
   `waits:…`.
@@ -58,8 +67,9 @@ becomes the notice `crew-net: rate-limited until HH:MM` in `sync:status`.
 | `doctor(ports, probes, here)`     | `crew-net doctor`: checks, adoption level and next step (one live `GET /user`)  |
 
 A digest is `stale` when the repo has no snapshot or it is older than 3
-minutes. `markAnswered(store, itemId)` is for `reply`: it removes a request
-from "requests to you".
+minutes. `crew-net reply` sets kv `replied:<item-id>`; such a request leaves
+"requests to you". Peer text in `inbox` and `who` output goes through
+`core/digest` `clean` (quotes, control and bidi characters).
 
 ## Sessions and watcher
 

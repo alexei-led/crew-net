@@ -23,6 +23,8 @@ export interface SnapshotPull {
   scope: string[];
   /** Raw `depends-on` entries: `#N` or `owner/repo#N`. */
   dependsOn: string[];
+  /** The head branch lives in another repo (a fork). */
+  fork?: boolean;
 }
 
 export interface Snapshot {
@@ -58,7 +60,7 @@ export interface DepsFile {
   announced: string[];
 }
 
-export function snapshotPull(pull: PullRequest): SnapshotPull {
+export function snapshotPull(pull: PullRequest, repo: string): SnapshotPull {
   const parsed = parseStateBlock(pull.body);
   const block = parsed?.ok ? parsed.state : undefined;
   return {
@@ -73,6 +75,10 @@ export function snapshotPull(pull: PullRequest): SnapshotPull {
     ...(block?.state ? { state: block.state } : {}),
     scope: block?.scope ?? [],
     dependsOn: block?.dependsOn ?? [],
+    ...(pull.headRepo !== undefined &&
+    pull.headRepo.toLowerCase() !== repo.toLowerCase()
+      ? { fork: true }
+      : {}),
   };
 }
 

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { FileStoreAdapter } from "../adapters/store/index";
 import { pull } from "../app/fixtures/fakes";
 import { world as makeWorld } from "../app/fixtures/world";
+import { Watcher } from "../app/watch";
 import type { HelloEvent, ItemEvent } from "../protocol/index";
 import { runWatch, sendToWatch } from "./index";
 
@@ -244,6 +245,15 @@ describe("watch", () => {
     await until(async () => (await w.store.sessions.live()).length === 1);
     watch.stdin.push({ type: "bye" });
     expect(await watch.done).toBe(0);
+    expect(await w.store.sessions.live()).toEqual([]);
+  });
+
+  test("no heartbeat or claim after bye, even from a queued tick", async () => {
+    const w = world();
+    const watcher = new Watcher(w.ports, "s1", () => {});
+    await watcher.start(hello("s1", "/work/a"));
+    await watcher.bye();
+    await watcher.tick();
     expect(await w.store.sessions.live()).toEqual([]);
   });
 
