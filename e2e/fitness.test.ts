@@ -80,6 +80,41 @@ test("architecture gates reject planted violations", () => {
         "app-only-depends-on-core-protocol-ports",
       ],
       [
+        "src/core/delivery/plant.ts",
+        'import "../../ports/index";',
+        "core-only-depends-on-core-and-protocol",
+      ],
+      [
+        "src/core/delivery/plant.ts",
+        'export * from "../../app/index";',
+        "core-only-depends-on-core-and-protocol",
+      ],
+      [
+        "src/app/plant.ts",
+        'import "../cli/index";',
+        "app-only-depends-on-core-protocol-ports",
+      ],
+      [
+        "src/app/commands/plant.ts",
+        'export async function f() { await import("../../watch/index"); }',
+        "app-only-depends-on-core-protocol-ports",
+      ],
+      [
+        "src/adapters/git/plant.ts",
+        'import "../../app/ports";',
+        "adapters-only-depend-on-ports-protocol-and-self",
+      ],
+      [
+        "src/adapters/index.ts",
+        'import "../app/index";',
+        "adapters-only-depend-on-ports-protocol-and-self",
+      ],
+      [
+        "plugin/hooks/plant.ts",
+        'import "../../src/ports/index";',
+        "plugin-only-depends-on-core-and-protocol",
+      ],
+      [
         "src/app/plant.ts",
         'import "node:fs/promises";',
         "app-only-depends-on-core-protocol-ports",
@@ -127,7 +162,7 @@ test("architecture gates reject planted violations", () => {
       ),
       plant(
         "src/app/plant.ts",
-        'import "./ports"; import "../core/radar/index"; import "../protocol/index"; import "../ports/index";',
+        'import "./ports"; import "./watch"; import "../core/radar/index"; import "../protocol/index"; import "../ports/index";',
       ),
       plant(
         "plugin/hooks/plant.ts",

@@ -39,7 +39,8 @@ except the workflow after step 5.
    `claude` is not on `PATH`. CI does not run these, so run them before the PR.
 4. **Merge.** Push the branch, open the PR, wait for CI, squash-merge, then
    `git switch main && git pull --ff-only`.
-5. **Tag.** `git tag -a vX.Y.Z -m "crew-net X.Y.Z" && git push origin vX.Y.Z`.
+5. **Tag.** Once CI on `main` passed for the merge commit:
+   `git tag -a vX.Y.Z -m "crew-net X.Y.Z" && git push origin vX.Y.Z`.
    Pushing the tag publishes. The tag must be annotated and point at the merge
    commit on `main`.
 

@@ -127,10 +127,10 @@
                     "group": [
                       "**/adapters",
                       "**/adapters/**",
-                      "**/cli",
-                      "**/cli/**",
-                      "**/watch",
-                      "**/watch/**",
+                      "../**/cli",
+                      "../**/cli/**",
+                      "../**/watch",
+                      "../**/watch/**",
                       "**/plugin/**",
                       "**/e2e/**",
                       "**/repo-kit/**",
@@ -146,7 +146,7 @@
       }
     },
     {
-      "includes": ["src/adapters/*/**/*.ts", "!**/*.test.ts"],
+      "includes": ["src/adapters/**/*.ts", "!**/*.test.ts"],
       "linter": {
         "rules": {
           "style": {
@@ -166,6 +166,22 @@
                       "!**/protocol/**"
                     ],
                     "message": "adapters-only-depend-on-ports-protocol-and-self (design §19 rule 4)."
+                  },
+                  {
+                    "group": [
+                      "**/app",
+                      "**/app/**",
+                      "**/core",
+                      "**/core/**",
+                      "**/cli",
+                      "**/cli/**",
+                      "**/watch",
+                      "**/watch/**",
+                      "**/adapters",
+                      "**/adapters/**",
+                      "**/plugin/**"
+                    ],
+                    "message": "adapters-only-depend-on-ports-protocol-and-self: never app, core, composition roots or another adapter (design §19 rule 4)."
                   }
                 ]
               }
