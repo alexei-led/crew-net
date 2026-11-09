@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.1 (unreleased)
+
+### Changed
+
+- The plugin has an icon for the Claude Code plugin catalog. No behaviour change.
+
 ## 0.1.0 - 2026-11-09
 
 First release. A Claude Code plugin with the `crew-net` CLI: coding-agent
