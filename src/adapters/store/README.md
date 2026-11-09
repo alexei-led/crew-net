@@ -1,59 +1,93 @@
 # Store adapter
 
-`new FileStoreAdapter(stateDir)` implements
-[StorePort](../../ports/index.ts) on a local, single-host filesystem.
+`new FileStoreAdapter(root, clock)` implements [StorePort](../../ports/index.ts):
+the local store of [design §8.3](../../../docs/design.md#83-local-store) on one
+host's filesystem. The composition root passes
+`defaultStateDir(process.env, homedir())`, which is
+`${XDG_STATE_HOME:-~/.local/state}/crew-net` (a relative `XDG_STATE_HOME` is
+ignored), and a `ClockPort`. Every age, expiry and timestamp uses that clock.
 
-The composition root chooses the directory; the adapter does not read XDG
-variables. New directories use mode 0700 and files 0600. Existing permissions
-are not changed.
+```text
+crew-net/
+  inbox/<h>.json         {item, receivedAtMs}: one protocol ItemEvent
+  delivered/<h>          {sessionId, atMs}: delivery claim, first writer wins
+  outbox.json            [OutboundRequest]: my open requests and their status
+  sessions/<h>.json      SessionRecord: heartbeat with seenAtMs
+  repos/<host>/<owner>/<repo>/
+    snapshot.json        JSON owned by the app
+    radar.json           JSON owned by the app
+  cursors.json           {cursors: {name: string}, lastRun: {job: ms}}
+  kv/<h>.json            {key, value}: HTTP cache entries, write budget
+  locks/<h>.lock         {pid, token, expiresAtMs}: job locks and mutexes
+  locks/recovery-<token> marker of the one process allowed to reap that lock
+  events.ndjson          append-only log; events.ndjson.1 is the previous 10 MB
+```
 
-| Path                       | Content                               |
-| -------------------------- | ------------------------------------- |
-| `cursor`                   | Polling cursor string                 |
-| `inbox/<sha256(id)>.json`  | Unacknowledged protocol ItemEvent     |
-| `outbox/<sha256(id)>.json` | Open OutboundRequest                  |
-| `seen`                     | Processed ids                         |
-| `leases.json`              | Name to holder and expiry             |
-| `leases.lock`, `seen.lock` | Exclusive transaction owner records   |
-| `locks/recovery-<token>`   | Immutable stale-lock recovery records |
+`<h>` is the SHA-256 of the id, key or lock name, so no id reaches a path.
+Repo directories use the host, owner and name as given; each must be a plain
+name (`[A-Za-z0-9_.-]`, not `.` or `..`). The root and every directory are
+chmod 0700 on open, also when they already exist; files are 0600. The store
+never writes a GitHub token.
 
-Files are JSON envelopes: `{"v":1,"value":...}`. Reads reject malformed data and
-unsupported versions with `StoreFormatError`; they do not reset state silently.
-Inbox/outbox ids must match the payload id. Item filenames are opaque hashes;
-enumeration returns validated payloads, ordered by filename, not creation time.
+## Writes and reads
 
-Writes create an O_EXCL temporary file, fsync it, rename it over the destination,
-then fsync the directory. A killed writer leaves the previous or new complete
-value; leftover temporary files are ignored. A put without ack replays on restart.
-Acknowledgements are idempotent removals. The app must persist seen ids and
-pending items before advancing the cursor or acknowledging delivery.
+Each file write is temp file (`<file>.<pid>.<uuid>.tmp`, `O_EXCL`), fsync,
+rename, fsync of the directory. Readers see the old or the new value, never a
+part. Reads validate the shape and throw `StoreFormatError` naming the file;
+they do not reset state. Temp files are ignored by every listing.
 
-## Leases and concurrency
+`outbox.json`, `cursors.json` and `kv.update` are read-modify-write under a
+mutex (a lock with a 30 s expiry, retried 200 times at 5 ms, then
+`StoreLockError`). The change runs synchronously under the lock. `kv.set`,
+inbox, session and repo writes replace whole files and take no lock.
 
-Lease calls take time from the caller, never from an internal clock:
+## Inbox and delivery
 
-- `claim(name, holder, nowMs)`: create, extend the same holder, or take over an
-  expired lease. Refuse another live holder.
-- `renew(name, holder, nowMs)`: extend only the same unexpired holder.
-- `release(name, holder)`: remove only that holder's lease.
-- `holder(name, nowMs)`: return the live holder, otherwise undefined.
+- `inbox.put(item)` writes or refreshes an item and keeps the first
+  `receivedAtMs`, so sync can write before it moves a cursor and a replay
+  dedupes by id.
+- `inbox.list()` returns every item, oldest first, with its claim if any.
+- `delivered.claim(id, sessionId)` publishes the claim by hard-linking a
+  complete temp file: exactly one session wins, and a crash never leaves an
+  empty claim. It returns true for the winner, also on a repeat call.
+- `prune()` removes items whose claim is 14 days old, item first, so a crash
+  leaves an orphan claim (removed next time), never a redelivery. Undelivered
+  items stay.
 
-Expiry is exactly 180000 ms after claim or renewal; equality means expired.
+## Sessions
 
-Seen updates and lease mutations serialize under exclusive filesystem locks.
-An owner record is prepared with O_EXCL and atomically hard-linked into the lock
-path, so a crash cannot publish an empty lock. Locks from dead PIDs are recovered.
-Immutable generation markers serialize competing recovery attempts, including
-crashes during recovery. These small markers remain on disk after recovery.
-No wall clock is used for lock recovery; PID reuse can delay recovery until the
-unrelated process exits. This protocol is for local filesystems, not NFS.
+`sessions.beat(heartbeat)` writes the session's file with `seenAtMs` from the
+clock. `sessions.live()` returns heartbeats younger than 3 minutes, by id.
+`sessions.remove(id)` is for a clean exit; `prune()` removes files older than
+14 days.
 
-Transactions never yield while holding the lock. Contention retries at most 200
-times with a 5 ms delay; failure throws `StoreLockError`. Corrupt lock records
-fail closed. Do not remove locks or recovery markers while helpers are running.
+## Locks and jobs
 
-Tests use temporary directories and real child processes for simultaneous claims,
-stale-lock recovery, atomic replacements, and concurrent seen updates:
+`jobs.run(name, intervalMs, fn)`:
+
+1. Take `locks/<h>.lock` without waiting. Held by a live holder: `busy`.
+2. If the last run started less than `intervalMs` ago: release, `fresh`.
+3. Run `fn`, record its start time as the last run (also when `fn` throws, so a
+   failing job keeps its interval), release, `ran` or rethrow.
+
+A lock is stale when it has expired (10 min for jobs, 30 s for mutexes) or its
+pid is gone. `kill(pid, 0)` failing with `EPERM` means alive (another user's
+process); expiry covers a reused pid. Takeover goes through
+`locks/recovery-<stale token>`: only the process that creates that marker
+(`O_EXCL` via link) may remove the stale lock, and a reaper that died is
+followed by a marker keyed by its own token. A holder that outlives its expiry
+removes the lock on release only if it still holds its token; the window
+between that check and the unlink is not closed, so job expiry must exceed a
+job's run time. This is for local filesystems, not NFS.
+
+`prune()` also removes recovery markers whose reaper is stale and temp files
+whose writer pid is gone.
+
+## Events
+
+`events.append(event)` writes one JSON line with one `O_APPEND` write. When the
+file has reached 10 MB, the next append renames it to `events.ndjson.1` under
+a mutex (replacing the older one) and starts a new file.
 
 ```sh
 bun test src/adapters/store
