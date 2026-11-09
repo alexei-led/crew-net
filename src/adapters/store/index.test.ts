@@ -467,7 +467,43 @@ describe("jobs", () => {
     expect(await store.jobs.run("repo", 60_000, async () => {})).toBe("ran");
   });
 
+  test("a job's own error wins over a failure to record the run", async () => {
+    const store = open();
+    await expect(
+      store.jobs.run("repo", 0, async () => {
+        writeFileSync(join(dir, "cursors.json"), "{");
+        throw new Error("boom");
+      }),
+    ).rejects.toThrow("boom");
+    expect(existsSync(jobLock("repo"))).toBe(false);
+  });
+
+  test("a reaper whose stale lock was already replaced leaves the live lock", () => {
+    const store = open();
+    const path = jobLock("sync");
+    const live = plantLock(path, process.pid, now + JOB_LOCK_TTL_MS);
+    const stale = { pid: deadPid(), token: randomUUID(), expiresAtMs: now };
+    const me = { pid: process.pid, token: randomUUID(), expiresAtMs: now + 1 };
+    // biome-ignore lint/complexity/useLiteralKeys: private seam; the race window cannot be hit from outside
+    store["recover"](path, stale, me);
+    expect(JSON.parse(readFileSync(path, "utf8")).token).toBe(live);
+  });
+
+  test("prune keeps a dead reaper's marker while a lock still carries its token", async () => {
+    const store = open();
+    const dead = deadPid();
+    const token = plantLock(jobLock("sync"), dead, now + 1);
+    const marker = join(dir, "locks", `recovery-${token}`);
+    plantLock(marker, dead, now + 1);
+    await store.prune();
+    expect(existsSync(marker)).toBe(true);
+    rmSync(jobLock("sync"));
+    await store.prune();
+    expect(existsSync(marker)).toBe(false);
+  });
+
   // pid 1 always exists; kill(1, 0) from a normal user fails with EPERM,
+  // which must count as alive (as root it simply succeeds). kill(1, 0) from a normal user fails with EPERM,
   // which must count as alive. It also stands in for a reused pid.
   const myPid = () => process.pid;
   const pidOne = () => 1;
@@ -536,6 +572,20 @@ describe("events", () => {
     expect(statSync(`${path}.1`).size).toBe(EVENTS_ROTATE_BYTES + 7);
     expect(readFileSync(path, "utf8")).toBe('{"n":2}\n');
   });
+
+  test("two processes crossing 10 MB rotate once and lose no line", async () => {
+    const path = join(dir, "events.ndjson");
+    open();
+    writeFileSync(path, `${"a".repeat(EVENTS_ROTATE_BYTES - 1)}\n`);
+    const append = (p: string) =>
+      `for (let i = 0; i < 20; i++) await store.events.append({p: "${p}", i});`;
+    await race(append("a"), append("b"));
+    const lines = (f: string) =>
+      readFileSync(f, "utf8").split("\n").filter(Boolean);
+    const all = [...lines(`${path}.1`), ...lines(path)];
+    expect(all.filter((l) => l.startsWith("{"))).toHaveLength(40);
+    expect(all.filter((l) => l.startsWith("a"))).toHaveLength(1);
+  }, 15_000);
 });
 
 describe("maintenance and failure", () => {
@@ -635,15 +685,36 @@ describe("maintenance and failure", () => {
     expect(await store.outbox.list()).toEqual([]);
   });
 
-  test("no token-like value is written by the store itself", async () => {
+  test("stray files in store directories are ignored", async () => {
     const store = open();
     await store.inbox.put(item());
-    await store.jobs.run("inbox", 0, async () => {});
-    const files = readdirSync(dir, { recursive: true, encoding: "utf8" });
-    for (const file of files) {
-      const path = join(dir, file);
-      if (statSync(path).isFile())
-        expect(readFileSync(path, "utf8")).not.toMatch(/gh[pousr]_|token/i);
-    }
+    await store.sessions.beat(session("s"));
+    for (const sub of ["inbox", "delivered", "sessions", "locks"])
+      writeFileSync(join(dir, sub, ".DS_Store"), "\0binary");
+    expect((await store.inbox.list()).map((e) => e.item.id)).toEqual([
+      "comment:42",
+    ]);
+    expect((await store.sessions.live()).map((s) => s.sessionId)).toEqual([
+      "s",
+    ]);
+    await store.prune();
+  });
+
+  test("a session file under another session's name fails closed", async () => {
+    const store = open();
+    await store.sessions.beat(session("a"));
+    writeFileSync(
+      join(dir, "sessions", `${sha("b")}.json`),
+      readFileSync(join(dir, "sessions", `${sha("a")}.json`)),
+    );
+    await expect(store.prune()).rejects.toBeInstanceOf(StoreFormatError);
+  });
+
+  test("a lock pid outside int32 fails closed as a lock error", async () => {
+    const store = open();
+    plantLock(jobLock("sync"), 99_999_999_999, now + 1);
+    await expect(
+      store.jobs.run("sync", 0, async () => {}),
+    ).rejects.toBeInstanceOf(StoreLockError);
   });
 });

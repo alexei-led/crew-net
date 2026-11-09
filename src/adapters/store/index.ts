@@ -45,6 +45,10 @@ export const EVENTS_ROTATE_BYTES = 10 * 1024 * 1024;
 const DIRS = ["inbox", "delivered", "sessions", "repos", "locks", "kv"];
 const TEMP = /\.(\d+)\.[0-9a-f-]{36}\.tmp$/;
 const SEGMENT = /^[A-Za-z0-9_.-]+$/;
+const HASHED = /^[0-9a-f]{64}$/;
+const HASHED_JSON = /^[0-9a-f]{64}\.json$/;
+const MARKER = /^recovery-([0-9a-f-]{36})$/;
+const LOCK = /^[0-9a-f]{64}\.lock$/;
 
 /** `${XDG_STATE_HOME:-~/.local/state}/crew-net`; a relative XDG_STATE_HOME is ignored, per the XDG spec. */
 export function defaultStateDir(
@@ -93,8 +97,9 @@ function fields(value: unknown): Fields | undefined {
 const isString = (v: unknown): v is string => typeof v === "string";
 const isTime = (v: unknown): v is number =>
   typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
+// process.kill rejects pids outside int32.
 const isPid = (v: unknown): v is number =>
-  typeof v === "number" && Number.isSafeInteger(v) && v > 0;
+  typeof v === "number" && Number.isInteger(v) && v > 0 && v <= 0x7fffffff;
 
 interface LockOwner {
   pid: number;
@@ -266,12 +271,7 @@ export class FileStoreAdapter implements StorePort {
         closeSync(fd);
       }
       renameSync(temp, path);
-      const dir = openSync(dirname(path), "r");
-      try {
-        fsyncSync(dir);
-      } finally {
-        closeSync(dir);
-      }
+      this.syncDir(path);
     } finally {
       this.remove(temp);
     }
@@ -285,24 +285,41 @@ export class FileStoreAdapter implements StorePort {
     }
   }
 
-  private names(dir: string): string[] {
+  /** Our own entries only: temp files and foreign files (.DS_Store, backups) are skipped. */
+  private names(dir: string, pattern: RegExp): string[] {
     return readdirSync(dir)
-      .filter((name) => !name.endsWith(".tmp"))
+      .filter((name) => pattern.test(name))
       .sort();
   }
 
-  /** Write value to a private temp file, then hard-link it to path: exclusive and never partial. */
+  private syncDir(path: string): void {
+    const dir = openSync(dirname(path), "r");
+    try {
+      fsyncSync(dir);
+    } finally {
+      closeSync(dir);
+    }
+  }
+
+  /** Write value to a private temp file, then hard-link it to path: exclusive, complete and durable. */
   private publish(path: string, value: unknown, token: string): boolean {
     const temp = `${path}.${process.pid}.${token}.tmp`;
     try {
-      this.write(temp, value);
+      const fd = openSync(temp, "wx", 0o600);
+      try {
+        writeFileSync(fd, JSON.stringify(value));
+        fsyncSync(fd);
+      } finally {
+        closeSync(fd);
+      }
       try {
         linkSync(temp, path);
-        return true;
       } catch (error) {
         if (isCode(error, "EEXIST")) return false;
         throw error;
       }
+      this.syncDir(path);
+      return true;
     } finally {
       this.remove(temp);
     }
@@ -435,7 +452,7 @@ export class FileStoreAdapter implements StorePort {
     get: async (id: string): Promise<InboxEntry | undefined> =>
       this.entryAt(this.inboxPath(id)),
     list: async (): Promise<InboxEntry[]> =>
-      this.names(this.path("inbox"))
+      this.names(this.path("inbox"), HASHED_JSON)
         .flatMap((name) => this.entryAt(this.path("inbox", name)) ?? [])
         .sort(
           (a, b) =>
@@ -496,10 +513,14 @@ export class FileStoreAdapter implements StorePort {
     return this.path("sessions", `${hash(id)}.json`);
   }
 
-  private allSessions(): SessionRecord[] {
-    return this.names(this.path("sessions")).flatMap((name) => {
-      const record = this.read(this.path("sessions", name), parseSession);
-      return record ? [record] : [];
+  private allSessions(): { path: string; record: SessionRecord }[] {
+    return this.names(this.path("sessions"), HASHED_JSON).flatMap((name) => {
+      const path = this.path("sessions", name);
+      const record = this.read(path, parseSession);
+      if (!record) return [];
+      if (path !== this.sessionPath(record.sessionId))
+        throw new StoreFormatError(path);
+      return [{ path, record }];
     });
   }
 
@@ -512,6 +533,7 @@ export class FileStoreAdapter implements StorePort {
     live: async (): Promise<SessionRecord[]> => {
       const now = this.clock.now();
       return this.allSessions()
+        .map((s) => s.record)
         .filter((s) => now - s.seenAtMs < SESSION_LIVE_MS)
         .sort((a, b) => (a.sessionId < b.sessionId ? -1 : 1));
     },
@@ -544,7 +566,8 @@ export class FileStoreAdapter implements StorePort {
       value: JsonValue,
     ): Promise<void> => {
       const dir = this.repoDir(repo);
-      this.ensureDir(dir);
+      const host = this.path("repos", repo.host);
+      for (const d of [host, join(host, repo.owner), dir]) this.ensureDir(d);
       this.write(join(dir, `${file}.json`), value);
     },
   };
@@ -590,14 +613,19 @@ export class FileStoreAdapter implements StorePort {
         const startedAt = this.clock.now();
         const last = this.readCursors().lastRun.get(name);
         if (last !== undefined && startedAt - last < intervalMs) return "fresh";
-        try {
-          await fn();
-        } finally {
-          // Failures count as a run too, so a broken job does not retry every tick.
-          await this.changeCursors((c) => {
+        const record = () =>
+          this.changeCursors((c) => {
             c.lastRun.set(name, startedAt);
           });
+        try {
+          await fn();
+        } catch (error) {
+          // Failures count as a run too, so a broken job does not retry every
+          // tick; the job's own error wins over one from recording it.
+          await record().catch(() => {});
+          throw error;
         }
+        await record();
         return "ran";
       } finally {
         this.unlock(path, owner);
@@ -669,28 +697,33 @@ export class FileStoreAdapter implements StorePort {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const path = join(dir, entry.name);
       if (entry.isDirectory()) this.pruneTemps(path);
-      const pid = TEMP.exec(entry.name)?.[1];
-      if (entry.isFile() && pid && !this.alive(Number(pid))) this.remove(path);
+      const pid = Number(TEMP.exec(entry.name)?.[1]);
+      if (entry.isFile() && isPid(pid) && !this.alive(pid)) this.remove(path);
     }
   }
 
   readonly prune = async (): Promise<void> => {
     const now = this.clock.now();
-    for (const name of this.names(this.path("delivered"))) {
+    for (const name of this.names(this.path("delivered"), HASHED)) {
       const claim = this.read(this.path("delivered", name), parseClaim);
       if (!claim || now - claim.atMs < RETENTION_MS) continue;
       // Item first: a crash in between leaves an orphan claim, never a redelivery.
       this.remove(this.path("inbox", `${name}.json`));
       this.remove(this.path("delivered", name));
     }
-    for (const session of this.allSessions())
-      if (now - session.seenAtMs >= RETENTION_MS)
-        this.remove(this.sessionPath(session.sessionId));
-    for (const name of this.names(this.path("locks"))) {
-      if (!name.startsWith("recovery-")) continue;
+    for (const { path, record } of this.allSessions())
+      if (now - record.seenAtMs >= RETENTION_MS) this.remove(path);
+    // A marker for a token some lock still carries keeps fencing reapers of it.
+    const held = new Set(
+      this.names(this.path("locks"), LOCK).map(
+        (name) => this.readOwner(this.path("locks", name))?.token,
+      ),
+    );
+    for (const name of this.names(this.path("locks"), MARKER)) {
       const path = this.path("locks", name);
       const reaper = this.readOwner(path);
-      if (reaper && this.stale(reaper)) this.remove(path);
+      if (reaper && this.stale(reaper) && !held.has(MARKER.exec(name)?.[1]))
+        this.remove(path);
     }
     this.pruneTemps(this.root);
   };

@@ -25,16 +25,20 @@ crew-net/
 
 `<h>` is the SHA-256 of the id, key or lock name, so no id reaches a path.
 Repo directories use the host, owner and name as given; each must be a plain
-name (`[A-Za-z0-9_.-]`, not `.` or `..`). The root and every directory are
-chmod 0700 on open, also when they already exist; files are 0600. The store
+name (`[A-Za-z0-9_.-]`, not `.` or `..`). The root, its fixed directories and
+each repo directory level are chmod 0700 when opened or written, also when
+they already exist; files are 0600. The store
 never writes a GitHub token.
 
 ## Writes and reads
 
 Each file write is temp file (`<file>.<pid>.<uuid>.tmp`, `O_EXCL`), fsync,
 rename, fsync of the directory. Readers see the old or the new value, never a
-part. Reads validate the shape and throw `StoreFormatError` naming the file;
-they do not reset state. Temp files are ignored by every listing.
+part. Claims, locks and markers are published by hard-linking a complete,
+fsynced temp file, then fsyncing the directory. Reads validate the shape and
+throw `StoreFormatError` naming the file; they do not reset state. A hashed
+file whose content names another id is corrupt too. Listings read only names
+the store writes, so temp files and foreign files (`.DS_Store`) are skipped.
 
 `outbox.json`, `cursors.json` and `kv.update` are read-modify-write under a
 mutex (a lock with a 30 s expiry, retried 200 times at 5 ms, then
@@ -68,7 +72,8 @@ clock. `sessions.live()` returns heartbeats younger than 3 minutes, by id.
 1. Take `locks/<h>.lock` without waiting. Held by a live holder: `busy`.
 2. If the last run started less than `intervalMs` ago: release, `fresh`.
 3. Run `fn`, record its start time as the last run (also when `fn` throws, so a
-   failing job keeps its interval), release, `ran` or rethrow.
+   failing job keeps its interval), release, `ran` or rethrow. When `fn` throws,
+   its error is the one rethrown, even if recording the run fails.
 
 A lock is stale when it has expired (10 min for jobs, 30 s for mutexes) or its
 pid is gone. `kill(pid, 0)` failing with `EPERM` means alive (another user's
@@ -80,8 +85,9 @@ removes the lock on release only if it still holds its token; the window
 between that check and the unlink is not closed, so job expiry must exceed a
 job's run time. This is for local filesystems, not NFS.
 
-`prune()` also removes recovery markers whose reaper is stale and temp files
-whose writer pid is gone.
+`prune()` also removes recovery markers whose reaper is stale and whose token
+no lock still carries, and temp files whose writer pid is gone. Pids must fit
+in int32 (what `kill` accepts); anything else is a corrupt lock.
 
 ## Events
 

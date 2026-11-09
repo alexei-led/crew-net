@@ -200,7 +200,7 @@ export interface StorePort {
     /** Append one line to events.ndjson. */
     append(event: JsonObject): Promise<void>;
   };
-  /** Remove expired delivered items, dead sessions, recovery markers and orphan temp files. */
+  /** Remove items delivered 14 days ago, session files older than 14 days, stale recovery markers and orphan temp files. */
   prune(): Promise<void>;
 }
 
