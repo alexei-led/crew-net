@@ -1,0 +1,42 @@
+# crew-net repo config: https://github.com/alexei-led/crew-net
+# Every key is optional. The values below are the defaults.
+
+# Branches whose merge deploys. The radar and dependencies compare each PR
+# against its own base.
+deploy-branches: [main, master]
+
+# Logins whose PRs and branches the radar ignores, in addition to
+# renovate, dependabot and github-actions.
+bots: []
+
+# Open a draft PR at the first push, so others see intent and scope early.
+# Drafts run full CI by default. Before you set this to true, skip expensive
+# jobs on drafts in each workflow:
+#
+#   on:
+#     pull_request:
+#       types: [opened, synchronize, reopened, ready_for_review]
+#   jobs:
+#     build:
+#       if: github.event.pull_request.draft == false
+#
+# Skipped jobs satisfy required checks; use this only if that is acceptable
+# for your ruleset. Keep cheap checks such as crew-deps ungated.
+early-drafts: false
+
+# Repo default for agents merging their own PR when checks pass and the
+# order gate allows. A developer setting can override it.
+agents-merge: false
+
+# Contracts: paths whose change must merge before the paths that use them.
+# Without this key crew-net uses: producers **/migrations/**, **/*migration*,
+# api/openapi/**, **/*.proto; consumers: every other path. A consumer with an
+# owner/repo: prefix is in another repo, which must be watched.
+#
+# contracts:
+#   - name: api
+#     producer: [api/openapi/**]
+#     consumers: [web/src/api/**, "acme/mobile:clients/api/**"]
+#   - name: db
+#     producer: ["**/migrations/**"]
+#     consumers: ["api/**/models/**"]
