@@ -90,6 +90,20 @@ describe("gateDecision", () => {
     ],
     ["bad depends-on ref", body("not-a-ref"), [], merge, "deny"],
     [
+      "depends-on on the same line as state",
+      "<!-- crew-net state: review depends-on: #3 -->",
+      [{ number: 3, merged: false }],
+      merge,
+      "deny",
+    ],
+    [
+      "prose mention of the format before the block",
+      "About `<!-- crew-net -->`.\n\n<!-- crew-net\ndepends-on: #3\n-->",
+      [{ number: 3, merged: false }],
+      merge,
+      "deny",
+    ],
+    [
       "good ref next to a bad one",
       body("#2301, nonsense"),
       [{ number: 2301, merged: true }],

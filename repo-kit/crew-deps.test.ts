@@ -36,6 +36,16 @@ const fixtures = [
   "<!-- crew-net\r\nstate: blocked\r\n-->",
   "<!-- crew-net state: review -->",
   "<!-- crew-net\nbad key: 1\nnote-1: ok\n-->",
+  "<!-- crew-net state: review depends-on: #2 -->",
+  "<!-- crew-net v1 lead: a/b state: review depends-on: #2 -->",
+  "<!-- crew-net\ndepends-on:\ndepends-on: #2\n-->",
+  "<!-- crew-net\n- depends-on: #2\n-->",
+  "<!-- crew-net\ndepends_on: #2\n-->",
+  "Mentions `<!-- crew-net -->`.\n\n<!-- crew-net\ndepends-on: #2\n-->",
+  "<!-- crew-net\ndepends-on: #2\n-->\nand `<!-- crew-net -->`",
+  "Uses <!-- crew-net comments.\n\n<!-- crew-net\nstate: building\n-->",
+  "<!-- Crew-Net v1\nlead: a/b\nstate: review\ndepends-on: #2\n-->",
+  "<!--\ncrew-net\ndepends-on: #2\n-->",
 ];
 
 const withDir = <T>(fn: (dir: string) => T): T => {
@@ -186,6 +196,27 @@ describe("check", () => {
       "same",
       1,
       'Unreadable depends-on value "soon"',
+    ],
+    [
+      "depends-on on the same line as state",
+      "<!-- crew-net state: review depends-on: #4 -->",
+      "same",
+      1,
+      "Unreadable depends-on",
+    ],
+    [
+      "prose mention of the format before the block",
+      "About `<!-- crew-net -->`.\n\n<!-- crew-net\ndepends-on: #4\n-->",
+      "same",
+      1,
+      "more than one state block",
+    ],
+    [
+      "block with a different spelling of the tag",
+      "<!-- Crew-Net v1\nlead: a/b\ndepends-on: #2\n-->",
+      "same",
+      1,
+      "not merged",
     ],
     [
       "bad state does not block",

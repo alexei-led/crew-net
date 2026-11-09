@@ -13,7 +13,8 @@ These files are opt-in; the crew-net client does not depend on them.
 - `scripts/crew-deps.mjs` is the dependency-free reader and GitHub API client
   used by both workflows. It reads the unversioned block and the old
   `<!-- crew-net v1 -->` block (`lead` is ignored). It fails closed on a block
-  that does not close; in the rerun workflow an unreadable block fails the job.
+  that does not close, that holds a second `<!-- crew-net` or a nested `<!--`,
+  and on a `depends-on` that is not on a line of its own; in the rerun workflow an unreadable block fails the job.
 - `snippets/draft-gate.md` shows how to skip expensive jobs on draft PRs.
 
 ## Adoption
@@ -34,4 +35,6 @@ number from the queue branch name (`gh-readonly-queue/<base>/pr-<N>-<sha>`),
 reads that PR's body from the API and checks it as above. The branch name holds
 one PR number, so with a queue group size above 1 only that PR is checked
 again; the other PRs in the group passed the `pull_request` check to enter the
-queue. Do not change `depends-on` while a PR is queued.
+queue. A dependency queued ahead of its dependent has not merged yet, so the
+dependent's queue check fails; queue a dependent only after its dependency has
+merged. Do not change `depends-on` while a PR is queued.

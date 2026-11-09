@@ -110,6 +110,7 @@ function tokenize(source: string): Line[] {
   const lines: Line[] = [];
   source.split(/\r?\n/).forEach((raw, index) => {
     const no = index + 1;
+    if (raw.trimEnd() === "---" && lines.length === 0) return;
     const text = stripComment(raw);
     if (text.trim() === "") return;
     const indent = text.length - text.trimStart().length;
@@ -136,7 +137,9 @@ function unquote(token: string, no: number): string {
 }
 
 function scalar(token: string, no: number): Node {
-  if (token === "") return null;
+  if (token === "" || token === "~" || token === "null") return null;
+  if (token === "-" || token.startsWith("- "))
+    throw new ConfigError(no, `nested list item is not supported: ${token}`);
   if (token === "true") return true;
   if (token === "false") return false;
   if (token[0] === '"' || token[0] === "'") return unquote(token, no);

@@ -148,6 +148,17 @@ unknown-key:
     });
   });
 
+  test("accepts a leading document-start marker", () => {
+    expect(read("---\nearly-drafts: true\n")).toMatchObject({
+      earlyDrafts: true,
+    });
+  });
+
+  test("~ and null are empty, not text", () => {
+    expect(read("bots: ~\n").bots).toEqual([]);
+    expect(read("bots: null\n").bots).toEqual([]);
+  });
+
   test("handles CRLF line endings", () => {
     expect(read("early-drafts: true\r\nbots: [a]\r\n")).toMatchObject({
       earlyDrafts: true,
@@ -158,6 +169,13 @@ unknown-key:
 
 describe("errors", () => {
   test.each<[string, string, number | null, string]>([
+    ["a nested list item", "bots: - renovate\n", 1, "nested list item"],
+    [
+      "a list inside a list",
+      "contracts:\n  - name: a\n    producer: [p]\n    consumers:\n      - - web/**\n",
+      5,
+      "nested list item",
+    ],
     ["a tab for indentation", "contracts:\n\t- name: a\n", 2, "tabs"],
     ["a flow map", "contracts: {name: a}\n", 1, "unsupported"],
     ["an anchor", "bots: &x [a]\n", 1, "unsupported"],

@@ -46,7 +46,8 @@ export interface HelloEvent extends Tagged<"hello"> {
   worktree: string;
   /** Checked-out branch, absent on a detached HEAD. */
   branch?: string;
-  claudePid: number;
+  /** Process id of the harness session. */
+  pid: number;
   settings: { autoWake: boolean };
 }
 
@@ -100,7 +101,7 @@ const SHAPES: Record<
     role: oneOf(SESSION_ROLES),
     harness: isString,
     worktree: isString,
-    claudePid: isInt,
+    pid: isInt,
   },
   ack: { id: isString, outcome: oneOf(ACK_OUTCOMES) },
   bye: {},

@@ -195,6 +195,93 @@ describe("parseStateBlock", () => {
     expect(parseStateBlock(body)).toEqual(ok(full));
   });
 
+  describe("depends-on that cannot be read as written", () => {
+    // Each of these once read as "no dependency", which the gate allows.
+    test.each([
+      ["same line as state", "<!-- crew-net state: review depends-on: #2 -->"],
+      ["same line as scope", "<!-- crew-net scope: a/ depends-on: #2 -->"],
+      [
+        "old format on one line",
+        "<!-- crew-net v1 lead: a/b state: review depends-on: #2 -->",
+      ],
+      [
+        "empty first, real second",
+        "<!-- crew-net\ndepends-on:\ndepends-on: #2\n-->",
+      ],
+      ["markdown bullet", "<!-- crew-net\n- depends-on: #2\n-->"],
+      ["underscore spelling", "<!-- crew-net\ndepends_on: #2\n-->"],
+      [
+        "upper case, repeated",
+        "<!-- crew-net\ndepends-on: #1\nDepends-On: #2\n-->",
+      ],
+    ])("warns: %s", (_name, body) => {
+      const result = parseStateBlock(body);
+      expect(result).toMatchObject({ ok: true });
+      if (!result?.ok) return;
+      expect(result.warnings.map((w) => w.field)).toContain("depends-on");
+    });
+
+    test("a clean depends-on line gives no such warning", () => {
+      const result = parseStateBlock(
+        "<!-- crew-net\nstate: review\ndepends-on: #2\n-->",
+      );
+      expect(result).toMatchObject({ ok: true, warnings: [] });
+    });
+  });
+
+  describe("block boundaries", () => {
+    test.each([
+      [
+        "prose mention before the real block",
+        "Switches to the unversioned `<!-- crew-net -->` block.\n\n<!-- crew-net\ndepends-on: #2\n-->",
+        "more than one state block",
+      ],
+      [
+        "prose mention after the real block",
+        "<!-- crew-net\ndepends-on: #2\n-->\n\nAbout `<!-- crew-net -->`.",
+        "more than one state block",
+      ],
+      [
+        "unclosed prose mention before the real block",
+        "Uses <!-- crew-net comments.\n\n<!-- crew-net\nstate: building\n-->",
+        "comment inside the block",
+      ],
+      [
+        "two real blocks",
+        `${render(full)}\n${render(full)}`,
+        "more than one state block",
+      ],
+    ])("%s is malformed, not absent or partial", (_name, body, detail) => {
+      expect(parseStateBlock(body)).toEqual({
+        ok: false,
+        reason: "malformed",
+        detail,
+      });
+    });
+
+    test("replace refuses to eat text between an unclosed mention and the block", () => {
+      const body =
+        "Uses <!-- crew-net comments.\n\nDetails here.\n\n<!-- crew-net\nstate: building\n-->";
+      expect(replaceStateBlock(body, { ...full, dependsOn: [] })).toMatchObject(
+        {
+          ok: false,
+          error: { reason: "unreadable-block" },
+        },
+      );
+    });
+
+    test.each([
+      "<!-- Crew-Net v1\nlead: a/b\nstate: review\ndepends-on: #2\n-->",
+      "<!--\ncrew-net\ndepends-on: #2\n-->",
+      "<!-- CREW-NET\ndepends-on: #2\n-->",
+    ])("other spellings of the opening still read: %j", (body) => {
+      expect(parseStateBlock(body)).toMatchObject({
+        ok: true,
+        state: { dependsOn: ["#2"] },
+      });
+    });
+  });
+
   describe("per-field tolerance", () => {
     test("unknown state is skipped with a warning; other fields survive", () => {
       const body =
@@ -353,7 +440,7 @@ describe("replaceStateBlock", () => {
       "<!-- crew-net\nstate: review\n\nlong text that would be eaten";
     expect(replaceStateBlock(body, next)).toEqual({
       ok: false,
-      error: { reason: "unterminated-block" },
+      error: { reason: "unreadable-block", detail: "unterminated block" },
     });
   });
 

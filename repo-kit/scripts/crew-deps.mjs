@@ -5,7 +5,8 @@ import { pathToFileURL } from "node:url";
 // Keep this dependency-free reader in sync with src/protocol/state-block.ts.
 const STATES = ["planning", "building", "review", "blocked"];
 const KNOWN_FIELDS = new Set(["state", "scope", "depends-on", "lead"]);
-const OPEN = /<!--[ \t]*crew-net(?=\s|-->)/;
+const OPEN = /<!--\s*crew-net(?=\s|-->)/i;
+const DEPENDS_ON_MENTION = /depends[-_ ]?on[ \t]*:/gi;
 const LEGACY_TAG = /^v\d+(?:\.\d+)*(?=\s|$)/;
 const REF = /^(?:[\w.-]+\/[\w.-]+)?#\d+$/;
 const KEY = /^[a-z][a-z0-9-]*$/;
@@ -19,22 +20,45 @@ const list = (value) =>
 export function parseStateBlock(body) {
   const open = OPEN.exec(body);
   if (!open) return null;
-  const start = open.index + open[0].length;
-  const end = body.indexOf("-->", start);
+  const innerStart = open.index + open[0].length;
+  const end = body.indexOf("-->", innerStart);
   if (end < 0)
     return { ok: false, reason: "malformed", detail: "unterminated block" };
+  const inner = body.slice(innerStart, end);
+  if (inner.includes("<!--"))
+    return {
+      ok: false,
+      reason: "malformed",
+      detail: "comment inside the block",
+    };
+  if (OPEN.test(body.slice(end + 3)))
+    return {
+      ok: false,
+      reason: "malformed",
+      detail: "more than one state block",
+    };
+  const text = inner.trimStart().replace(LEGACY_TAG, "");
   const fields = new Map();
-  for (const line of body
-    .slice(start, end)
-    .trimStart()
-    .replace(LEGACY_TAG, "")
-    .split("\n")) {
+  let dependsOnLines = 0;
+  for (const line of text.split("\n")) {
     const colon = line.indexOf(":");
     if (colon < 0) continue;
     const key = line.slice(0, colon).trim().toLowerCase();
+    if (key === "depends-on") dependsOnLines++;
     if (key && !fields.has(key)) fields.set(key, line.slice(colon + 1).trim());
   }
   const warnings = [];
+  // `state: review depends-on: #2` on one line, a bullet, `depends_on:` or a
+  // repeated key would otherwise read as "no dependency".
+  if (
+    (text.match(DEPENDS_ON_MENTION)?.length ?? 0) !== dependsOnLines ||
+    dependsOnLines > 1
+  )
+    warnings.push({
+      field: "depends-on",
+      value: "",
+      detail: "must be one `depends-on:` line of its own",
+    });
   const rawState = fields.get("state");
   const state = STATES.find((s) => s === rawState);
   if (rawState !== undefined && state === undefined)

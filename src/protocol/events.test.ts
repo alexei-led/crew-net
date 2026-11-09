@@ -44,7 +44,7 @@ const HELLO = (overrides: Record<string, unknown>): string =>
     role: "lead",
     harness: "claude-code",
     worktree: "/w",
-    claudePid: 1,
+    pid: 1,
     settings: { autoWake: true },
     ...overrides,
   });
@@ -76,7 +76,7 @@ describe("decodeEvent", () => {
       role: "worker",
       harness: "pi",
       worktree: "/w",
-      claudePid: 1,
+      pid: 1,
       settings: { autoWake: true },
     };
     expect(decodeEvent(JSON.stringify(hello))).toMatchObject({
@@ -117,7 +117,7 @@ describe("decodeEvent", () => {
       '{"type":"item","id":"1","kind":"message","text":"t","addressed":true,"from":3}',
     ],
     ["ack with unknown outcome", '{"type":"ack","id":"1","outcome":"maybe"}'],
-    ["hello with string pid", HELLO({ claudePid: "1" })],
+    ["hello with string pid", HELLO({ pid: "1" })],
     ["hello without a session", HELLO({ session: undefined })],
     ["hello with unknown role", HELLO({ role: "boss" })],
     ["hello without harness", HELLO({ harness: undefined })],

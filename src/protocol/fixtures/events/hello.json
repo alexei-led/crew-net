@@ -6,7 +6,7 @@
   "repo": "doiteng/reflex",
   "worktree": "/Users/alexei/Workspace/reflex",
   "branch": "feat/openapi-users",
-  "claudePid": 4242,
+  "pid": 4242,
   "settings": {
     "autoWake": false
   }

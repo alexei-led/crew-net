@@ -52,14 +52,19 @@ export type ReplaceStateBlockResult =
   | { ok: true; body: string }
   | {
       ok: false;
-      error: RenderStateBlockError | { reason: "unterminated-block" };
+      error:
+        | RenderStateBlockError
+        | { reason: "unreadable-block"; detail: string };
     };
 
 /** Opening tag. The tag must be followed by whitespace or the closing `-->`, so `<!-- crew-net:msg` does not match. */
-const OPEN = /<!--[ \t]*crew-net(?=\s|-->)/;
+const OPEN = /<!--\s*crew-net(?=\s|-->)/i;
 const CLOSE = "-->";
 const REF = /^(?:[\w.-]+\/[\w.-]+)?#\d+$/;
 const KEY = /^[a-z][a-z0-9-]*$/;
+
+/** Any spelling of the dependency key, to catch one that is not alone on its line. */
+const DEPENDS_ON_MENTION = /depends[-_ ]?on[ \t]*:/gi;
 
 /** Version tag of the old format: `v1`, `v1.3`. Read and dropped. */
 const LEGACY_TAG = /^v\d+(?:\.\d+)*(?=\s|$)/;
@@ -88,9 +93,30 @@ const list = (value: string | undefined): string[] =>
     .map((item) => item.trim())
     .filter(Boolean);
 
+/** Lines whose key is exactly `depends-on`. */
+const dependsOnLines = (inner: string): number =>
+  inner.split("\n").filter((line) => {
+    const colon = line.indexOf(":");
+    return (
+      colon >= 0 && line.slice(0, colon).trim().toLowerCase() === "depends-on"
+    );
+  }).length;
+
 function readBlock(inner: string): ParseStateBlockResult {
-  const fields = readFields(inner.trimStart().replace(LEGACY_TAG, ""));
+  const text = inner.trimStart().replace(LEGACY_TAG, "");
+  const fields = readFields(text);
   const warnings: StateBlockWarning[] = [];
+
+  // `state: review depends-on: #2` on one line, a bullet, `depends_on:` or a
+  // repeated key would otherwise read as "no dependency".
+  const lines = dependsOnLines(text);
+  if ((text.match(DEPENDS_ON_MENTION)?.length ?? 0) !== lines || lines > 1) {
+    warnings.push({
+      field: "depends-on",
+      value: "",
+      detail: "must be one `depends-on:` line of its own",
+    });
+  }
 
   const rawState = fields.get("state");
   const state = PR_STATES.find((s) => s === rawState);
@@ -121,22 +147,41 @@ function readBlock(inner: string): ParseStateBlockResult {
   };
 }
 
+type Located =
+  | { start: number; end: number; inner: string }
+  | { detail: string };
+
 /**
- * Read the first crew-net state block. Accepts the unversioned form and the
- * old `<!-- crew-net v1 ... -->` form. `lead` is accepted and ignored. Unknown
- * fields are kept. A bad value is skipped and reported in `warnings`, so the
- * rest of the block still reads. Returns null only when no block opens. Never
- * throws.
+ * Find the one block in `body`. A second opening, or a `<!--` inside the
+ * block, means the span cannot be trusted: a prose mention of the format would
+ * hide the real block or make a rewrite eat text.
  */
-export function parseStateBlock(body: string): ParseStateBlockResult | null {
+function locate(body: string): Located | null {
   const open = OPEN.exec(body);
   if (!open) return null;
-  const start = open.index + open[0].length;
-  const end = body.indexOf(CLOSE, start);
-  if (end < 0) {
-    return { ok: false, reason: "malformed", detail: "unterminated block" };
-  }
-  return readBlock(body.slice(start, end));
+  const innerStart = open.index + open[0].length;
+  const end = body.indexOf(CLOSE, innerStart);
+  if (end < 0) return { detail: "unterminated block" };
+  const inner = body.slice(innerStart, end);
+  if (inner.includes("<!--")) return { detail: "comment inside the block" };
+  if (OPEN.test(body.slice(end + CLOSE.length)))
+    return { detail: "more than one state block" };
+  return { start: open.index, end: end + CLOSE.length, inner };
+}
+
+/**
+ * Read the crew-net state block. Accepts the unversioned form and the old
+ * `<!-- crew-net v1 ... -->` form. `lead` is accepted and ignored. Unknown
+ * fields are kept. A bad value is skipped and reported in `warnings`, so the
+ * rest of the block still reads. Returns null only when no block opens: an
+ * unterminated, nested or repeated block is `malformed`. Never throws.
+ */
+export function parseStateBlock(body: string): ParseStateBlockResult | null {
+  const found = locate(body);
+  if (!found) return null;
+  if ("detail" in found)
+    return { ok: false, reason: "malformed", detail: found.detail };
+  return readBlock(found.inner);
 }
 
 const breaksComment = (value: string): boolean => /[\r\n]|-->/.test(value);
@@ -189,33 +234,34 @@ export function renderStateBlock(state: StateBlock): RenderStateBlockResult {
  * Put a state into a PR body: replace the existing block in place, or append
  * one when there is none. Other text is untouched. Unknown fields of the
  * existing block are kept. `lead` is dropped. Refuses to write over a block
- * that does not close, because it would hide the rest of the body.
+ * it cannot delimit (unterminated, nested or repeated), because it would eat text.
  */
 export function replaceStateBlock(
   body: string,
   state: Omit<StateBlock, "extra">,
 ): ReplaceStateBlockResult {
-  const open = OPEN.exec(body);
-  if (!open) {
+  const found = locate(body);
+  if (!found) {
     const rendered = renderStateBlock({ ...state, extra: [] });
     if (!rendered.ok) return rendered;
     const separator = body === "" ? "" : body.endsWith("\n") ? "\n" : "\n\n";
     return { ok: true, body: `${body}${separator}${rendered.block}\n` };
   }
-  const start = open.index + open[0].length;
-  const end = body.indexOf(CLOSE, start);
-  if (end < 0) return { ok: false, error: { reason: "unterminated-block" } };
-  const existing = readBlock(body.slice(start, end));
+  if ("detail" in found)
+    return {
+      ok: false,
+      error: { reason: "unreadable-block", detail: found.detail },
+    };
+  const existing = readBlock(found.inner);
   if (!existing.ok)
-    return { ok: false, error: { reason: "unterminated-block" } };
-  const rendered = renderStateBlock({
-    ...state,
-    extra: existing.state.extra,
-  });
+    return {
+      ok: false,
+      error: { reason: "unreadable-block", detail: existing.detail },
+    };
+  const rendered = renderStateBlock({ ...state, extra: existing.state.extra });
   if (!rendered.ok) return rendered;
-  const close = end + CLOSE.length;
   return {
     ok: true,
-    body: body.slice(0, open.index) + rendered.block + body.slice(close),
+    body: body.slice(0, found.start) + rendered.block + body.slice(found.end),
   };
 }
