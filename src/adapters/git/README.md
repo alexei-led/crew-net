@@ -15,6 +15,7 @@ Git 2.38 or later is required for `merge-tree --write-tree`.
 | `showFile(ref, path)`      | `git show <ref>:<path>`; `undefined` when the ref or path is missing, an error otherwise                                         |
 | `landed(from, to)`         | `git log --first-parent -m --name-only -z --max-count=100 from..to`: newest first, with paths and `loginHint`                    |
 | `changedFiles(base, head)` | `git diff --name-only -z --no-ext-diff --no-textconv --no-renames <base>...<head>`: a rename lists old and new path              |
+| `sameContent(a, b, paths)` | `git --literal-pathspecs diff --quiet a b -- paths`: true when the paths read the same; over 500 paths counts as different       |
 
 - `checkout` answers for the adapter's directory: a subdirectory or a
   symlinked path gives the real worktree root. `clone` is the parent of the

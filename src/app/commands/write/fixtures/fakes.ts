@@ -200,6 +200,9 @@ export class FakeGit implements GitPort {
   changedFiles(): never {
     throw new Error("not used by write commands");
   }
+  sameContent(): never {
+    throw new Error("not used by write commands");
+  }
   showFile(): never {
     throw new Error("not used by write commands");
   }

@@ -3208,8 +3208,8 @@ var REVIEW_LABEL = {
 async function readReviews(ports, host, me, since, repo, number) {
   const { store, clock } = ports;
   const name = reviewCursor(host, repo, number);
-  const after = await store.cursors.get(name) ?? since;
-  const reviews = (await ports.github(host).listReviews(repo, number)).filter((r) => r.submittedAt !== null && r.submittedAt >= after);
+  const after = reviewPosition(await store.cursors.get(name), since);
+  const reviews = (await ports.github(host).listReviews(repo, number)).filter((r) => r.submittedAt !== null && (r.submittedAt > after.submittedAt || r.submittedAt === after.submittedAt && r.id > after.id)).sort((a, b) => a.submittedAt === b.submittedAt ? a.id - b.id : a.submittedAt < b.submittedAt ? -1 : 1);
   for (const review of reviews) {
     if (sameLogin2(review.author, me) || isBotLogin(review.author))
       continue;
@@ -3229,9 +3229,19 @@ async function readReviews(ports, host, me, since, repo, number) {
       event: "pr-review"
     }, clock.now());
   }
-  const newest = reviews.map((r) => r.submittedAt).sort().at(-1);
+  const newest = reviews.at(-1);
   if (newest)
-    await store.cursors.set(name, newest);
+    await store.cursors.set(name, JSON.stringify({ submittedAt: newest.submittedAt, id: newest.id }));
+}
+function reviewPosition(cursor, since) {
+  if (cursor?.startsWith("{")) {
+    try {
+      const v = JSON.parse(cursor);
+      if (typeof v.submittedAt === "string" && typeof v.id === "number")
+        return { submittedAt: v.submittedAt, id: v.id };
+    } catch {}
+  }
+  return { submittedAt: cursor ?? since, id: Number.NEGATIVE_INFINITY };
 }
 
 // src/app/radar.ts
@@ -3412,6 +3422,9 @@ async function radarJob(ports, active, repos) {
       continue;
     const paths = await changed(git, `origin/${defaultBase}`, ref);
     if (!paths)
+      continue;
+    const merged = await git.sameContent(`origin/${defaultBase}`, ref, paths).catch(() => false);
+    if (merged)
       continue;
     theirs.push({
       ref,
@@ -3690,7 +3703,8 @@ var INTERVALS = {
   repoWatched: 15 * 60000,
   radar: 5 * 60000,
   deps: 5 * 60000,
-  depsBlocked: 60000
+  depsBlocked: 60000,
+  prune: 24 * 60 * 60000
 };
 var SYNC_STATUS_KEY = "sync:status";
 var HHMM = (ms) => new Date(ms).toTimeString().slice(0, 5);
@@ -3750,6 +3764,7 @@ async function runSync(ports, here) {
   }
   const depsInterval = await anyBlocked(store) ? INTERVALS.depsBlocked : INTERVALS.deps;
   await run("deps", undefined, depsInterval, () => depsJob(ports, repos));
+  await run("prune", undefined, INTERVALS.prune, () => store.prune());
   const failed = jobs.filter((j) => j.outcome === "failed");
   const status = {
     atMs: clock.now(),
@@ -4601,6 +4616,8 @@ async function deliverTo(ports, sessionId, options) {
       if (routed.session !== sessionId)
         continue;
       if (!await store.delivered.claim(item.id, sessionId))
+        continue;
+      if (!await store.inbox.get(item.id))
         continue;
       await store.events.append({
         type: "delivery",
@@ -5839,6 +5856,7 @@ class GitCommandError extends Error {
     this.stderr = clean;
   }
 }
+var MAX_PATHSPECS = 500;
 var NOREPLY = /^(?:\d+\+)?([A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)@users\.noreply\./i;
 var MISSING_OBJECT = /does not exist|exists on disk, but not in|unknown revision|bad revision|invalid object name|not a valid object name/i;
 
@@ -5991,6 +6009,25 @@ class GitAdapter {
       "--"
     ]);
     return stdout.split("\x00").filter(Boolean);
+  }
+  async sameContent(a, b, paths) {
+    if (paths.length === 0)
+      return true;
+    if (paths.length > MAX_PATHSPECS)
+      return false;
+    const result = await this.run([
+      "--literal-pathspecs",
+      "diff",
+      "--quiet",
+      "--no-ext-diff",
+      "--no-textconv",
+      "--end-of-options",
+      a,
+      b,
+      "--",
+      ...paths
+    ], [0, 1]);
+    return result.exitCode === 0;
   }
   async showFile(ref, path) {
     const result = await this.run(["show", "--end-of-options", `${ref}:${path}`], [0, 128]);

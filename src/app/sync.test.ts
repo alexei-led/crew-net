@@ -325,6 +325,32 @@ describe("inbox job", () => {
     ]);
   });
 
+  test("a review delivered and pruned weeks ago does not arrive again", async () => {
+    const w = world();
+    w.github.threads = [thread(2)];
+    w.github.reviews.set(`${REPO}#2`, [
+      {
+        id: 3,
+        author: "maria",
+        state: "CHANGES_REQUESTED",
+        body: "fix x",
+        submittedAt: "2026-11-09T11:52:00Z",
+        url: "u",
+      },
+    ]);
+    await w.sync();
+    const [first] = await w.items();
+    await w.store.delivered.claim(first?.id ?? "", "s1");
+    w.advance(15 * 24 * 60 * 60_000);
+    await w.sync();
+    expect(await w.items()).toEqual([]);
+    w.advance(INTERVALS.inbox);
+    w.github.threads = [thread(2, "2026-11-24T12:00:00Z")];
+    await w.sync();
+    expect(await w.items()).toEqual([]);
+    expect(await w.itemEvents()).toHaveLength(1);
+  });
+
   test("a rate limit fails the job, keeps the cursor and says until when", async () => {
     const w = world();
     const limited = Object.assign(new Error("GitHub rate limit reached"), {
@@ -640,6 +666,46 @@ describe("fetch and radar", () => {
     expect(radar?.work.find((x) => x.owner === "dmitri")?.pushedAtMs).toBe(
       Date.parse("2026-11-09T11:00:00Z"),
     );
+  });
+
+  test("a squash-merged branch nobody deleted is not bare work", async () => {
+    const w = world();
+    w.git.local("feat/mine", ["web/a.ts"]);
+    w.git.remote("dmitri/merged", ["web/a.ts"], {
+      loginHint: "dmitri",
+      lastCommitAt: "2026-11-09T11:00:00Z",
+      merged: true,
+    });
+    w.git.remote("dmitri/open", ["web/a.ts"], {
+      loginHint: "dmitri",
+      lastCommitAt: "2026-11-09T11:00:00Z",
+    });
+    await w.sync();
+    const radar = await readRadar(w.store, REF);
+    expect(radar?.work.map((x) => x.branch)).toEqual([
+      "feat/mine",
+      "dmitri/open",
+    ]);
+    expect(radar?.findings.map((f) => f.other.branch)).toEqual(["dmitri/open"]);
+  });
+
+  test("a failing content check keeps the bare branch and the pass", async () => {
+    const w = world();
+    w.git.local("feat/mine", ["web/a.ts"]);
+    w.git.remote("dmitri/x", ["web/a.ts"], {
+      loginHint: "dmitri",
+      lastCommitAt: "2026-11-09T11:00:00Z",
+    });
+    w.git.sameContent = async () => {
+      throw new Error("git timed out");
+    };
+    const report = await w.sync();
+    expect(report.jobs.find((j) => j.job.startsWith("radar"))?.outcome).toBe(
+      "ran",
+    );
+    expect(
+      (await readRadar(w.store, REF))?.findings.map((f) => f.other.branch),
+    ).toEqual(["dmitri/x"]);
   });
 
   test("bare branches are diffed against the default branch GitHub names, read once a day", async () => {
@@ -982,5 +1048,41 @@ describe("dependencies", () => {
         text: "#11 (maria) waits on your #10",
       }),
     ]);
+  });
+});
+
+describe("store maintenance", () => {
+  const DAY = 24 * 60 * 60_000;
+  const item = (id: string) => ({
+    type: "item" as const,
+    id,
+    kind: "message" as const,
+    text: "hi",
+    addressed: false,
+    from: "maria",
+    repo: REPO,
+    thread: 2,
+  });
+
+  test("sync prunes items delivered more than 14 days ago, once a day", async () => {
+    const w = world();
+    await w.store.inbox.put(item("old"));
+    await w.store.delivered.claim("old", "s1");
+    w.advance(10 * DAY);
+    await w.store.inbox.put(item("recent"));
+    await w.store.delivered.claim("recent", "s1");
+    await w.store.inbox.put(item("unclaimed"));
+    w.advance(5 * DAY);
+    const report = await w.sync();
+    expect(report.jobs).toContainEqual({ job: "prune", outcome: "ran" });
+    expect((await w.items()).map((i) => i.id).sort()).toEqual([
+      "recent",
+      "unclaimed",
+    ]);
+    w.advance(DAY - 1);
+    expect((await w.sync()).jobs).toContainEqual({
+      job: "prune",
+      outcome: "fresh",
+    });
   });
 });

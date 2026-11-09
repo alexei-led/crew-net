@@ -201,6 +201,8 @@ export interface GitPort {
   mergeTree(a: string, b: string): Promise<MergeTreeResult>;
   /** Paths changed on head since it forked from base. */
   changedFiles(base: string, head: string): Promise<string[]>;
+  /** True when each of `paths` reads the same (or is absent) at `a` and at `b`. */
+  sameContent(a: string, b: string, paths: readonly string[]): Promise<boolean>;
   /** Text of `path` at `ref`, or undefined when the ref or the path does not exist. */
   showFile(ref: string, path: string): Promise<string | undefined>;
   /**

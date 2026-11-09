@@ -542,6 +542,43 @@ describe("delivery routing", () => {
       (await w.store.events.read()).find((e) => e.type === "delivery"),
     ).toMatchObject({ session: "lead-a", step: "clone" });
   });
+
+  test("an item pruned between the read and the claim is not delivered", async () => {
+    const w = world();
+    await w.store.sessions.beat({
+      sessionId: "lead-a",
+      pid: process.pid,
+      harness: "claude-code",
+      role: "lead",
+      worktree: "/work/a",
+      clone: "/work/a",
+      repo: "github.com/o/r",
+      branch: "main",
+    });
+    const id = "comment:github.com/o/r#7:1";
+    const item = {
+      type: "item" as const,
+      id,
+      kind: "message" as const,
+      text: "old news",
+      addressed: false,
+      from: "maria",
+      repo: "o/r",
+      thread: 7,
+    };
+    // The listing still shows the item; prune has removed it since.
+    const store = Object.create(w.store);
+    Object.defineProperty(store, "inbox", {
+      value: {
+        ...w.store.inbox,
+        list: async () => [{ item, receivedAtMs: START }],
+      },
+    });
+    const items = await deliverTo({ ...w.ports, store }, "lead-a", {
+      replayMs: 0,
+    });
+    expect(items).toEqual([]);
+  });
 });
 
 test("heartbeats without a clone root stand alone: a worker's branch reaches the lead through the repo step", async () => {
