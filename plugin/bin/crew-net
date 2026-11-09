@@ -5525,7 +5525,7 @@ var COMMANDS = [
 
 // src/cli/main.ts
 var DEFAULT_COMMAND = "digest";
-var VERSION = "0.1.0";
+var VERSION = "0.1.1";
 function usage(commands) {
   const lines = commands.map((c) => `  ${c.name.padEnd(10)} ${c.summary}`);
   return [
