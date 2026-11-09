@@ -8,7 +8,7 @@ notifications and `git fetch`. There is no server, no VPN and no daemon.
 Status: design, 2026-11-09. This document replaces the earlier `design.md`,
 `architecture.md` and `plans/v0.1.0.md`, and the open questions in
 `HANDOVER.md`. Code already on `main` is reused where it fits; see
-[Reuse](#reuse-of-existing-code) and the plan in [plans/v1.md](plans/v1.md).
+[Reuse](#reuse-of-existing-code) and the plan in [plan.md](plan.md).
 
 ## 1. Problem
 
@@ -165,9 +165,9 @@ unique and visible on GitHub.
 
 ## 7. Protocol on GitHub
 
-The only contract between laptops. Versioned and read tolerantly: readers
-ignore unknown fields; a reader that sees a higher major version shows the item
-and does not rewrite it.
+The only contract between laptops. It has no version number. Readers ignore
+unknown fields and treat missing ones as empty; writers keep fields they do not
+know. New fields must be optional.
 
 ### 7.1 State block
 
@@ -175,7 +175,7 @@ In the PR or Issue body, as an HTML comment, written only by `crew-net state`
 and `crew-net dep`:
 
 ```markdown
-<!-- crew-net v1
+<!-- crew-net
 state: building
 scope: api/openapi/, tools/core/
 depends-on: #2301, doiteng/omni#88
@@ -204,14 +204,14 @@ A message is an ordinary comment. The first line mentions the recipient, so
 GitHub notifies them. A hidden marker carries what a machine needs:
 
 ```markdown
-<!-- crew-net:msg v1 kind=ask id=k3f9 -->
+<!-- crew-net:msg kind=ask id=k3f9 -->
 
 @maria does #2310 need the new `users.tier` column before your migration in
 #2318 merges?
 ```
 
 ```markdown
-<!-- crew-net:msg v1 kind=reply re=k3f9 status=answered -->
+<!-- crew-net:msg kind=reply re=k3f9 status=answered -->
 
 @alexei no, #2318 adds the column as nullable. Merge order does not matter.
 ```
@@ -536,7 +536,7 @@ Enforcement:
 - During a wake turn the plugin's tool gate (`trust.gate`) allows only reads
   (`Read`, `Grep`, `Glob`, read-only `git` and `gh`), `crew-net reply`,
   `crew-net inbox` and `crew-net state`. Everything else is denied.
-- Review labels, for orgs that require review, come after v1: `review:agent`
+- Review labels, for orgs that require review, come later: `review:agent`
   lets an agent approve if the developer opted in; `review:human`, CODEOWNERS
   or contract paths force a person.
 
@@ -638,7 +638,7 @@ and shows `crew-net: rate-limited until 14:32`. Cursors do not move.
 | Watcher killed (reload, crash)     | mod supervisor               | Restart with backoff; replay unacked items                                           |
 | Session ends without cleanup       | heartbeat older than 3 min   | Not routed to; its unclaimed items go to another session or wait                     |
 | `allowManagedHooksOnly` set by MDM | `crew-net doctor`            | CLI by hand; no gate, no wake                                                        |
-| Peer runs another crew-net version | marker or block version      | Read tolerantly; never rewrite a newer block                                         |
+| Peer runs an older crew-net        | unknown fields               | Ignored on read, kept on write                                                       |
 | Request gets no answer             | open request ages            | The sender sees it with its age and can follow up                                    |
 
 ## 19. Code structure
@@ -656,7 +656,7 @@ src/
   cli/        crew-net commands; composition root
   watch/      crew-net watch; composition root
 plugin/       Claude Code: hooks.json, mod (register.ts), skill, /crew command
-pi/           Pi extension (phase 4)
+pi/           Pi extension
 repo-kit/     crew-deps workflows, draft-gate snippet, crew-net.yml template
 ```
 
@@ -672,14 +672,14 @@ Dependency rules, checked by dependency-cruiser in CI:
 
 Why: the rules the live run will tune (delivery, radar, digest, routing) sit in
 `core`, away from I/O. GitHub limits and quirks stay inside `adapters/github`.
-The cross-machine contract is in `protocol` alone and versioned, because two
-laptops may run different versions.
+The cross-machine contract is in `protocol` alone, so a change to it is one
+reviewed change, read tolerantly because two laptops may run different builds.
 
 ### Reuse of existing code
 
 | Code                                                 | Decision                                                                          |
 | ---------------------------------------------------- | --------------------------------------------------------------------------------- |
-| `protocol/state-block`                               | Keep. Make `lead` optional and ignored                                            |
+| `protocol/state-block`                               | Keep. Drop the version tag; make `lead` optional and ignored                      |
 | `protocol/closing-keywords`                          | Keep                                                                              |
 | `protocol/address`                                   | Replace with the message marker codec                                             |
 | `protocol/events`                                    | Keep the NDJSON shape; `hello` carries session id and role instead of a lead name |
@@ -693,7 +693,7 @@ laptops may run different versions.
 
 ## 20. Testing
 
-- `protocol`: round trip, tolerant reader, unknown versions, keyword-guard
+- `protocol`: round trip, tolerant reader, keyword-guard
   cases from reflex, marker codec, repo config subset.
 - `core`: table-driven tests per rule, data in and decision out, no mocks.
   Routing: each step, and exactly one session or `none`. Delivery: never wake
@@ -720,7 +720,7 @@ appended to `events.ndjson`. `crew-net stats` prints, per repo and week:
 findings by kind and whether the PR changed afterwards, requests and median time
 to answer, wake turns, blocked merges. The live run with the first 2-3
 developers uses it to tune intervals, idle time and radar noise, and to decide
-which later phases are worth building. A one-off backtest on repo history is
+what to change next. A one-off backtest on repo history is
 optional: it can estimate radar hit rates, but history is mostly one developer
 and cannot measure messaging.
 
@@ -743,9 +743,9 @@ and cannot measure messaging.
 ## 23. Open questions and unverified facts
 
 - Codex hooks: which of `SessionStart`, `UserPromptSubmit` and `PreToolUse` the
-  current Codex CLI supports. Not checked. Phase 4.
-- Time from a comment to its notification. Measure in the phase 2 spike with
-  two accounts.
+  current Codex CLI supports. Not checked.
+- Time from a comment to its notification. Measure in a spike with two
+  accounts before building requests.
 - Whether `mention` and `review_requested` notifications appear in the API when
   the user turned off web notifications for a repo. Same spike.
 - Aikido Security on reflex drafts: whether it posts a required check on drafts.
