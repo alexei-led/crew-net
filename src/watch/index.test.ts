@@ -6,7 +6,7 @@ import { FileStoreAdapter } from "../adapters/store/index";
 import { pull } from "../app/fixtures/fakes";
 import { world as makeWorld } from "../app/fixtures/world";
 import type { HelloEvent, ItemEvent } from "../protocol/index";
-import { runWatch } from "./index";
+import { runWatch, sendToWatch } from "./index";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -86,6 +86,10 @@ function start(
 ) {
   const stdin = new Stdin();
   const out: Record<string, unknown>[] = [];
+  let signal: () => void = () => {};
+  const stopped = new Promise<void>((resolve) => {
+    signal = resolve;
+  });
   const done = runWatch(
     w.ports,
     session,
@@ -93,6 +97,7 @@ function start(
       lines: stdin,
       write: (line) => out.push(JSON.parse(line)),
       parentAlive: alive,
+      stopped,
     },
     20,
   );
@@ -100,7 +105,7 @@ function start(
   void done.then(() => {
     finished = true;
   });
-  return { stdin, out, done, finished: () => finished };
+  return { stdin, out, done, signal, finished: () => finished };
 }
 
 async function twoSessions() {
@@ -114,20 +119,55 @@ async function twoSessions() {
 }
 
 describe("watch", () => {
-  test("ready, then hello starts ticks; it keeps running until stdin closes", async () => {
+  test("ready, then hello; stdin EOF after hello is normal and it runs until a stop signal", async () => {
     const w = world();
     const watch = start(w, "s1");
     await until(() => watch.out.length > 0);
     expect(watch.out[0]).toEqual({ type: "ready" });
     watch.stdin.push(hello("s1", "/work/a"));
+    watch.stdin.close();
     await until(() => watch.out.some((e) => e.type === "status"));
     await new Promise((r) => setTimeout(r, 80));
     expect(watch.finished()).toBe(false);
     expect((await w.store.sessions.live()).map((s) => s.sessionId)).toEqual([
       "s1",
     ]);
-    watch.stdin.close();
+    watch.signal();
     expect(await watch.done).toBe(0);
+  });
+
+  test("stdin closed before any hello exits 1", async () => {
+    const watch = start(world(), "s1");
+    watch.stdin.close();
+    expect(await watch.done).toBe(1);
+    expect(watch.out.at(-1)).toEqual({
+      type: "error",
+      message: "stdin closed before hello",
+    });
+  });
+
+  test("watch send applies ack and bye after the watcher's stdin closed", async () => {
+    const w = world();
+    const watch = start(w, "s1");
+    watch.stdin.push(hello("s1", "/work/a"));
+    watch.stdin.close();
+    await until(async () => (await w.store.sessions.live()).length === 1);
+    const send = new Stdin();
+    send.push({ type: "ack", id: "x", outcome: "context" });
+    send.push({ type: "bye" });
+    send.push("junk");
+    send.close();
+    const reported: string[] = [];
+    expect(
+      await sendToWatch(w.ports, "s1", send, (m) => reported.push(m)),
+    ).toBe(1);
+    expect(reported).toEqual(["bad event: not JSON"]);
+    expect(await w.store.sessions.live()).toEqual([]);
+    expect((await w.store.events.read()).some((e) => e.type === "ack")).toBe(
+      true,
+    );
+    watch.signal();
+    await watch.done;
   });
 
   test("an item goes to the session with its PR branch checked out, exactly once", async () => {
@@ -141,10 +181,12 @@ describe("watch", () => {
     await until(() => b.out.some((e) => e.type === "item"));
     await new Promise((r) => setTimeout(r, 80));
     expect(a.out.filter((e) => e.type === "item")).toEqual([]);
-    expect(b.out.filter((e) => e.type === "item") as unknown[]).toEqual([ask]);
+    expect(b.out.filter((e) => e.type === "item") as unknown[]).toEqual([
+      { ...ask, wakeable: true },
+    ]);
     expect((await w.store.delivered.get(ask.id))?.sessionId).toBe("sb");
-    a.stdin.close();
-    b.stdin.close();
+    a.signal();
+    b.signal();
     await Promise.all([a.done, b.done]);
   });
 
@@ -154,12 +196,12 @@ describe("watch", () => {
     const first = start(w, "sb");
     first.stdin.push(hello("sb", "/work/b"));
     await until(() => first.out.some((e) => e.type === "item"));
-    first.stdin.close();
+    first.signal();
     await first.done;
     const second = start(w, "sb");
     second.stdin.push(hello("sb", "/work/b"));
     await until(() => second.out.some((e) => e.type === "item"));
-    second.stdin.close();
+    second.signal();
     await second.done;
     const deliveries = (await w.store.events.read()).filter(
       (e) => e.type === "delivery",
@@ -181,7 +223,7 @@ describe("watch", () => {
       { type: "error", message: "unexpected event status" },
     ]);
     expect(watch.finished()).toBe(false);
-    watch.stdin.close();
+    watch.signal();
     await watch.done;
   });
 
@@ -191,7 +233,7 @@ describe("watch", () => {
     watch.stdin.push(hello("other", "/work/a"));
     await until(() => watch.out.some((e) => e.type === "error"));
     expect(await w.store.sessions.live()).toEqual([]);
-    watch.stdin.close();
+    watch.signal();
     await watch.done;
   });
 

@@ -66,10 +66,16 @@ describe("decodeEvent", () => {
 
   test("accepts an item with repo, thread and event", () => {
     const line =
-      '{"type":"item","id":"1","kind":"message","text":"t","addressed":true,"repo":"o/r","thread":7,"event":"ask"}';
+      '{"type":"item","id":"1","kind":"message","text":"t","addressed":true,"repo":"o/r","thread":7,"event":"ask","wakeable":true,"msgId":"k3f9"}';
     expect(decodeEvent(line)).toMatchObject({
       ok: true,
-      event: { repo: "o/r", thread: 7, event: "ask" },
+      event: {
+        repo: "o/r",
+        thread: 7,
+        event: "ask",
+        wakeable: true,
+        msgId: "k3f9",
+      },
     });
   });
 
@@ -132,6 +138,10 @@ describe("decodeEvent", () => {
     [
       "item with non-string event",
       '{"type":"item","id":"1","kind":"message","text":"t","addressed":true,"event":3}',
+    ],
+    [
+      "item with string wakeable",
+      '{"type":"item","id":"1","kind":"message","text":"t","addressed":true,"wakeable":"yes"}',
     ],
     [
       "item with fractional thread",

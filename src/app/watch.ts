@@ -157,7 +157,11 @@ export class Watcher {
         });
       }
       this.emitted.add(item.id);
-      this.emit({ ...item, addressed: item.addressed && routed.wakeable });
+      this.emit({
+        ...item,
+        addressed: item.addressed && routed.wakeable,
+        wakeable: routed.wakeable,
+      });
     }
   }
 

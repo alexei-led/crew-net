@@ -6,19 +6,22 @@ import { decodeEvent, encodeEvent, type HelperEvent } from "../protocol/index";
 export const TICK_MS = 30_000;
 
 export interface WatchIo {
-  /** NDJSON lines from the mod, until stdin closes. */
+  /** NDJSON lines from the mod. The mod writes `hello` and closes stdin; EOF is normal. */
   lines: AsyncIterable<string>;
   /** Write one NDJSON line to the mod. */
   write(line: string): void;
   /** False once the process that started the watcher is gone. */
   parentAlive(): boolean;
+  /** Resolves on SIGTERM or SIGINT: the engine unloads the mod. */
+  stopped: Promise<void>;
 }
 
 /**
  * `crew-net watch --session <id>` (design §16): the mod's child. Writes
- * `ready`, waits for `hello`, then ticks every `tickMs`. Reads `ack` and
- * `bye`. Runs until stdin closes, `bye` arrives or the parent dies; it never
- * exits on its own after `hello`.
+ * `ready`, reads `hello` (and possibly `ack`/`bye`) from stdin, then ticks
+ * every `tickMs`. stdin closing after `hello` is normal: the engine closes
+ * it once the input is written. Runs until `bye`, a stop signal or the
+ * parent's death. Without a `hello` by EOF there is nothing to serve: exit 1.
  */
 export async function runWatch(
   ports: AppPorts,
@@ -38,20 +41,22 @@ export async function runWatch(
     );
     return queue;
   };
-  let stop: () => void = () => {};
-  const stopped = new Promise<void>((resolve) => {
+  let stop: (code: number) => void = () => {};
+  const done = new Promise<number>((resolve) => {
     stop = resolve;
   });
+  void io.stopped.then(() => stop(0));
   const timer = setInterval(() => {
     if (!io.parentAlive()) {
-      stop();
+      stop(0);
       return;
     }
     if (watcher.started) void serial(() => watcher.tick());
   }, tickMs);
   emit({ type: "ready" });
 
-  const read = (async () => {
+  void (async () => {
+    let helloSeen = false;
     for await (const line of io.lines) {
       if (!line.trim()) continue;
       const decoded = decodeEvent(line);
@@ -61,19 +66,57 @@ export async function runWatch(
       }
       const event = decoded.event;
       if (event.type === "hello") {
+        helloSeen = true;
         void serial(() => watcher.start(event));
       } else if (event.type === "ack") {
         void serial(() => watcher.ack(event));
       } else if (event.type === "bye") {
         await serial(() => watcher.bye());
+        stop(0);
         return;
       } else {
         emit({ type: "error", message: `unexpected event ${event.type}` });
       }
     }
+    if (!helloSeen) {
+      emit({ type: "error", message: "stdin closed before hello" });
+      stop(1);
+    }
   })();
-  await Promise.race([read, stopped]);
+  const code = await done;
   clearInterval(timer);
   await queue;
-  return 0;
+  return code;
+}
+
+/**
+ * `crew-net watch send --session <id>`: the mod's way to send `ack` and
+ * `bye` after the watcher's stdin is closed. Applies each line to the store
+ * and returns the number of bad lines.
+ */
+export async function sendToWatch(
+  ports: AppPorts,
+  sessionId: string,
+  lines: AsyncIterable<string>,
+  report: (message: string) => void,
+): Promise<number> {
+  const watcher = new Watcher(ports, sessionId, () => {});
+  let bad = 0;
+  for await (const line of lines) {
+    if (!line.trim()) continue;
+    const decoded = decodeEvent(line);
+    if (!decoded.ok) {
+      bad++;
+      report(`bad event: ${decoded.detail}`);
+      continue;
+    }
+    const event = decoded.event;
+    if (event.type === "ack") await watcher.ack(event);
+    else if (event.type === "bye") await watcher.bye();
+    else {
+      bad++;
+      report(`unexpected event ${event.type}`);
+    }
+  }
+  return bad;
 }

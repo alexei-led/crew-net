@@ -24,7 +24,8 @@ Protocol: NDJSON on stdin and stdout, the events of
   wakeable route.
 - No state of its own. Claims live in the store. After a restart, items this
   session claimed in the last hour are sent again; the mod dedupes by id.
-- Exits when stdin closes, after `bye`, or when its parent process is gone.
-  It never exits after `hello` on its own.
+- stdin EOF after `hello` is normal. Exits after `bye`, on SIGTERM or
+  SIGINT, or when its parent process is gone (ppid changed or 1, or
+  `kill(ppid, 0)` fails). stdin closed before any `hello`: exit 1.
 - Heartbeats carry no clone root, so routing step 2 (`clone`) does not
   match; a worker's branch reaches its lead through step 3 (`repo`).

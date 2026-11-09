@@ -30,6 +30,10 @@ export interface ItemEvent extends Tagged<"item"> {
    * `unblocked`, `dependency-closed`, `waits-on-you` or a finding kind.
    */
   event?: string;
+  /** From routing: false when the session got the item only because no session is in its repo. Never wake without it. */
+  wakeable?: boolean;
+  /** Marker id of a crew request, so a reply can point at it. */
+  msgId?: string;
 }
 
 export interface StatusEvent extends Tagged<"status"> {
@@ -143,12 +147,14 @@ export function decodeEvent(line: string): DecodeEventResult {
     if (!check(fields[name])) return malformed(`bad ${name}`);
   }
   if (type === "item") {
-    for (const name of ["from", "repo", "event"]) {
+    for (const name of ["from", "repo", "event", "msgId"]) {
       if (fields[name] !== undefined && !isString(fields[name]))
         return malformed(`bad ${name}`);
     }
     if (fields.thread !== undefined && !isInt(fields.thread))
       return malformed("bad thread");
+    if (fields.wakeable !== undefined && !isBoolean(fields.wakeable))
+      return malformed("bad wakeable");
   }
   if (type === "hello") {
     for (const name of ["repo", "branch"]) {

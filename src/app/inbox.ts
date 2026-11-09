@@ -174,6 +174,7 @@ async function commentItem(
     repo,
     thread: comment.issueNumber,
     event,
+    ...(marker?.id !== undefined ? { msgId: marker.id } : {}),
   };
   return reply ? { item, reply } : { item };
 }

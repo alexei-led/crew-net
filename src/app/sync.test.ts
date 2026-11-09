@@ -78,6 +78,7 @@ describe("inbox job", () => {
         repo: REPO,
         thread: 2,
         event: "ask",
+        msgId: "k3f9",
       },
     ]);
     expect(await w.store.cursors.get(notificationsCursor("github.com"))).toBe(
