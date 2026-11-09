@@ -9,6 +9,8 @@ import {
   handleSafely,
   nodeCli,
   parseInput,
+  processInfo,
+  sessionPidFrom,
 } from "./hook";
 
 const event = process.argv[2];
@@ -26,6 +28,7 @@ if (!HOOK_EVENTS.some((e) => e === event)) {
   const out = handleSafely(event as HookEvent, parseInput(raw), {
     cli: nodeCli(join(here, "..", "..", "bin", "crew-net")),
     role: process.env.CREW_NET_ROLE,
+    sessionPid: () => sessionPidFrom(process.ppid, processInfo),
   });
   if (out !== null) process.stdout.write(`${JSON.stringify(out)}\n`);
 }

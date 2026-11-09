@@ -244,6 +244,9 @@ async function applyReply(
   };
   if (status === "accepted") {
     if (request.status === "in-progress") return;
+    // The repo job may have closed it since it was read (thread closed).
+    // This narrows the race; the outbox has no compare-and-set.
+    if (!(await store.outbox.list()).some((r) => r.id === request.id)) return;
     await store.outbox.put({ ...request, status: "in-progress" });
   } else {
     await store.outbox.remove(request.id);

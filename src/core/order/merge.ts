@@ -2,10 +2,14 @@ import { lexShell, type Word } from "./shell";
 
 /**
  * The PR a merge command targets. `repo` is `owner/name`; when it is missing
- * the caller uses the repo of the command's working directory. With neither
- * `pr` nor `branch` the target is the PR of the current branch.
+ * the caller uses gh's default repo of the command's working directory. With
+ * neither `pr` nor `branch` the target is the PR of the current branch.
+ * `host` (lower case) is set when the command names one: `-R host/o/r`, a PR
+ * URL, `gh api --hostname` or an API URL. Without it gh takes `GH_HOST`, else
+ * github.com, for a named repo, and the remote's host for the default repo.
  */
 export interface MergeTarget {
+  host?: string;
   repo?: string;
   pr?: number;
   branch?: string;
@@ -102,7 +106,22 @@ const FIND_EXEC = new Set(["-exec", "-execdir", "-ok", "-okdir"]);
 
 /** Commands that change which repo a later `gh` acts on. */
 const CHANGES_DIR = new Set(["cd", "pushd", "popd"]);
-const GH_CONTEXT_VAR = /^GH_(REPO|HOST)=/;
+/** Words that may change which repo gh resolves: a GH_ or GIT_ variable named anywhere (`+=`, `export`, `read`, `printf -v`), HOME or XDG_CONFIG_HOME set. */
+const REPO_CONTEXT_WORD =
+  /GH_(?:HOST|REPO|CONFIG_DIR)|GIT_(?:DIR|WORK_TREE|COMMON_DIR|CONFIG)|^(?:HOME|XDG_CONFIG_HOME)\+?=/;
+/** Words that may change which host gh sends a repo named without one to. */
+const HOST_CONTEXT_WORD =
+  /GH_(?:HOST|CONFIG_DIR)|^(?:HOME|XDG_CONFIG_HOME)\+?=/;
+/** `source f`, `. f` and `set -a` can set any variable. */
+function setsVariables(words: readonly Word[]): boolean {
+  const head = words.find((w) => !ASSIGNMENT.test(w.text))?.text;
+  return (
+    head === "source" ||
+    head === "." ||
+    (head === "set" &&
+      words.some((w) => /^-\w*a/.test(w.text) || w.text === "allexport"))
+  );
+}
 
 const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*\+?=/;
@@ -207,29 +226,38 @@ function splitArgs(words: readonly Word[]): {
   return { flags, positionals };
 }
 
-/** `owner/name` from `-R` values: `owner/name` or `host/owner/name`. */
-function repoFromFlag(value: string): string | undefined {
+type RepoHost = { host?: string; repo: string };
+
+/** A host as gh names it; undefined with a port, which the gate cannot follow. */
+const host = (name: string): string | undefined =>
+  /:/.test(name) ? undefined : name.toLowerCase();
+
+/** `-R` values: `owner/name` or `[https://]host/owner/name`. */
+function repoFromFlag(value: string): RepoHost | undefined {
   const parts = value
     .replace(/^https?:\/\//, "")
     .split("/")
     .filter(Boolean);
   if (parts.length < 2 || parts.length > 3) return undefined;
-  return parts.slice(-2).join("/");
+  const repo = parts.slice(-2).join("/");
+  if (parts.length === 2) return { repo };
+  const named = host(parts[0] as string);
+  return named === undefined ? undefined : { host: named, repo };
 }
 
 function repoFlag(
   flags: readonly Flag[],
-): { repo?: string } | { error: string } {
-  let repo: string | undefined;
+): { host?: string; repo?: string } | { error: string } {
+  let found: RepoHost | undefined;
   for (const f of flags) {
     if (f.name !== "-R" && f.name !== "--repo") continue;
     if (!f.value || f.value.dynamic)
       return { error: "the --repo value is not literal" };
     const parsed = repoFromFlag(f.value.text);
     if (!parsed) return { error: `cannot read --repo ${f.value.text}` };
-    repo = parsed;
+    found = parsed;
   }
-  return repo === undefined ? {} : { repo };
+  return found ?? {};
 }
 
 function prMerge(args: readonly Word[]): MergeDetection {
@@ -249,11 +277,20 @@ function prMerge(args: readonly Word[]): MergeDetection {
       targets: [{ ...repo, pr: Number(t.replace("#", "")) }],
     };
   const url =
-    /^https?:\/\/[^/]+\/([^/]+\/[^/]+)\/pull\/(\d{1,9})(?:[/?#].*)?$/.exec(t);
+    /^https?:\/\/([^/]+)\/([^/]+\/[^/]+)\/pull\/(\d{1,9})(?:[/?#].*)?$/.exec(t);
+  const urlHost = url ? host(url[1] as string) : undefined;
+  if (url && urlHost === undefined)
+    return denied(`gh pr merge: cannot follow the port in ${t}`);
   if (url)
     return {
       kind: "merge",
-      targets: [{ repo: url[1] as string, pr: Number(url[2]) }],
+      targets: [
+        {
+          host: urlHost as string,
+          repo: url[2] as string,
+          pr: Number(url[3]),
+        },
+      ],
     };
   if (t.includes("://")) return denied(`gh pr merge: cannot read target ${t}`);
   return { kind: "merge", targets: [{ ...repo, branch: t }] };
@@ -282,6 +319,32 @@ function apiPath(endpoint: string): string {
 }
 
 const BODY_FLAGS = new Set(["-f", "--raw-field", "-F", "--field", "--input"]);
+
+/** The GitHub host an API URL goes to: `api.github.com` and `api.<x>.ghe.com` are their hosts' APIs. */
+function apiUrlHost(endpoint: string): string | undefined {
+  const m = /^[A-Za-z][A-Za-z0-9+.-]*:\/\/([^/?#]*)/.exec(endpoint);
+  if (!m) return undefined;
+  const name = host((m[1] as string).replace(/^[^@]*@/, ""));
+  if (name === undefined) return "";
+  const api = name.startsWith("api.") ? name.slice(4) : undefined;
+  return api === "github.com" || api?.endsWith(".ghe.com") ? api : name;
+}
+
+/** `gh api --hostname`: the host, none, or an error when it is not literal. */
+function hostnameFlag(
+  flags: readonly Flag[],
+): { host?: string } | { error: string } {
+  let found: string | undefined;
+  for (const f of flags) {
+    if (f.name !== "--hostname") continue;
+    if (!f.value || f.value.dynamic || f.value.text === "")
+      return { error: "the --hostname value is not literal" };
+    found = host(f.value.text);
+    if (found === undefined)
+      return { error: "the --hostname value has a port" };
+  }
+  return found === undefined ? {} : { host: found };
+}
 
 /** The HTTP method gh will use, or null when it cannot be known. */
 function apiMethod(flags: readonly Flag[]): string | null {
@@ -337,13 +400,21 @@ function api(args: readonly Word[]): MergeDetection {
   const pull = /^repos\/([^/]+)\/([^/]+)\/pulls\/(\d{1,9})\/merge$/.exec(path);
   if (pull) {
     if (readOnly) return NONE;
-    const repo =
-      pull[1] === "{owner}" && pull[2] === "{repo}"
-        ? {}
-        : { repo: `${pull[1]}/${pull[2]}` };
-    if (/[{}]/.test(repo.repo ?? ""))
-      return denied(`gh api: cannot read the repo in ${endpoint.text}`);
-    return { kind: "merge", targets: [{ ...repo, pr: Number(pull[3]) }] };
+    // gh api fills {owner}/{repo} by its own rules; the repo must be named.
+    const repo = { repo: `${pull[1]}/${pull[2]}` };
+    if (/[{}]/.test(repo.repo))
+      return denied(`gh api: name the repo in ${endpoint.text}`);
+    const named = hostnameFlag(flags);
+    if ("error" in named) return denied(`gh api: ${named.error}`);
+    // A full URL goes to its own host whatever --hostname says.
+    const urlHost = apiUrlHost(endpoint.text);
+    if (urlHost === "")
+      return denied(`gh api: cannot follow the port in ${endpoint.text}`);
+    const target = urlHost === undefined ? named : { host: urlHost };
+    return {
+      kind: "merge",
+      targets: [{ ...target, ...repo, pr: Number(pull[3]) }],
+    };
   }
   if (/^repos\/[^/]+\/[^/]+\/merges$/.test(path) && !readOnly)
     return denied("gh api: branch merges are not gated; use gh pr merge");
@@ -379,7 +450,8 @@ function gh(
   if (top === undefined) return NONE;
   if (top.dynamic) return denied("gh: the command is not literal");
   const at = args.indexOf(top);
-  const rest = args.slice(at + 1);
+  // Flags before the command (`gh -R x pr merge`) still reach it.
+  const rest = [...args.slice(0, at), ...args.slice(at + 1)];
   if (top.text === "pr") {
     const action = splitArgs(rest).positionals[0];
     if (action === undefined) return NONE;
@@ -506,7 +578,8 @@ function changesRepoContext(commands: readonly Word[][]): boolean {
     const name = head?.text.split("/").pop() ?? "";
     return (
       CHANGES_DIR.has(name) ||
-      words.some((w) => GH_CONTEXT_VAR.test(w.text)) ||
+      setsVariables(words) ||
+      words.some((w) => REPO_CONTEXT_WORD.test(w.text)) ||
       (name === "env" && words.some((w) => /^(-C|--chdir)/.test(w.text)))
     );
   });
@@ -558,6 +631,20 @@ function detectIn(
   )
     return denied(
       `${where}: changes directory or GH_REPO before a merge; name the PR with -R owner/repo or a URL`,
+    );
+  // gh sends a named repo without a host to GH_HOST; the gate cannot tell
+  // which value a set in the line reaches gh, so the host must be named.
+  if (
+    result.kind === "merge" &&
+    result.targets.some((t) => t.host === undefined) &&
+    lexed.commands.some(
+      (words) =>
+        setsVariables(words) ||
+        words.some((w) => HOST_CONTEXT_WORD.test(w.text)),
+    )
+  )
+    return denied(
+      `${where}: may set GH_HOST before a merge; name the host with -R host/owner/repo or a PR URL`,
     );
   return result;
 }

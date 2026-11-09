@@ -25,6 +25,9 @@ Every repo method takes `owner/repo`; anything else is rejected before a request
 | `listOpenPulls(repo)`                | `GET /repos/{repo}/pulls?state=open&per_page=100`                                                                              |
 | `listMergedPulls(repo, since)`       | `GET /repos/{repo}/pulls?state=closed&sort=updated&direction=desc`, stops at the first pull updated before `since`, at most 50 |
 | `getPull(repo, n)`                   | `GET /repos/{repo}/pulls/{n}`: `state`, `merged`, head and base                                                                |
+| `listPullFiles(repo, n)`             | `GET /repos/{repo}/pulls/{n}/files?per_page=100`, every page; a rename adds its old path                                       |
+| `defaultBranch(repo)`                | `GET /repos/{repo}`: `default_branch`                                                                                          |
+| `threadState(repo, n)`               | `GET /repos/{repo}/issues/{n}`: `open`, `closed`, or `merged` for a PR with `merged_at`                                        |
 | `listThreadComments(repo, n, after)` | `GET /repos/{repo}/issues/{n}/comments?since=…&per_page=100`                                                                   |
 | `listReviews(repo, n)`               | `GET /repos/{repo}/pulls/{n}/reviews?per_page=100`                                                                             |
 

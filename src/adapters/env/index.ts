@@ -7,6 +7,7 @@ import type {
   ManagedHooksPolicy,
   RepoIdentity,
 } from "../../ports/index";
+import { parseRepoIdentity } from "../../protocol/index";
 
 export interface CommandResult {
   stdout: string;
@@ -100,38 +101,27 @@ export class EnvCommandError extends Error {
   }
 }
 
-/** Host and owner/repo of a git remote URL (HTTPS, ssh:// or SCP-style). */
-export function parseRepoIdentity(remote: string): RepoIdentity {
-  let host: string;
-  let path: string;
-  const scp = remote.match(/^[^/@\s]+@([^/:\s]+):(.*)$/);
-  if (scp) {
-    host = scp[1] ?? "";
-    path = scp[2] ?? "";
-  } else {
-    let url: URL;
-    try {
-      url = new URL(remote);
-    } catch {
-      throw new Error("Unsupported origin remote URL");
-    }
-    if (!["https:", "http:", "ssh:"].includes(url.protocol))
-      throw new Error("Unsupported origin remote URL");
-    host = url.hostname;
-    path = url.pathname.replace(/^\//, "");
+/**
+ * `gh alias list` output: `name: expansion` per line, YAML-quoted when
+ * needed. Undefined when any line does not read that way: the caller then
+ * treats every unknown gh command as a possible merge.
+ */
+export function parseAliases(
+  out: string,
+): ReadonlyMap<string, string> | undefined {
+  const aliases = new Map<string, string>();
+  for (const line of out.split("\n")) {
+    if (line.trim() === "") continue;
+    const m = /^([^\s:]+):\s+(.*)$/.exec(line);
+    if (!m) return undefined;
+    let value = (m[2] as string).trim();
+    if (/^'.*'$/.test(value)) value = value.slice(1, -1).replaceAll("''", "'");
+    else if (/^".*"$/.test(value))
+      value = value.slice(1, -1).replace(/\\(["\\])/g, "$1");
+    else if (/^["'|>]/.test(value)) return undefined;
+    aliases.set(m[1] as string, value);
   }
-  host = host.toLowerCase();
-  // GitHub's SSH-over-443 endpoint is still github.com for the API and gh.
-  if (host === "ssh.github.com") host = "github.com";
-  if (!/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/.test(host))
-    throw new Error("Origin remote has no valid host");
-  path = path.replace(/\/$/, "").replace(/\.git$/, "");
-  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(path))
-    throw new Error("Origin remote must identify owner/repo");
-  const [owner, repo] = path.split("/");
-  if (owner === "." || owner === ".." || repo === "." || repo === "..")
-    throw new Error("Invalid origin repository");
-  return { host, repo: path };
+  return aliases;
 }
 
 type Lookup = { found: false } | { found: true; value: ManagedHooksPolicy };
@@ -173,10 +163,14 @@ export class EnvAdapter implements EnvPort {
     this.home = options.home ?? homedir();
   }
 
-  private async command(command: string, args: string[]): Promise<string> {
+  private async command(
+    command: string,
+    args: string[],
+    cwd = this.options.repoDir,
+  ): Promise<string> {
     let result: CommandResult;
     try {
-      result = await this.runner(command, args, this.options.repoDir);
+      result = await this.runner(command, args, cwd);
     } catch {
       throw new EnvCommandError(command);
     }
@@ -195,10 +189,20 @@ export class EnvAdapter implements EnvPort {
     return token;
   }
 
-  async repoIdentity(): Promise<RepoIdentity> {
+  async repoIdentity(dir: string): Promise<RepoIdentity> {
     return parseRepoIdentity(
-      await this.command("git", ["remote", "get-url", "origin"]),
+      await this.command("git", ["remote", "get-url", "origin"], dir),
     );
+  }
+
+  async ghAliases(): Promise<ReadonlyMap<string, string> | undefined> {
+    let out: string;
+    try {
+      out = await this.command("gh", ["alias", "list"]);
+    } catch {
+      return undefined;
+    }
+    return parseAliases(out);
   }
 
   /** XDG base directory: the variable when it is absolute, else the default under home. */

@@ -1,13 +1,15 @@
 import {
   classify,
+  DEFAULT_BOTS,
   type Finding,
   isBot,
   type LandedFacts,
   type MergeFacts,
+  matchGlob,
   stale,
   type WorkFacts,
 } from "../core/radar/index";
-import type { GitPort, StorePort } from "../ports/index";
+import type { GitPort, RepoRef, StorePort } from "../ports/index";
 import {
   DEFAULT_REPO_CONFIG,
   parseRepoConfig,
@@ -22,7 +24,7 @@ import {
 } from "./files";
 import { putItem, sameLogin } from "./items";
 import type { AppPorts } from "./ports";
-import { repoSlug } from "./repo";
+import { isRecord, repoKey, repoSlug, sameRepo } from "./repo";
 import type { ActiveRepo } from "./scope";
 
 /** Bare branches older than this are not someone's current work (design §10). */
@@ -31,11 +33,18 @@ export const BARE_BRANCH_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000;
 export const REPO_CONFIG_PATH = ".github/crew-net.yml";
 const CONFIG_REFS = ["origin/HEAD", "origin/main", "origin/master"];
 
-/** `.github/crew-net.yml` from the default branch; the defaults when absent or unreadable. */
+/**
+ * `.github/crew-net.yml` from the default branch (GitHub's, when known, then
+ * `origin/HEAD`, `main`, `master`); the defaults when absent or unreadable.
+ */
 export async function readRepoConfig(
   git: GitPort,
+  defaultBranch?: string,
 ): Promise<{ config: RepoConfig; problem?: string }> {
-  for (const ref of CONFIG_REFS) {
+  const refs = defaultBranch
+    ? [`origin/${defaultBranch}`, ...CONFIG_REFS]
+    : CONFIG_REFS;
+  for (const ref of refs) {
     const text = await git
       .showFile(ref, REPO_CONFIG_PATH)
       .catch(() => undefined);
@@ -48,6 +57,41 @@ export async function readRepoConfig(
     };
   }
   return { config: DEFAULT_REPO_CONFIG };
+}
+
+const DEFAULT_BRANCH_TTL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The repo's default branch as GitHub names it, read once a day. When GitHub
+ * cannot be read, the last known one; with none known the radar waits.
+ */
+export async function defaultBranchOf(
+  ports: AppPorts,
+  ref: RepoRef,
+): Promise<string> {
+  const { store, clock } = ports;
+  const key = `default-branch:${repoKey(ref)}`;
+  const cached = await store.kv.get(key);
+  const known =
+    isRecord(cached) && typeof cached.branch === "string"
+      ? cached.branch
+      : undefined;
+  const nowMs = clock.now();
+  if (
+    known &&
+    isRecord(cached) &&
+    typeof cached.atMs === "number" &&
+    nowMs - cached.atMs < DEFAULT_BRANCH_TTL_MS
+  )
+    return known;
+  try {
+    const branch = await ports.github(ref.host).defaultBranch(repoSlug(ref));
+    await store.kv.set(key, { branch, atMs: nowMs });
+    return branch;
+  } catch (error) {
+    if (known) return known;
+    throw error;
+  }
 }
 
 interface Work {
@@ -74,7 +118,8 @@ function pathsText(paths: readonly string[]): string {
 
 /** One line for the band and the inbox. The digest renders findings itself. */
 export function findingText(f: Finding): string {
-  const other = f.other.pr ? `#${f.other.pr}` : (f.other.branch ?? "");
+  const here = sameRepo(f.other.repo, f.mine.repo) ? "" : f.other.repo;
+  const other = f.other.pr ? `${here}#${f.other.pr}` : (f.other.branch ?? "");
   const theirs = `${f.other.owner} ${other}`.trim();
   const mine = f.mine.pr ? `#${f.mine.pr}` : (f.mine.branch ?? "your branch");
   switch (f.kind) {
@@ -103,13 +148,15 @@ async function changed(
 
 /**
  * Fetch and radar for one active repo (design §10): my work items against
- * everyone else's open PRs and recent bare branches with the same base. New
- * findings are written as inbox items before radar.json, which is the
- * record of what was already reported.
+ * everyone else's open PRs and recent bare branches with the same base, and
+ * against others' PRs in the watched repos (`repos`) this repo's contracts
+ * name as consumers (§10.1). New findings are written as inbox items before
+ * radar.json, which is the record of what was already reported.
  */
 export async function radarJob(
   ports: AppPorts,
   active: ActiveRepo,
+  repos: readonly RepoRef[],
 ): Promise<void> {
   const { store, clock } = ports;
   const git = ports.git(active.dir);
@@ -118,7 +165,8 @@ export async function radarJob(
   const me = await cachedViewer(store, active.ref.host);
   if (!snapshot || !me) return;
   const slug = repoSlug(active.ref);
-  const { config, problem } = await readRepoConfig(git);
+  const defaultBase = await defaultBranchOf(ports, active.ref);
+  const { config, problem } = await readRepoConfig(git, defaultBase);
   if (problem) {
     await store.events.append({
       type: "config-error",
@@ -130,12 +178,10 @@ export async function radarJob(
   const remotes = await git.remoteBranches();
   const remoteNames = new Set(remotes.map((r) => r.name));
   const deploy = new Set(config.deployBranches);
-  const defaultBase =
-    config.deployBranches.find((b) => remoteNames.has(b)) ?? "main";
   // Fork PRs have no branch on origin; a same-named origin branch is other work.
   const sameRepoPulls = snapshot.pulls.filter((p) => !p.fork);
   const byHead = new Map(sameRepoPulls.map((p) => [p.headRef, p]));
-  const bots = config.bots;
+  const bots = [...DEFAULT_BOTS, ...config.bots];
 
   const mine: Work[] = [];
   const mineBranches = new Set<string>();
@@ -207,14 +253,18 @@ export async function radarJob(
   }
   const nowMs = clock.now();
   for (const branch of remotes) {
-    const owner = branch.loginHint;
-    if (!owner || sameLogin(owner, me) || isBot(owner, bots)) continue;
     if (byHead.has(branch.name) || deploy.has(branch.name)) continue;
     if (mineBranches.has(branch.name)) continue;
     if (branch.name === defaultBase) continue;
     const pushedAtMs = Date.parse(branch.lastCommitAt);
     if (!(nowMs - pushedAtMs <= BARE_BRANCH_MAX_AGE_MS)) continue;
     const ref = `refs/remotes/origin/${branch.name}`;
+    // The branch's own last author: a merge of main into it names the merger.
+    const author = await git
+      .branchAuthor(`origin/${defaultBase}`, ref)
+      .catch(() => undefined);
+    const owner = author?.loginHint;
+    if (!owner || sameLogin(owner, me) || isBot(owner, bots)) continue;
     const paths = await changed(git, `origin/${defaultBase}`, ref);
     if (!paths) continue;
     theirs.push({
@@ -230,6 +280,15 @@ export async function radarJob(
       },
     });
   }
+
+  const consumers = await consumerWork(
+    ports,
+    active.ref,
+    repos,
+    config,
+    me,
+    mine.flatMap((m) => m.facts.changedPaths),
+  );
 
   const radarConfig = { contracts: { [slug]: config.contracts }, bots };
   const findings = new Map<string, Finding>();
@@ -250,6 +309,14 @@ export async function radarJob(
         ),
       );
     }
+    // Deploy branches are per repo: a pair across repos compares no bases.
+    for (const t of consumers)
+      add(
+        classify(
+          { mine: m.facts, theirs: t, merge: { clean: true } },
+          radarConfig,
+        ),
+      );
     add(stale(m.facts, await landedOn(git, m.ref, m.facts), radarConfig));
   }
 
@@ -259,6 +326,82 @@ export async function radarJob(
     findings: [...findings.values()],
     work: [...mine, ...theirs].map((w) => w.facts),
   });
+}
+
+/**
+ * Others' open PRs in the watched repos that this repo's contracts name as
+ * consumers (`owner/repo:glob`, design §10.1), read only for contracts whose
+ * producer paths I change. There is no clone of those repos here, so their
+ * files come from GitHub; they are kept by head sha in kv
+ * `pull-files:<host/o/r>` (open PRs only), so an unchanged PR is read once.
+ * A PR whose files cannot be read is left out this pass and logged.
+ */
+async function consumerWork(
+  ports: AppPorts,
+  home: RepoRef,
+  repos: readonly RepoRef[],
+  config: RepoConfig,
+  me: string,
+  minePaths: readonly string[],
+): Promise<WorkFacts[]> {
+  const { store, clock } = ports;
+  const named = new Set(
+    config.contracts
+      .filter((c) =>
+        minePaths.some((p) => c.producer.some((g) => matchGlob(g, p))),
+      )
+      .flatMap((c) =>
+        c.consumers.flatMap((x) => (x.repo ? [x.repo.toLowerCase()] : [])),
+      ),
+  );
+  const bots = [...DEFAULT_BOTS, ...config.bots];
+  const work: WorkFacts[] = [];
+  for (const ref of repos) {
+    const slug = repoSlug(ref);
+    if (ref.host !== home.host || slug === repoSlug(home) || !named.has(slug))
+      continue;
+    const github = ports.github(ref.host);
+    const key = `pull-files:${repoKey(ref)}`;
+    const before = await store.kv.get(key);
+    const known = isRecord(before) ? before : {};
+    const next: Record<string, { sha: string; paths: string[] }> = {};
+    for (const pr of (await readSnapshot(store, ref))?.pulls ?? []) {
+      if (sameLogin(pr.author, me) || isBot(pr.author, bots)) continue;
+      const seen = known[String(pr.number)];
+      let paths =
+        isRecord(seen) &&
+        seen.sha === pr.headSha &&
+        Array.isArray(seen.paths) &&
+        seen.paths.every((p) => typeof p === "string")
+          ? (seen.paths as string[])
+          : undefined;
+      if (!paths) {
+        try {
+          paths = await github.listPullFiles(slug, pr.number);
+        } catch (error) {
+          await store.events.append({
+            type: "sync-error",
+            job: `radar:${repoKey(home)}`,
+            pr: `${slug}#${pr.number}`,
+            message: error instanceof Error ? error.message : String(error),
+            atMs: clock.now(),
+          });
+          continue;
+        }
+      }
+      next[String(pr.number)] = { sha: pr.headSha, paths };
+      work.push({
+        repo: slug,
+        owner: pr.author,
+        branch: pr.headRef,
+        base: pr.baseRef,
+        pr: pr.number,
+        changedPaths: paths,
+      });
+    }
+    await store.kv.set(key, next);
+  }
+  return work;
 }
 
 /** A conflict needs a file both sides change, so merge-tree runs only then. */

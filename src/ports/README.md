@@ -16,6 +16,9 @@ state (`open`/`closed`), draft, body, updatedAt, autoMerge, merged. Null bodies
 become empty strings; merged is definitive on getPull and false in lists.
 
 `viewer()` returns the login of the token's user (`GET /user`).
+`listPullFiles` gives a PR's paths for repos without a clone, `defaultBranch`
+the repo's default branch, `threadState` whether an Issue or PR is open,
+closed or merged.
 
 `notifications(since)` returns threads with a crew-net reason, `modified` and
 `pollIntervalMs`. `listThreadComments(repo, n, after)` returns comments strictly
@@ -37,14 +40,16 @@ schema belongs to the app. See [store semantics](../adapters/store/README.md).
 
 ## Git
 
+`checkout()` returns the `{ root, clone, branch? }` of the port's directory.
 `worktreeBranches` returns `{ path, branch }`. `remoteBranches` returns
-`{ name, lastCommitAt, authorEmail, loginHint }` for bare-branch owners.
+`{ name, lastCommitAt }`; `branchAuthor(base, tip)` names a bare branch's
+owner from its own last non-merge commit.
 `mergeBase` is `undefined` without shared history. `changedFiles(base, head)`
 diffs from the merge base.
 
 ## Environment
 
-`repoIdentity()` returns `{ host, repo }`; `githubToken(host)` reads the token
+`repoIdentity(dir)` returns `{ host, repo }` of the working copy holding `dir`; `githubToken(host)` reads the token
 for that host. `stateDir()` and `configDir()` follow XDG. managedHooksOnly
 returns `{status:"known",enabled:boolean}` or `{status:"unknown",reason:string}`.
 Callers must not treat unknown as false.

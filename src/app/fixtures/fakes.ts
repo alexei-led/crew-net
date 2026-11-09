@@ -1,8 +1,11 @@
 import type {
+  BranchAuthor,
+  Checkout,
   CommentCursor,
   EnvPort,
   GitHubPort,
   GitPort,
+  GitRemote,
   IssueComment,
   LandedCommit,
   ManagedHooksPolicy,
@@ -15,6 +18,7 @@ import type {
   RemoteBranch,
   RepoIdentity,
   RequestStats,
+  ThreadState,
   WorktreeBranch,
 } from "../../ports/index";
 
@@ -26,6 +30,12 @@ export class FakeGitHub implements GitHubPort {
   threads: NotificationThread[] = [];
   readonly comments = new Map<string, IssueComment[]>();
   readonly reviews = new Map<string, PullReview[]>();
+  /** `repo#N` → paths the PR changes. */
+  readonly files = new Map<string, string[]>();
+  /** repo → default branch; `main` when absent. */
+  readonly defaults = new Map<string, string>();
+  /** `repo#N` → thread state; `open` when absent. */
+  readonly states = new Map<string, ThreadState>();
   readonly posted: { repo: string; number: number; body: string }[] = [];
   readonly autoMergeOff: string[] = [];
   readonly calls: string[] = [];
@@ -70,6 +80,23 @@ export class FakeGitHub implements GitHubPort {
     const pull = this.pulls.get(`${repo}#${number}`);
     if (!pull) throw new Error(`no pull ${repo}#${number}`);
     return pull;
+  }
+
+  async listPullFiles(repo: string, number: number): Promise<string[]> {
+    this.call("listPullFiles", `${repo}#${number}`);
+    const files = this.files.get(`${repo}#${number}`);
+    if (!files) throw new Error(`no files for ${repo}#${number}`);
+    return files;
+  }
+
+  async defaultBranch(repo: string): Promise<string> {
+    this.call("defaultBranch", repo);
+    return this.defaults.get(repo) ?? "main";
+  }
+
+  async threadState(repo: string, number: number): Promise<ThreadState> {
+    this.call("threadState", `${repo}#${number}`);
+    return this.states.get(`${repo}#${number}`) ?? "open";
   }
 
   async listThreadComments(
@@ -170,7 +197,7 @@ export function comment(
 export class FakeGit implements GitPort {
   fetches = 0;
   worktrees: WorktreeBranch[] = [];
-  remotes: RemoteBranch[] = [];
+  branches: RemoteBranch[] = [];
   /** `base...head` → changed paths. */
   readonly diffs = new Map<string, string[]>();
   /** `a|b` → conflicted paths. */
@@ -180,21 +207,30 @@ export class FakeGit implements GitPort {
   /** `from..to` → commits. */
   readonly landedCommits = new Map<string, LandedCommit[]>();
   readonly mergeTrees: string[] = [];
+  /** `base..tip` → the branch's own last author. */
+  readonly authors = new Map<string, BranchAuthor>();
+  /** Root of the clone every worktree belongs to; else each worktree is its own. */
+  clone: string | undefined;
+  remoteList: GitRemote[] = [];
+  /** The directory `checkout()` answers for; `at(dir)` gives a view for another. */
+  cwd = "/work/r";
 
+  /** A remote branch; `loginHint` and `authorEmail` name its own last author. */
   remote(
     name: string,
     paths: string[],
-    extra: Partial<RemoteBranch> & { base?: string } = {},
+    extra: Partial<RemoteBranch & BranchAuthor> & { base?: string } = {},
   ): void {
-    const { base = "main", ...branch } = extra;
-    this.remotes.push({
-      name,
-      lastCommitAt: "2026-11-09T09:00:00Z",
-      authorEmail: "someone@example.test",
-      loginHint: null,
-      ...branch,
-    });
-    this.diffs.set(`origin/${base}...refs/remotes/origin/${name}`, paths);
+    const {
+      base = "main",
+      lastCommitAt = "2026-11-09T09:00:00Z",
+      authorEmail = "someone@example.test",
+      loginHint = null,
+    } = extra;
+    const tip = `refs/remotes/origin/${name}`;
+    this.branches.push({ name, lastCommitAt });
+    this.diffs.set(`origin/${base}...${tip}`, paths);
+    this.authors.set(`origin/${base}..${tip}`, { authorEmail, loginHint });
   }
 
   local(branch: string, paths: string[], base = "main"): void {
@@ -202,8 +238,53 @@ export class FakeGit implements GitPort {
     this.diffs.set(`origin/${base}...refs/heads/${branch}`, paths);
   }
 
+  /** This clone seen from `dir`, as the app's `git(dir)` gets it. */
+  at(dir: string): GitPort {
+    return {
+      checkout: async () => this.checkoutOf(dir),
+      fetch: () => this.fetch(),
+      remotes: () => this.remotes(),
+      configValue: (key) => this.configValue(key),
+      worktreeBranches: () => this.worktreeBranches(),
+      remoteBranches: () => this.remoteBranches(),
+      mergeBase: (a, b) => this.mergeBase(a, b),
+      mergeTree: (a, b) => this.mergeTree(a, b),
+      changedFiles: (base, head) => this.changedFiles(base, head),
+      showFile: (ref, path) => this.showFile(ref, path),
+      branchAuthor: (base, tip) => this.branchAuthor(base, tip),
+      landed: (from, to) => this.landed(from, to),
+    };
+  }
+
+  /** The worktree whose path holds `dir` (the longest match). */
+  private checkoutOf(dir: string): Checkout {
+    const match = this.worktrees
+      .filter((wt) => dir === wt.path || dir.startsWith(`${wt.path}/`))
+      .sort((a, b) => b.path.length - a.path.length)[0];
+    if (!match) throw new Error(`not a git repository: ${dir}`);
+    return {
+      root: match.path,
+      clone: this.clone ?? match.path,
+      branch: match.branch,
+    };
+  }
+
+  async checkout(): Promise<Checkout> {
+    return this.checkoutOf(this.cwd);
+  }
+
   async fetch(): Promise<void> {
     this.fetches++;
+  }
+
+  async remotes(): Promise<GitRemote[]> {
+    return this.remoteList;
+  }
+
+  /** git config values by key. */
+  readonly config = new Map<string, string>();
+  async configValue(key: string): Promise<string | undefined> {
+    return this.config.get(key);
   }
 
   async worktreeBranches(): Promise<WorktreeBranch[]> {
@@ -211,7 +292,7 @@ export class FakeGit implements GitPort {
   }
 
   async remoteBranches(): Promise<RemoteBranch[]> {
-    return this.remotes;
+    return this.branches;
   }
 
   async mergeBase(a: string, b: string): Promise<string | undefined> {
@@ -234,6 +315,13 @@ export class FakeGit implements GitPort {
     return this.files.get(`${ref}:${path}`);
   }
 
+  async branchAuthor(
+    base: string,
+    tip: string,
+  ): Promise<BranchAuthor | undefined> {
+    return this.authors.get(`${base}..${tip}`);
+  }
+
   async landed(from: string, to: string): Promise<LandedCommit[]> {
     return this.landedCommits.get(`${from}..${to}`) ?? [];
   }
@@ -248,9 +336,16 @@ export class FakeEnv implements EnvPort {
     if (this.token instanceof Error) throw this.token;
     return this.token;
   }
-  async repoIdentity(): Promise<RepoIdentity> {
+  /** Directories repoIdentity was asked about. */
+  readonly identityDirs: string[] = [];
+  async repoIdentity(dir: string): Promise<RepoIdentity> {
+    this.identityDirs.push(dir);
     if (this.identity instanceof Error) throw this.identity;
     return this.identity;
+  }
+  aliases: ReadonlyMap<string, string> | undefined;
+  async ghAliases(): Promise<ReadonlyMap<string, string> | undefined> {
+    return this.aliases;
   }
   async managedHooksOnly(): Promise<ManagedHooksPolicy> {
     return this.policy;

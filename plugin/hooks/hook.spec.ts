@@ -19,6 +19,8 @@ import {
   handleSafely,
   nodeCli,
   parseInput,
+  processInfo,
+  sessionPidFrom,
 } from "./hook";
 
 interface Call {
@@ -31,11 +33,18 @@ interface Call {
 function fakeCli(
   answers: Record<string, CliResult> = {},
   role?: string,
-): HookDeps & { calls: Call[] } {
+  sessionPid?: number,
+): HookDeps & { calls: Call[]; pidAsked: () => number } {
   const calls: Call[] = [];
+  let asked = 0;
   return {
     calls,
     role,
+    pidAsked: () => asked,
+    sessionPid: () => {
+      asked++;
+      return sessionPid;
+    },
     cli: (args, opts) => {
       calls.push({ args, ...opts });
       const key = args[0] === "--format" ? "digest" : (args[0] ?? "");
@@ -246,6 +255,86 @@ describe("session-start", () => {
     const deps = fakeCli({}, "worker");
     handle("session-start", { session_id: "s1", cwd: "/w" }, deps);
     expect(deps.calls[0]?.args).toContain("worker");
+  });
+});
+
+describe("heartbeat", () => {
+  const beatArgs = (deps: ReturnType<typeof fakeCli>) =>
+    deps.calls.find((c) => c.args[1] === "beat")?.args;
+
+  test("a user prompt marks the prompt time and names the session's pid", () => {
+    const deps = fakeCli({}, undefined, 4242);
+    handle(
+      "prompt-submit",
+      { session_id: "s1", cwd: "/w", prompt: "hi" },
+      deps,
+    );
+    expect(beatArgs(deps)).toEqual([
+      "session",
+      "beat",
+      "--session",
+      "s1",
+      "--harness",
+      "claude-code",
+      "--role",
+      "lead",
+      "--pid",
+      "4242",
+      "--prompt",
+    ]);
+  });
+
+  test("session start names the pid but is not a prompt", () => {
+    const deps = fakeCli({}, undefined, 4242);
+    handle("session-start", { session_id: "s1", cwd: "/w" }, deps);
+    expect(beatArgs(deps)?.slice(-2)).toEqual(["--pid", "4242"]);
+  });
+
+  test("a wake prompt is not the developer's: no prompt time", () => {
+    const deps = fakeCli({}, undefined, 4242);
+    const prompt = "crew-net wake turn 0123456789abcdef0123456789abcdef.\n";
+    handle("prompt-submit", { session_id: "s1", cwd: "/w", prompt }, deps);
+    expect(beatArgs(deps)).not.toContain("--prompt");
+  });
+
+  test("a Bash call never looks up the session pid", () => {
+    const deps = fakeCli({}, undefined, 4242);
+    handle("pre-bash", bash("gh pr merge 5"), deps);
+    handle("pre-bash", bash("ls"), deps);
+    expect(deps.pidAsked()).toBe(0);
+  });
+
+  test("an unknown session pid is left to the CLI", () => {
+    const deps = fakeCli();
+    handle(
+      "prompt-submit",
+      { session_id: "s1", cwd: "/w", prompt: "hi" },
+      deps,
+    );
+    expect(beatArgs(deps)).not.toContain("--pid");
+  });
+
+  const tree: Record<number, { ppid: number; command: string }> = {
+    10: { ppid: 1, command: "/opt/homebrew/bin/claude" },
+    20: { ppid: 10, command: "/bin/sh" },
+    30: { ppid: 20, command: "-zsh" },
+    40: { ppid: 1, command: "bash" },
+  };
+  test.each([
+    ["the hook's parent is the session", 10, 10],
+    ["a shell runs the hook", 20, 10],
+    ["shells in a chain", 30, 10],
+    ["only shells up to init", 40, undefined],
+    ["an unknown process", 99, undefined],
+  ])("session pid: %s", (_name, start, expected) => {
+    expect(sessionPidFrom(start, (pid) => tree[pid])).toBe(expected);
+  });
+
+  test("processInfo reads a live process's parent and command", () => {
+    const info = processInfo(process.pid);
+    expect(info?.ppid).toBe(process.ppid);
+    expect(info?.command).toContain("bun");
+    expect(processInfo(2 ** 31 - 2)).toBeUndefined();
   });
 });
 

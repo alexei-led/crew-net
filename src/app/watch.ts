@@ -23,9 +23,8 @@ function liveSession(s: SessionRecord): LiveSession {
     repo: ref ? repoSlug(ref) : "",
     worktree: s.worktree,
     branch: s.branch ?? "",
-    // Heartbeats do not carry the clone root; each worktree stands alone,
-    // so a worker's branch reaches its lead through the `repo` step.
-    cloneRoot: s.worktree,
+    // A heartbeat from a build before clone roots stands alone.
+    cloneRoot: s.clone ?? s.worktree,
     lastActiveMs: s.lastPromptAtMs ?? 0,
   };
 }

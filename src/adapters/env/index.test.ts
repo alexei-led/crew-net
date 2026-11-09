@@ -8,7 +8,7 @@ import {
   EnvCommandError,
   type EnvRunner,
   type PolicySource,
-  parseRepoIdentity,
+  parseAliases,
 } from "./index";
 
 let dir: string;
@@ -17,46 +17,6 @@ beforeEach(() => {
 });
 afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
-});
-
-test.each([
-  [
-    "https://github.com/alexei-led/crew-net.git",
-    "github.com",
-    "alexei-led/crew-net",
-  ],
-  [
-    "https://github.com/alexei-led/crew-net",
-    "github.com",
-    "alexei-led/crew-net",
-  ],
-  [
-    "git@github.com:alexei-led/crew-net.git",
-    "github.com",
-    "alexei-led/crew-net",
-  ],
-  [
-    "ssh://git@github.example:2222/owner/repo.git",
-    "github.example",
-    "owner/repo",
-  ],
-  ["https://GitHub.Example/Owner/my.repo/", "github.example", "Owner/my.repo"],
-  ["git@acme.ghe.com:acme/app.git", "acme.ghe.com", "acme/app"],
-  ["ssh://git@ssh.github.com:443/owner/repo.git", "github.com", "owner/repo"],
-])("repo identity: %s", (remote, host, repo) => {
-  expect(parseRepoIdentity(remote)).toEqual({ host, repo });
-});
-
-test.each([
-  "/tmp/local.git",
-  "file:///tmp/repo",
-  "https://github.com/owner",
-  "git@host:owner/repo/extra",
-  "https://host/a/b/c",
-  "git@:owner/repo",
-  "git@bad_host:owner/repo",
-])("rejects unsupported origin %s", (remote) => {
-  expect(() => parseRepoIdentity(remote)).toThrow();
 });
 
 test("token and repository commands use argv, cwd, and no shell", async () => {
@@ -71,13 +31,13 @@ test("token and repository commands use argv, cwd, and no shell", async () => {
   };
   const env = new EnvAdapter({ repoDir: dir, runner });
   expect(await env.githubToken("github.example")).toBe("test-secret");
-  expect(await env.repoIdentity()).toEqual({
+  expect(await env.repoIdentity("/work/session/sub")).toEqual({
     host: "github.com",
     repo: "owner/repo",
   });
   expect(calls).toEqual([
     ["gh", ["auth", "token", "--hostname", "github.example"], dir],
-    ["git", ["remote", "get-url", "origin"], dir],
+    ["git", ["remote", "get-url", "origin"], "/work/session/sub"],
   ]);
 });
 
@@ -308,4 +268,33 @@ test.each([
   const env = new EnvAdapter({ repoDir: dir, env: vars, home: "/home/me" });
   expect(env.stateDir()).toBe(state);
   expect(env.configDir()).toBe(config);
+});
+
+test.each<[string, [string, string][]]>([
+  ["", []],
+  ["co: pr checkout\n", [["co", "pr checkout"]]],
+  [
+    'm: \'pr merge 123 -R acme/x\'\nq: "!gh pr merge \\"5\\""\n',
+    [
+      ["m", "pr merge 123 -R acme/x"],
+      ["q", '!gh pr merge "5"'],
+    ],
+  ],
+])("gh alias list %p", (out, expected) => {
+  expect([...(parseAliases(out) ?? new Map())]).toEqual(expected);
+});
+
+test.each(["m: |\n  pr merge 5\n", "garbage line\n"])(
+  "gh alias list it cannot read: %p",
+  (out) => {
+    expect(parseAliases(out)).toBeUndefined();
+  },
+);
+
+test("gh alias list failing is unknown", async () => {
+  const env = new EnvAdapter({
+    repoDir: dir,
+    runner: async () => ({ stdout: "", exitCode: 1 }),
+  });
+  expect(await env.ghAliases()).toBeUndefined();
 });

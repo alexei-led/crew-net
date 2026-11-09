@@ -77,6 +77,10 @@ export interface World {
   statuses: (string | undefined)[];
   draft: string;
   sessionId: string;
+  /** What `$.session.root()` answers: `/cd` or a worktree move changes it. */
+  root: string;
+  /** The origin remote `$.session.repo()` answers. */
+  remote: string;
   /** Plugin submits stay unsettled until `releaseSubmits`, as one queued behind a running turn. */
   hangPluginSubmits: boolean;
   /** Plugin submits are dropped, as by a hook beneath or the engine. */
@@ -120,6 +124,8 @@ export function world(on: On, mock: Mock): World {
     statuses: [],
     draft: "",
     sessionId: "session-1",
+    root: ROOT,
+    remote: "git@github.com:doiteng/reflex.git",
     hangPluginSubmits: false,
     dropPluginSubmits: false,
     releaseSubmits: () => {
@@ -144,11 +150,11 @@ export function world(on: On, mock: Mock): World {
   on("session.start", (_$, e) => ({ cwd: e.cwd }));
   on("session.end", (_$, e) => ({ sessionId: e.sessionId }));
   on("session.id", () => ({ value: w.sessionId }));
-  on("session.root", () => ({ value: ROOT }));
+  on("session.root", () => ({ value: w.root }));
   on("session.repo", () => ({
     value: {
       root: "/w/reflex-main",
-      remote: "git@github.com:doiteng/reflex.git",
+      remote: w.remote,
       internal: false,
       name: null,
     },

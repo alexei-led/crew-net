@@ -24,15 +24,20 @@ export async function writeContext(ctx: CommandContext): Promise<WriteContext> {
   if (ctx.repo !== undefined && !OWNER_REPO.test(ctx.repo))
     throw new UsageError("--repo expects owner/repo");
   const ports = ctx.runtime.ports();
-  const identity = await ports.env.repoIdentity().catch((error: unknown) => {
+  // git spells worktree paths with symlinks resolved (/private/tmp on macOS).
+  const cwd = realpathSync(ctx.runtime.cwd);
+  const identity = await ports.env.repoIdentity(cwd).catch((error: unknown) => {
     if (ctx.repo !== undefined) return undefined;
     throw error;
   });
   const host = identity?.host ?? "github.com";
-  // git spells worktree paths with symlinks resolved (/private/tmp on macOS).
-  const cwd = realpathSync(ctx.runtime.cwd);
+  const ghHost = process.env.GH_HOST?.trim().toLowerCase();
+  const ghRepo = process.env.GH_REPO?.trim();
   return {
     github: ports.github(host),
+    githubFor: (other) => ports.github(other),
+    ...(ghHost ? { ghHost } : {}),
+    ...(ghRepo ? { ghRepo } : {}),
     git: ports.git(cwd),
     store: ports.store,
     files: new FilesAdapter(),

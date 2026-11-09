@@ -254,6 +254,34 @@ function mentionLine(login, text) {
     return null;
   return `@${login} ${first}`;
 }
+// src/protocol/remote.ts
+function parseRepoIdentity(remote) {
+  let host;
+  let path;
+  const scp = remote.match(/^[^/@\s]+@([^/:\s]+):(.*)$/);
+  if (scp) {
+    host = scp[1] ?? "";
+    path = scp[2] ?? "";
+  } else {
+    const url = remote.match(/^(?:https?|ssh):\/\/(?:[^/@\s]*@)?([^/:@\s]+)(?::\d*)?\/([^?#\s]*)(?:[?#]\S*)?$/i);
+    if (!url)
+      throw new Error("Unsupported origin remote URL");
+    host = url[1] ?? "";
+    path = url[2] ?? "";
+  }
+  host = host.toLowerCase();
+  if (host === "ssh.github.com")
+    host = "github.com";
+  if (!/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/.test(host))
+    throw new Error("Origin remote has no valid host");
+  path = path.replace(/\/$/, "").replace(/\.git$/, "");
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(path))
+    throw new Error("Origin remote must identify owner/repo");
+  const [owner, repo] = path.split("/");
+  if (owner === "." || owner === ".." || repo === "." || repo === "..")
+    throw new Error("Invalid origin repository");
+  return { host, repo: path };
+}
 // src/protocol/repo-config.ts
 var DEFAULT_PRODUCER_PATTERNS = [
   "**/migrations/**",
@@ -1155,7 +1183,12 @@ var WRAPPERS = {
 };
 var FIND_EXEC = new Set(["-exec", "-execdir", "-ok", "-okdir"]);
 var CHANGES_DIR = new Set(["cd", "pushd", "popd"]);
-var GH_CONTEXT_VAR = /^GH_(REPO|HOST)=/;
+var REPO_CONTEXT_WORD = /GH_(?:HOST|REPO|CONFIG_DIR)|GIT_(?:DIR|WORK_TREE|COMMON_DIR|CONFIG)|^(?:HOME|XDG_CONFIG_HOME)\+?=/;
+var HOST_CONTEXT_WORD = /GH_(?:HOST|CONFIG_DIR)|^(?:HOME|XDG_CONFIG_HOME)\+?=/;
+function setsVariables(words) {
+  const head = words.find((w) => !ASSIGNMENT.test(w.text))?.text;
+  return head === "source" || head === "." || head === "set" && words.some((w) => /^-\w*a/.test(w.text) || w.text === "allexport");
+}
 var SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
 var ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*\+?=/;
 var GH_VALUE_FLAGS = new Set([
@@ -1242,14 +1275,19 @@ function splitArgs(words) {
   }
   return { flags, positionals };
 }
+var host = (name) => /:/.test(name) ? undefined : name.toLowerCase();
 function repoFromFlag(value) {
   const parts = value.replace(/^https?:\/\//, "").split("/").filter(Boolean);
   if (parts.length < 2 || parts.length > 3)
     return;
-  return parts.slice(-2).join("/");
+  const repo = parts.slice(-2).join("/");
+  if (parts.length === 2)
+    return { repo };
+  const named = host(parts[0]);
+  return named === undefined ? undefined : { host: named, repo };
 }
 function repoFlag(flags) {
-  let repo;
+  let found;
   for (const f of flags) {
     if (f.name !== "-R" && f.name !== "--repo")
       continue;
@@ -1258,9 +1296,9 @@ function repoFlag(flags) {
     const parsed = repoFromFlag(f.value.text);
     if (!parsed)
       return { error: `cannot read --repo ${f.value.text}` };
-    repo = parsed;
+    found = parsed;
   }
-  return repo === undefined ? {} : { repo };
+  return found ?? {};
 }
 function prMerge(args) {
   const { flags, positionals } = splitArgs(args);
@@ -1282,11 +1320,20 @@ function prMerge(args) {
       kind: "merge",
       targets: [{ ...repo, pr: Number(t.replace("#", "")) }]
     };
-  const url = /^https?:\/\/[^/]+\/([^/]+\/[^/]+)\/pull\/(\d{1,9})(?:[/?#].*)?$/.exec(t);
+  const url = /^https?:\/\/([^/]+)\/([^/]+\/[^/]+)\/pull\/(\d{1,9})(?:[/?#].*)?$/.exec(t);
+  const urlHost = url ? host(url[1]) : undefined;
+  if (url && urlHost === undefined)
+    return denied(`gh pr merge: cannot follow the port in ${t}`);
   if (url)
     return {
       kind: "merge",
-      targets: [{ repo: url[1], pr: Number(url[2]) }]
+      targets: [
+        {
+          host: urlHost,
+          repo: url[2],
+          pr: Number(url[3])
+        }
+      ]
     };
   if (t.includes("://"))
     return denied(`gh pr merge: cannot read target ${t}`);
@@ -1312,6 +1359,29 @@ function apiPath(endpoint) {
   return parts.join("/");
 }
 var BODY_FLAGS = new Set(["-f", "--raw-field", "-F", "--field", "--input"]);
+function apiUrlHost(endpoint) {
+  const m = /^[A-Za-z][A-Za-z0-9+.-]*:\/\/([^/?#]*)/.exec(endpoint);
+  if (!m)
+    return;
+  const name = host(m[1].replace(/^[^@]*@/, ""));
+  if (name === undefined)
+    return "";
+  const api = name.startsWith("api.") ? name.slice(4) : undefined;
+  return api === "github.com" || api?.endsWith(".ghe.com") ? api : name;
+}
+function hostnameFlag(flags) {
+  let found;
+  for (const f of flags) {
+    if (f.name !== "--hostname")
+      continue;
+    if (!f.value || f.value.dynamic || f.value.text === "")
+      return { error: "the --hostname value is not literal" };
+    found = host(f.value.text);
+    if (found === undefined)
+      return { error: "the --hostname value has a port" };
+  }
+  return found === undefined ? {} : { host: found };
+}
 function apiMethod(flags) {
   let method;
   for (const f of flags) {
@@ -1357,10 +1427,20 @@ function api(args) {
   if (pull) {
     if (readOnly)
       return NONE;
-    const repo = pull[1] === "{owner}" && pull[2] === "{repo}" ? {} : { repo: `${pull[1]}/${pull[2]}` };
-    if (/[{}]/.test(repo.repo ?? ""))
-      return denied(`gh api: cannot read the repo in ${endpoint.text}`);
-    return { kind: "merge", targets: [{ ...repo, pr: Number(pull[3]) }] };
+    const repo = { repo: `${pull[1]}/${pull[2]}` };
+    if (/[{}]/.test(repo.repo))
+      return denied(`gh api: name the repo in ${endpoint.text}`);
+    const named = hostnameFlag(flags);
+    if ("error" in named)
+      return denied(`gh api: ${named.error}`);
+    const urlHost = apiUrlHost(endpoint.text);
+    if (urlHost === "")
+      return denied(`gh api: cannot follow the port in ${endpoint.text}`);
+    const target = urlHost === undefined ? named : { host: urlHost };
+    return {
+      kind: "merge",
+      targets: [{ ...target, ...repo, pr: Number(pull[3]) }]
+    };
   }
   if (/^repos\/[^/]+\/[^/]+\/merges$/.test(path) && !readOnly)
     return denied("gh api: branch merges are not gated; use gh pr merge");
@@ -1390,7 +1470,7 @@ function gh(args, options, depth) {
   if (top.dynamic)
     return denied("gh: the command is not literal");
   const at = args.indexOf(top);
-  const rest = args.slice(at + 1);
+  const rest = [...args.slice(0, at), ...args.slice(at + 1)];
   if (top.text === "pr") {
     const action = splitArgs(rest).positionals[0];
     if (action === undefined)
@@ -1505,7 +1585,7 @@ function changesRepoContext(commands) {
   return commands.some((words) => {
     const head = words.find((w) => !ASSIGNMENT.test(w.text));
     const name = head?.text.split("/").pop() ?? "";
-    return CHANGES_DIR.has(name) || words.some((w) => GH_CONTEXT_VAR.test(w.text)) || name === "env" && words.some((w) => /^(-C|--chdir)/.test(w.text));
+    return CHANGES_DIR.has(name) || setsVariables(words) || words.some((w) => REPO_CONTEXT_WORD.test(w.text)) || name === "env" && words.some((w) => /^(-C|--chdir)/.test(w.text));
   });
 }
 function detectCommand(words, options, depth) {
@@ -1537,6 +1617,8 @@ function detectIn(src, options, depth, where) {
   const result = combine(lexed.commands.map((c) => detectCommand(c, options, depth)));
   if (result.kind === "merge" && result.targets.some((t) => t.repo === undefined) && changesRepoContext(lexed.commands))
     return denied(`${where}: changes directory or GH_REPO before a merge; name the PR with -R owner/repo or a URL`);
+  if (result.kind === "merge" && result.targets.some((t) => t.host === undefined) && lexed.commands.some((words) => setsVariables(words) || words.some((w) => HOST_CONTEXT_WORD.test(w.text))))
+    return denied(`${where}: may set GH_HOST before a merge; name the host with -R host/owner/repo or a PR URL`);
   return result;
 }
 function detectMerge(command, options = {}) {
@@ -1627,8 +1709,55 @@ function mayMerge(argv, aliases) {
     return true;
   return detectMerge(commandLine(argv), aliases === undefined ? {} : { aliases }).kind !== "none";
 }
-async function resolve(ctx, target) {
-  const repo = target.repo ?? ctx.repo;
+var REMOTE_RANK = {
+  upstream: 3,
+  github: 2,
+  origin: 1
+};
+async function defaultRepo(ctx) {
+  if (ctx.ghRepo !== undefined) {
+    const parts = ctx.ghRepo.split("/").filter(Boolean);
+    if (parts.length === 2)
+      return { repo: parts.join("/") };
+    if (parts.length === 3)
+      return {
+        host: parts[0].toLowerCase(),
+        repo: parts.slice(1).join("/")
+      };
+    throw new GateFailure(`cannot read GH_REPO ${ctx.ghRepo}`);
+  }
+  const remotes = (await ctx.git.remotes()).flatMap((r) => {
+    try {
+      return [{ ...r, ...parseRepoIdentity(r.url) }];
+    } catch {
+      if (/:/.test(r.url))
+        throw new GateFailure(`cannot read remote ${r.name} (${r.url})`);
+      return [];
+    }
+  });
+  const onHost = ctx.ghHost === undefined ? remotes : remotes.filter((r) => same(r.host, ctx.ghHost));
+  if (ctx.ghHost !== undefined && remotes.length > 0 && onHost.length === 0)
+    throw new GateFailure(`no remote on GH_HOST ${ctx.ghHost}`);
+  const ranked = onHost.map((r, i) => ({ r, i, rank: REMOTE_RANK[r.name.toLowerCase()] ?? 0 })).sort((a, b) => b.rank - a.rank || a.i - b.i).map((x) => x.r);
+  const resolved = ranked.find((r) => r.ghResolved !== undefined);
+  if (resolved && resolved.ghResolved !== "base") {
+    if (!/^[\w.-]+\/[\w.-]+$/.test(resolved.ghResolved ?? ""))
+      throw new GateFailure(`cannot read gh's default repo ${resolved.ghResolved}`);
+    return { host: resolved.host, repo: resolved.ghResolved };
+  }
+  const chosen = resolved ?? ranked[0];
+  return chosen ? { host: chosen.host, repo: chosen.repo } : { host: ctx.host, repo: ctx.repo };
+}
+async function locate2(ctx, target) {
+  const named = target.repo !== undefined ? { ...target.host ? { host: target.host } : {}, repo: target.repo } : await defaultRepo(ctx);
+  const host = target.host ?? named.host ?? ctx.ghHost ?? ctx.host;
+  if (named.host === undefined && target.host === undefined && ctx.ghHost === undefined && !same(ctx.host, "github.com"))
+    throw new GateFailure(`${named.repo} names no host and this clone is on ${ctx.host}; name it: -R ${ctx.host}/${named.repo}`);
+  const github = same(host, ctx.host) ? ctx.github : ctx.githubFor(host);
+  return { host: host.toLowerCase(), repo: named.repo, github };
+}
+async function resolve(ctx, where, target) {
+  const { repo } = where;
   if (target.pr !== undefined)
     return { repo, number: target.pr };
   let branch = target.branch;
@@ -1637,28 +1766,32 @@ async function resolve(ctx, target) {
     if (!tree)
       throw new GateFailure("no branch checked out here to find the PR; name it: gh pr merge N");
     branch = tree.branch;
+    const upstream = await ctx.git.configValue(`branch.${branch}.merge`);
+    if (upstream !== undefined && upstream !== `refs/heads/${branch}`)
+      throw new GateFailure(`branch ${branch} tracks ${upstream}; name the PR: gh pr merge N`);
   }
   const head = branch;
-  const matches = (await ctx.github.listOpenPulls(repo)).filter((p) => p.headRef === head);
+  const matches = (await where.github.listOpenPulls(repo)).filter((p) => p.headRef === head);
   if (matches.length !== 1 || !matches[0])
     throw new GateFailure(matches.length === 0 ? `no open PR for branch ${head} in ${repo}` : `several open PRs for branch ${head} in ${repo}; name it: gh pr merge N`);
   return { repo, number: matches[0].number };
 }
-async function dependencyState(ctx, ref) {
+async function dependencyState(github, ref) {
   try {
-    const pr = await ctx.github.getPull(ref.repo, ref.number);
+    const pr = await github.getPull(ref.repo, ref.number);
     return { ...ref, state: pr.merged ? "merged" : pr.state };
   } catch {
     return null;
   }
 }
 async function check(ctx, target) {
-  const ref = await resolve(ctx, target);
-  const name = `${ref.repo}#${ref.number}`;
-  const pr = await ctx.github.getPull(ref.repo, ref.number);
+  const where = await locate2(ctx, target);
+  const ref = await resolve(ctx, where, target);
+  const name = `${same(where.host, ctx.host) ? "" : `${where.host}/`}${ref.repo}#${ref.number}`;
+  const pr = await where.github.getPull(ref.repo, ref.number);
   const gated = { repo: ref.repo, number: ref.number, body: pr.body };
   const deps = dependencies(gated);
-  const states = deps.ok ? (await Promise.all(deps.refs.map((d) => dependencyState(ctx, d)))).filter((s) => s !== null) : [];
+  const states = deps.ok ? (await Promise.all(deps.refs.map((d) => dependencyState(where.github, d)))).filter((s) => s !== null) : [];
   const decision = gate(gated, states);
   return {
     name,
@@ -2142,15 +2275,20 @@ async function writeContext(ctx) {
   if (ctx.repo !== undefined && !OWNER_REPO.test(ctx.repo))
     throw new UsageError("--repo expects owner/repo");
   const ports = ctx.runtime.ports();
-  const identity = await ports.env.repoIdentity().catch((error) => {
+  const cwd = realpathSync(ctx.runtime.cwd);
+  const identity = await ports.env.repoIdentity(cwd).catch((error) => {
     if (ctx.repo !== undefined)
       return;
     throw error;
   });
   const host = identity?.host ?? "github.com";
-  const cwd = realpathSync(ctx.runtime.cwd);
+  const ghHost = process.env.GH_HOST?.trim().toLowerCase();
+  const ghRepo = process.env.GH_REPO?.trim();
   return {
     github: ports.github(host),
+    githubFor: (other) => ports.github(other),
+    ...ghHost ? { ghHost } : {},
+    ...ghRepo ? { ghRepo } : {},
     git: ports.git(cwd),
     store: ports.store,
     files: new FilesAdapter,
@@ -2277,6 +2415,9 @@ function compileGlob(glob) {
     }
     return false;
   };
+}
+function matchGlob(glob, path) {
+  return compileGlob(glob)(path);
 }
 function matchesAny(globs) {
   const matchers = globs.map(compileGlob);
@@ -2643,6 +2784,7 @@ function refFromKey(key) {
 }
 var repoKey = (ref) => `${ref.host}/${ref.owner}/${ref.name}`;
 var repoSlug = (ref) => `${ref.owner}/${ref.name}`;
+var sameRepo3 = (a, b) => a.toLowerCase() === b.toLowerCase();
 function toJson(value) {
   return JSON.parse(JSON.stringify(value));
 }
@@ -3048,6 +3190,8 @@ async function applyReply(store, { request, status }, nowMs) {
   if (status === "accepted") {
     if (request.status === "in-progress")
       return;
+    if (!(await store.outbox.list()).some((r) => r.id === request.id))
+      return;
     await store.outbox.put({ ...request, status: "in-progress" });
   } else {
     await store.outbox.remove(request.id);
@@ -3093,8 +3237,9 @@ async function readReviews(ports, host, me, since, repo, number) {
 var BARE_BRANCH_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000;
 var REPO_CONFIG_PATH = ".github/crew-net.yml";
 var CONFIG_REFS = ["origin/HEAD", "origin/main", "origin/master"];
-async function readRepoConfig(git) {
-  for (const ref of CONFIG_REFS) {
+async function readRepoConfig(git, defaultBranch) {
+  const refs = defaultBranch ? [`origin/${defaultBranch}`, ...CONFIG_REFS] : CONFIG_REFS;
+  for (const ref of refs) {
     const text = await git.showFile(ref, REPO_CONFIG_PATH).catch(() => {
       return;
     });
@@ -3110,6 +3255,25 @@ async function readRepoConfig(git) {
   }
   return { config: DEFAULT_REPO_CONFIG };
 }
+var DEFAULT_BRANCH_TTL_MS = 24 * 60 * 60 * 1000;
+async function defaultBranchOf(ports, ref) {
+  const { store, clock } = ports;
+  const key = `default-branch:${repoKey(ref)}`;
+  const cached = await store.kv.get(key);
+  const known = isRecord(cached) && typeof cached.branch === "string" ? cached.branch : undefined;
+  const nowMs = clock.now();
+  if (known && isRecord(cached) && typeof cached.atMs === "number" && nowMs - cached.atMs < DEFAULT_BRANCH_TTL_MS)
+    return known;
+  try {
+    const branch = await ports.github(ref.host).defaultBranch(repoSlug(ref));
+    await store.kv.set(key, { branch, atMs: nowMs });
+    return branch;
+  } catch (error) {
+    if (known)
+      return known;
+    throw error;
+  }
+}
 function prNumberOf(subject) {
   const m = /\(#(\d+)\)\s*$/.exec(subject) ?? /^Merge pull request #(\d+)/.exec(subject);
   return m ? Number(m[1]) : undefined;
@@ -3120,7 +3284,8 @@ function pathsText(paths) {
   return paths.length > 3 ? `${shown} +${paths.length - 3}` : shown;
 }
 function findingText(f) {
-  const other = f.other.pr ? `#${f.other.pr}` : f.other.branch ?? "";
+  const here = sameRepo3(f.other.repo, f.mine.repo) ? "" : f.other.repo;
+  const other = f.other.pr ? `${here}#${f.other.pr}` : f.other.branch ?? "";
   const theirs = `${f.other.owner} ${other}`.trim();
   const mine = f.mine.pr ? `#${f.mine.pr}` : f.mine.branch ?? "your branch";
   switch (f.kind) {
@@ -3141,7 +3306,7 @@ async function changed(git, base, head) {
     return;
   });
 }
-async function radarJob(ports, active) {
+async function radarJob(ports, active, repos) {
   const { store, clock } = ports;
   const git = ports.git(active.dir);
   await git.fetch();
@@ -3150,7 +3315,8 @@ async function radarJob(ports, active) {
   if (!snapshot || !me)
     return;
   const slug = repoSlug(active.ref);
-  const { config, problem } = await readRepoConfig(git);
+  const defaultBase = await defaultBranchOf(ports, active.ref);
+  const { config, problem } = await readRepoConfig(git, defaultBase);
   if (problem) {
     await store.events.append({
       type: "config-error",
@@ -3162,10 +3328,9 @@ async function radarJob(ports, active) {
   const remotes = await git.remoteBranches();
   const remoteNames = new Set(remotes.map((r) => r.name));
   const deploy = new Set(config.deployBranches);
-  const defaultBase = config.deployBranches.find((b) => remoteNames.has(b)) ?? "main";
   const sameRepoPulls = snapshot.pulls.filter((p) => !p.fork);
   const byHead = new Map(sameRepoPulls.map((p) => [p.headRef, p]));
-  const bots = config.bots;
+  const bots = [...DEFAULT_BOTS, ...config.bots];
   const mine = [];
   const mineBranches = new Set;
   const addMine = async (branch, ref, base, pr) => {
@@ -3228,9 +3393,6 @@ async function radarJob(ports, active) {
   }
   const nowMs = clock.now();
   for (const branch of remotes) {
-    const owner = branch.loginHint;
-    if (!owner || sameLogin2(owner, me) || isBot(owner, bots))
-      continue;
     if (byHead.has(branch.name) || deploy.has(branch.name))
       continue;
     if (mineBranches.has(branch.name))
@@ -3241,6 +3403,12 @@ async function radarJob(ports, active) {
     if (!(nowMs - pushedAtMs <= BARE_BRANCH_MAX_AGE_MS))
       continue;
     const ref = `refs/remotes/origin/${branch.name}`;
+    const author = await git.branchAuthor(`origin/${defaultBase}`, ref).catch(() => {
+      return;
+    });
+    const owner = author?.loginHint;
+    if (!owner || sameLogin2(owner, me) || isBot(owner, bots))
+      continue;
     const paths = await changed(git, `origin/${defaultBase}`, ref);
     if (!paths)
       continue;
@@ -3257,6 +3425,7 @@ async function radarJob(ports, active) {
       }
     });
   }
+  const consumers = await consumerWork(ports, active.ref, repos, config, me, mine.flatMap((m) => m.facts.changedPaths));
   const radarConfig = { contracts: { [slug]: config.contracts }, bots };
   const findings = new Map;
   const add = (list) => {
@@ -3273,6 +3442,8 @@ async function radarJob(ports, active) {
         merge: await mergeFacts(git, m, t)
       }, radarConfig));
     }
+    for (const t of consumers)
+      add(classify({ mine: m.facts, theirs: t, merge: { clean: true } }, radarConfig));
     add(stale(m.facts, await landedOn(git, m.ref, m.facts), radarConfig));
   }
   await report(store, active, [...findings.values()], nowMs);
@@ -3281,6 +3452,53 @@ async function radarJob(ports, active) {
     findings: [...findings.values()],
     work: [...mine, ...theirs].map((w) => w.facts)
   });
+}
+async function consumerWork(ports, home, repos, config, me, minePaths) {
+  const { store, clock } = ports;
+  const named = new Set(config.contracts.filter((c) => minePaths.some((p) => c.producer.some((g) => matchGlob(g, p)))).flatMap((c) => c.consumers.flatMap((x) => x.repo ? [x.repo.toLowerCase()] : [])));
+  const bots = [...DEFAULT_BOTS, ...config.bots];
+  const work = [];
+  for (const ref of repos) {
+    const slug = repoSlug(ref);
+    if (ref.host !== home.host || slug === repoSlug(home) || !named.has(slug))
+      continue;
+    const github = ports.github(ref.host);
+    const key = `pull-files:${repoKey(ref)}`;
+    const before = await store.kv.get(key);
+    const known = isRecord(before) ? before : {};
+    const next = {};
+    for (const pr of (await readSnapshot(store, ref))?.pulls ?? []) {
+      if (sameLogin2(pr.author, me) || isBot(pr.author, bots))
+        continue;
+      const seen = known[String(pr.number)];
+      let paths = isRecord(seen) && seen.sha === pr.headSha && Array.isArray(seen.paths) && seen.paths.every((p) => typeof p === "string") ? seen.paths : undefined;
+      if (!paths) {
+        try {
+          paths = await github.listPullFiles(slug, pr.number);
+        } catch (error) {
+          await store.events.append({
+            type: "sync-error",
+            job: `radar:${repoKey(home)}`,
+            pr: `${slug}#${pr.number}`,
+            message: error instanceof Error ? error.message : String(error),
+            atMs: clock.now()
+          });
+          continue;
+        }
+      }
+      next[String(pr.number)] = { sha: pr.headSha, paths };
+      work.push({
+        repo: slug,
+        owner: pr.author,
+        branch: pr.headRef,
+        base: pr.baseRef,
+        pr: pr.number,
+        changedPaths: paths
+      });
+    }
+    await store.kv.set(key, next);
+  }
+  return work;
 }
 async function mergeFacts(git, m, t) {
   const theirPaths = new Set(t.facts.changedPaths);
@@ -3402,6 +3620,66 @@ async function snapshotJob(ports, ref) {
     fetchedAtMs: ports.clock.now(),
     pulls: pulls.map((p) => snapshotPull(p, repoSlug(ref)))
   });
+  await closeRequests(ports, ref, new Set(pulls.map((p) => p.number)));
+}
+var STOPS = new Set(["RateLimitError", "AuthError", "SsoError"]);
+var WHY = {
+  merged: "merged",
+  closed: "was closed",
+  gone: "is gone"
+};
+async function closeRequests(ports, ref, openPulls) {
+  const { store, clock } = ports;
+  const key = repoKey(ref);
+  const slug = repoSlug(ref);
+  for (const request of await store.outbox.list()) {
+    if (request.repo.toLowerCase() !== key || openPulls.has(request.number))
+      continue;
+    let state;
+    try {
+      state = await ports.github(ref.host).threadState(slug, request.number);
+    } catch (error) {
+      const status = error.status;
+      if (status === 404 || status === 410)
+        state = "gone";
+      else if (STOPS.has(error.name))
+        throw error;
+      else {
+        await store.events.append({
+          type: "sync-error",
+          job: `repo:${key}`,
+          request: request.id,
+          message: error instanceof Error ? error.message : String(error),
+          atMs: clock.now()
+        });
+        continue;
+      }
+    }
+    if (state === "open")
+      continue;
+    const nowMs = clock.now();
+    const thread = `#${request.number}`;
+    await putItem(store, {
+      type: "item",
+      id: `request-closed:${key}${thread}:${request.id}`,
+      kind: "message",
+      text: `your ${request.kind} to ${request.to} on ${thread} is closed: ${thread} ${WHY[state]}`,
+      addressed: false,
+      repo: slug,
+      thread: request.number,
+      event: "request-closed"
+    }, nowMs);
+    await store.outbox.remove(request.id);
+    await store.events.append({
+      type: "request",
+      id: request.id,
+      repo: request.repo,
+      kind: request.kind,
+      outcome: `thread-${state}`,
+      openMs: nowMs - request.createdAtMs,
+      atMs: nowMs
+    });
+  }
 }
 
 // src/app/sync.ts
@@ -3465,10 +3743,10 @@ async function runSync(ports, here) {
   for (const ref of scope.watched) {
     await run(`repo:${repoKey(ref)}`, ref.host, INTERVALS.repoWatched, () => snapshotJob(ports, ref));
   }
-  for (const active of scope.active) {
-    await run(`radar:${repoKey(active.ref)}`, undefined, INTERVALS.radar, () => radarJob(ports, active));
-  }
   const repos = [...scope.active.map((a) => a.ref), ...scope.watched];
+  for (const active of scope.active) {
+    await run(`radar:${repoKey(active.ref)}`, undefined, INTERVALS.radar, () => radarJob(ports, active, repos));
+  }
   const depsInterval = await anyBlocked(store) ? INTERVALS.depsBlocked : INTERVALS.deps;
   await run("deps", undefined, depsInterval, () => depsJob(ports, repos));
   const failed = jobs.filter((j) => j.outcome === "failed");
@@ -3612,28 +3890,18 @@ function contextText(view) {
 }
 
 // src/app/worktree.ts
-var trim = (path) => path.replace(/\/+$/, "") || "/";
-async function worktreeOf(git, dir) {
-  const here = trim(dir);
-  let best;
-  for (const wt of await git.worktreeBranches().catch(() => [])) {
-    const root = trim(wt.path);
-    if (here !== root && !here.startsWith(`${root}/`))
-      continue;
-    if (!best || root.length > best.root.length)
-      best = { root, branch: wt.branch };
-  }
-  return best;
-}
+var worktreeOf = (git) => git.checkout().catch(() => {
+  return;
+});
 
 // src/cli/commands/shared.ts
-async function locate2(ctx, ports) {
+async function locate3(ctx, ports) {
   const cwd = ctx.runtime.cwd;
-  const identity = await ports.env.repoIdentity().catch(() => {
+  const identity = await ports.env.repoIdentity(cwd).catch(() => {
     return;
   });
   const cwdRef = identity ? refFromSlug(identity.host, identity.repo) : undefined;
-  const wt = await worktreeOf(ports.git(cwd), cwd);
+  const wt = await worktreeOf(ports.git(cwd));
   const branch = wt?.branch ?? "";
   if (ctx.repo !== undefined) {
     const ref = refFromSlug(cwdRef?.host ?? "github.com", ctx.repo);
@@ -3674,7 +3942,7 @@ var digest = {
     if (ctx.args.positional.length > 0)
       throw new UsageError(`unexpected argument ${ctx.args.positional[0]}`);
     const ports = ctx.runtime.ports();
-    const { here, branch } = await locate2(ctx, ports);
+    const { here, branch } = await locate3(ctx, ports);
     if (!here) {
       if (format === "context")
         return 0;
@@ -3936,7 +4204,7 @@ var doctor2 = {
   spec: { values: [], switches: [] },
   async run(ctx) {
     const ports = ctx.runtime.ports();
-    const { here, root } = await locate2(ctx, ports);
+    const { here, root } = await locate3(ctx, ports);
     const report = await doctor(ports, {
       plugin: async () => pluginState(process.env, homedir()),
       ...repoProbes(root)
@@ -3950,8 +4218,16 @@ var doctor2 = {
 async function decide2(ctx, argv) {
   if (!mayMerge(argv))
     return { decision: "allow", reasons: [], checked: [], failed: false };
+  const aliases = await Promise.resolve().then(() => ctx.runtime.ports().env.ghAliases()).catch(() => {
+    return;
+  });
+  if (!mayMerge(argv, aliases))
+    return { decision: "allow", reasons: [], checked: [], failed: false };
   try {
-    return await gate2(await writeContext(ctx), { argv });
+    return await gate2(await writeContext(ctx), {
+      argv,
+      ...aliases ? { aliases } : {}
+    });
   } catch (error) {
     return {
       decision: "deny",
@@ -4172,7 +4448,8 @@ function stats(events) {
       row.blockedMerges++;
     else if (e.type === "request" && e.outcome !== "accepted") {
       row.requestsClosed++;
-      if (typeof e.openMs === "number")
+      const answered = typeof e.outcome !== "string" || !e.outcome.startsWith("thread-");
+      if (answered && typeof e.openMs === "number")
         row.answers.push(e.openMs);
     }
   }
@@ -4237,11 +4514,11 @@ function route(item, sessions) {
 // src/app/session.ts
 async function beat(ports, input) {
   const { store, clock } = ports;
-  const identity = await ports.env.repoIdentity().catch(() => {
+  const identity = await ports.env.repoIdentity(input.dir).catch(() => {
     return;
   });
   const ref = identity ? refFromSlug(identity.host, identity.repo) : undefined;
-  const wt = await worktreeOf(ports.git(input.dir), input.dir);
+  const wt = await worktreeOf(ports.git(input.dir));
   const previous = (await store.sessions.live()).find((s) => s.sessionId === input.sessionId);
   const lastPromptAtMs = input.prompt ? clock.now() : previous?.lastPromptAtMs;
   const heartbeat = {
@@ -4250,8 +4527,9 @@ async function beat(ports, input) {
     harness: input.harness,
     role: input.role,
     worktree: wt?.root ?? input.dir,
+    ...wt ? { clone: wt.clone } : {},
     ...ref ? { repo: repoKey(ref) } : {},
-    ...wt ? { branch: wt.branch } : {},
+    ...wt?.branch ? { branch: wt.branch } : {},
     ...lastPromptAtMs !== undefined ? { lastPromptAtMs } : {}
   };
   await store.sessions.beat(heartbeat);
@@ -4273,7 +4551,7 @@ function liveSession(s) {
     repo: ref ? repoSlug(ref) : "",
     worktree: s.worktree,
     branch: s.branch ?? "",
-    cloneRoot: s.worktree,
+    cloneRoot: s.clone ?? s.worktree,
     lastActiveMs: s.lastPromptAtMs ?? 0
   };
 }
@@ -4974,7 +5252,7 @@ var stats2 = {
     const ports = ctx.runtime.ports();
     let rows = stats(await ports.store.events.read());
     if (ctx.repo) {
-      const { here } = await locate2(ctx, ports);
+      const { here } = await locate3(ctx, ports);
       const slug = here ? repoSlug(here.ref) : ctx.repo.toLowerCase();
       rows = rows.filter((r) => r.repo.toLowerCase() === slug);
     }
@@ -5005,7 +5283,7 @@ var sync = {
       return 0;
     }
     const ports = ctx.runtime.ports();
-    const { here } = await locate2(ctx, ports);
+    const { here } = await locate3(ctx, ports);
     const report = await runSync(ports, here);
     const failed = report.jobs.filter((j) => j.outcome === "failed");
     const text = [
@@ -5178,7 +5456,7 @@ var who2 = {
   spec: { values: [], switches: [] },
   async run(ctx) {
     const ports = ctx.runtime.ports();
-    const { here, root } = await locate2(ctx, ports);
+    const { here, root } = await locate3(ctx, ports);
     const repos = new Map;
     if (here)
       repos.set(repoKey(here.ref), here.ref);
@@ -5348,37 +5626,25 @@ class EnvCommandError extends Error {
     this.name = "EnvCommandError";
   }
 }
-function parseRepoIdentity(remote) {
-  let host;
-  let path;
-  const scp = remote.match(/^[^/@\s]+@([^/:\s]+):(.*)$/);
-  if (scp) {
-    host = scp[1] ?? "";
-    path = scp[2] ?? "";
-  } else {
-    let url;
-    try {
-      url = new URL(remote);
-    } catch {
-      throw new Error("Unsupported origin remote URL");
-    }
-    if (!["https:", "http:", "ssh:"].includes(url.protocol))
-      throw new Error("Unsupported origin remote URL");
-    host = url.hostname;
-    path = url.pathname.replace(/^\//, "");
+function parseAliases(out) {
+  const aliases = new Map;
+  for (const line of out.split(`
+`)) {
+    if (line.trim() === "")
+      continue;
+    const m = /^([^\s:]+):\s+(.*)$/.exec(line);
+    if (!m)
+      return;
+    let value = m[2].trim();
+    if (/^'.*'$/.test(value))
+      value = value.slice(1, -1).replaceAll("''", "'");
+    else if (/^".*"$/.test(value))
+      value = value.slice(1, -1).replace(/\\(["\\])/g, "$1");
+    else if (/^["'|>]/.test(value))
+      return;
+    aliases.set(m[1], value);
   }
-  host = host.toLowerCase();
-  if (host === "ssh.github.com")
-    host = "github.com";
-  if (!/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/.test(host))
-    throw new Error("Origin remote has no valid host");
-  path = path.replace(/\/$/, "").replace(/\.git$/, "");
-  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(path))
-    throw new Error("Origin remote must identify owner/repo");
-  const [owner, repo] = path.split("/");
-  if (owner === "." || owner === ".." || repo === "." || repo === "..")
-    throw new Error("Invalid origin repository");
-  return { host, repo: path };
+  return aliases;
 }
 var missing = (error) => error instanceof Error && ("code" in error) && (error.code === "ENOENT" || error.code === "ENOTDIR");
 var unknown = (reason) => ({
@@ -5411,10 +5677,10 @@ class EnvAdapter {
     this.env = options.env ?? process.env;
     this.home = options.home ?? homedir2();
   }
-  async command(command, args) {
+  async command(command, args, cwd = this.options.repoDir) {
     let result;
     try {
-      result = await this.runner(command, args, this.options.repoDir);
+      result = await this.runner(command, args, cwd);
     } catch {
       throw new EnvCommandError(command);
     }
@@ -5433,8 +5699,17 @@ class EnvAdapter {
       throw new EnvCommandError("gh");
     return token;
   }
-  async repoIdentity() {
-    return parseRepoIdentity(await this.command("git", ["remote", "get-url", "origin"]));
+  async repoIdentity(dir) {
+    return parseRepoIdentity(await this.command("git", ["remote", "get-url", "origin"], dir));
+  }
+  async ghAliases() {
+    let out;
+    try {
+      out = await this.command("gh", ["alias", "list"]);
+    } catch {
+      return;
+    }
+    return parseAliases(out);
   }
   xdg(variable, fallback) {
     const value = this.env[variable];
@@ -5509,6 +5784,7 @@ class EnvAdapter {
 
 // src/adapters/git/index.ts
 import { execFile as execFile2 } from "node:child_process";
+import { basename, dirname as dirname2 } from "node:path";
 var FETCH_TIMEOUT_MS = 120000;
 var COMMAND_TIMEOUT_MS = 30000;
 function gitEnv(base = process.env) {
@@ -5584,6 +5860,51 @@ class GitAdapter {
   async fetch() {
     await this.run(["fetch", "--prune", "origin"], [0], FETCH_TIMEOUT_MS);
   }
+  async checkout() {
+    const args = [
+      "rev-parse",
+      "--path-format=absolute",
+      "--show-toplevel",
+      "--git-common-dir"
+    ];
+    const { stdout } = await this.run(args);
+    const [root, common] = stdout.split(`
+`);
+    if (!root || !common)
+      throw new GitCommandError(args, "", 0);
+    const head = await this.run(["symbolic-ref", "-q", "HEAD"], [0, 1]);
+    const ref = head.stdout.trim();
+    return {
+      root,
+      clone: basename(common) === ".git" ? dirname2(common) : common,
+      ...ref.startsWith("refs/heads/") ? { branch: ref.slice("refs/heads/".length) } : {}
+    };
+  }
+  async remotes() {
+    const listed = await this.run(["remote", "-v"]);
+    const urls = new Map;
+    for (const line of listed.stdout.split(`
+`)) {
+      const m = /^(\S+)\t(.*) \(fetch\)$/.exec(line);
+      if (m && !urls.has(m[1]))
+        urls.set(m[1], m[2]);
+    }
+    const resolved = await this.run(["config", "-z", "--get-regexp", "^remote\\..*\\.gh-resolved$"], [0, 1]);
+    const ghResolved = new Map;
+    for (const record of resolved.stdout.split("\x00")) {
+      const m = /^remote\.(.+)\.gh-resolved\n([\s\S]*)$/.exec(record);
+      if (m)
+        ghResolved.set(m[1], m[2]);
+    }
+    return [...urls].map(([name, url]) => {
+      const value = ghResolved.get(name);
+      return { name, url, ...value ? { ghResolved: value } : {} };
+    });
+  }
+  async configValue(key) {
+    const result = await this.run(["config", "--get", "--end-of-options", key], [0, 1]);
+    return result.exitCode === 0 ? result.stdout.replace(/\n$/, "") : undefined;
+  }
   async worktreeBranches() {
     const { stdout } = await this.run([
       "worktree",
@@ -5609,7 +5930,7 @@ class GitAdapter {
   async remoteBranches() {
     const { stdout } = await this.run([
       "for-each-ref",
-      "--format=%(refname:lstrip=3)%00%(symref)%00%(committerdate:iso-strict)%00%(authoremail)",
+      "--format=%(refname:lstrip=3)%00%(symref)%00%(committerdate:iso-strict)",
       "refs/remotes/origin/"
     ]);
     const result = [];
@@ -5617,16 +5938,10 @@ class GitAdapter {
 `)) {
       if (!line)
         continue;
-      const [name, symref, lastCommitAt, email] = line.split("\x00");
+      const [name, symref, lastCommitAt] = line.split("\x00");
       if (!name || symref || !lastCommitAt)
         continue;
-      const authorEmail = (email ?? "").replace(/^<|>$/g, "");
-      result.push({
-        name,
-        lastCommitAt,
-        authorEmail,
-        loginHint: authorEmail.match(NOREPLY)?.[1] ?? null
-      });
+      result.push({ name, lastCommitAt });
     }
     return result;
   }
@@ -5680,6 +5995,25 @@ class GitAdapter {
     if (MISSING_OBJECT.test(result.stderr))
       return;
     throw new GitCommandError(["show", `${ref}:${path}`], result.stderr, result.exitCode);
+  }
+  async branchAuthor(base, tip) {
+    const { stdout } = await this.run([
+      "log",
+      "--first-parent",
+      "--no-merges",
+      "--max-count=1",
+      "--format=%ae",
+      "--end-of-options",
+      `${base}..${tip}`,
+      "--"
+    ]);
+    const authorEmail = stdout.trim();
+    if (!authorEmail)
+      return;
+    return {
+      authorEmail,
+      loginHint: authorEmail.match(NOREPLY)?.[1] ?? null
+    };
   }
   async landed(from, to) {
     const { stdout } = await this.run([
@@ -6046,7 +6380,8 @@ class GitHubAdapter {
       if (wait > 0)
         throw new BudgetError(wait);
     }
-    const hit = method === "GET" ? cached(await this.options.kv.get(cacheKey(url))) : undefined;
+    const caching = method === "GET" && call.cache !== false;
+    const hit = caching ? cached(await this.options.kv.get(cacheKey(url))) : undefined;
     for (;; ) {
       const token = await this.currentToken();
       const used = this.token;
@@ -6111,7 +6446,7 @@ class GitHubAdapter {
         }
       }
       const next = this.nextLink(response, url);
-      if (method === "GET") {
+      if (caching) {
         const etag = response.headers.get("etag");
         const lastModified = response.headers.get("last-modified");
         if (etag || lastModified)
@@ -6131,7 +6466,7 @@ class GitHubAdapter {
       };
     }
   }
-  async pages(url, stop = () => false) {
+  async pages(url, stop = () => false, call = {}) {
     const items = [];
     const visited = new Set;
     const sso = new Set;
@@ -6145,7 +6480,7 @@ class GitHubAdapter {
       if (visited.has(next))
         throw new Error("GitHub pagination cycle");
       visited.add(next);
-      const page = await this.request(next);
+      const page = await this.request(next, call);
       if (!Array.isArray(page.body))
         throw new Error("Invalid GitHub list");
       modified ||= page.modified;
@@ -6206,6 +6541,28 @@ class GitHubAdapter {
   }
   async getPull(repo, number) {
     return pull((await this.request(`${this.rest}${repoPath(repo)}/pulls/${integer(number)}`)).body);
+  }
+  async listPullFiles(repo, number) {
+    const { items } = await this.pages(`${this.rest}${repoPath(repo)}/pulls/${integer(number)}/files?per_page=100`, undefined, { cache: false });
+    return items.flatMap((value) => {
+      const raw = object(value);
+      return raw.previous_filename === undefined ? [string(raw.filename)] : [string(raw.filename), string(raw.previous_filename)];
+    });
+  }
+  async defaultBranch(repo) {
+    const branch = string(object((await this.request(`${this.rest}${repoPath(repo)}`)).body).default_branch);
+    if (branch === "")
+      throw new Error("Invalid GitHub default branch");
+    return branch;
+  }
+  async threadState(repo, number) {
+    const raw = object((await this.request(`${this.rest}${repoPath(repo)}/issues/${integer(number)}`)).body);
+    const state = string(raw.state);
+    if (state === "open")
+      return "open";
+    if (state !== "closed")
+      throw new Error("Invalid GitHub issue state");
+    return raw.pull_request != null && object(raw.pull_request).merged_at != null ? "merged" : "closed";
   }
   async listThreadComments(repo, number, cursor) {
     const query = new URLSearchParams({
@@ -6270,7 +6627,7 @@ import {
   unlinkSync,
   writeFileSync
 } from "node:fs";
-import { dirname as dirname2, isAbsolute as isAbsolute5, join as join4 } from "node:path";
+import { dirname as dirname3, isAbsolute as isAbsolute5, join as join4 } from "node:path";
 import { setTimeout as setTimeout2 } from "node:timers/promises";
 var RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
 var SESSION_LIVE_MS = 3 * 60 * 1000;
@@ -6356,7 +6713,7 @@ function parseRequest(value) {
 }
 function parseSession(value) {
   const raw = fields(value);
-  if (!raw || !isString2(raw.sessionId) || !isPid(raw.pid) || !isString2(raw.harness) || raw.role !== "lead" && raw.role !== "worker" || !isString2(raw.worktree) || !isTime(raw.seenAtMs) || raw.repo !== undefined && !isString2(raw.repo) || raw.branch !== undefined && !isString2(raw.branch) || raw.lastPromptAtMs !== undefined && !isTime(raw.lastPromptAtMs))
+  if (!raw || !isString2(raw.sessionId) || !isPid(raw.pid) || !isString2(raw.harness) || raw.role !== "lead" && raw.role !== "worker" || !isString2(raw.worktree) || !isTime(raw.seenAtMs) || raw.clone !== undefined && !isString2(raw.clone) || raw.repo !== undefined && !isString2(raw.repo) || raw.branch !== undefined && !isString2(raw.branch) || raw.lastPromptAtMs !== undefined && !isTime(raw.lastPromptAtMs))
     return;
   const session = {
     sessionId: raw.sessionId,
@@ -6366,6 +6723,8 @@ function parseSession(value) {
     worktree: raw.worktree,
     seenAtMs: raw.seenAtMs
   };
+  if (raw.clone !== undefined)
+    session.clone = raw.clone;
   if (raw.repo !== undefined)
     session.repo = raw.repo;
   if (raw.branch !== undefined)
@@ -6454,7 +6813,7 @@ class FileStoreAdapter {
     return readdirSync2(dir).filter((name) => pattern.test(name)).sort();
   }
   syncDir(path) {
-    const dir = openSync(dirname2(path), "r");
+    const dir = openSync(dirname3(path), "r");
     try {
       fsyncSync(dir);
     } finally {

@@ -7,7 +7,14 @@ import {
   test,
 } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -119,6 +126,74 @@ describe("real git", () => {
     ]);
   });
 
+  test("checkout resolves a symlinked subdirectory of a linked worktree to its root, clone and branch", async () => {
+    const linked = join(root, "linked");
+    git("worktree", "add", "-b", "feature/one", linked);
+    mkdirSync(join(linked, "sub", "deep"), { recursive: true });
+    const alias = join(root, "alias");
+    symlinkSync(join(linked, "sub"), alias);
+    expect(await new GitAdapter(join(alias, "deep")).checkout()).toEqual({
+      root: realpathSync(linked),
+      clone: realpathSync(repo),
+      branch: "feature/one",
+    });
+    expect(await adapter.checkout()).toEqual({
+      root: realpathSync(repo),
+      clone: realpathSync(repo),
+      branch: "main",
+    });
+  });
+
+  test("remotes list each url with gh's resolved default, as git remote -v lists them", async () => {
+    expect(await adapter.remotes()).toEqual([]);
+    git("remote", "add", "origin", "git@github.com:me/app.git");
+    git("remote", "add", "upstream", "https://github.com/acme/app.git");
+    git("config", "remote.upstream.gh-resolved", "base");
+    git("config", "--add", "remote.origin.pushurl", "git@github.com:x/y.git");
+    git(
+      "config",
+      "url.https://github.com/acme/.insteadOf",
+      "https://mirror.example/",
+    );
+    git("remote", "add", "mirror", "https://mirror.example/lib.git");
+    expect(await adapter.remotes()).toEqual([
+      { name: "mirror", url: "https://github.com/acme/lib.git" },
+      { name: "origin", url: "git@github.com:me/app.git" },
+      {
+        name: "upstream",
+        url: "https://github.com/acme/app.git",
+        ghResolved: "base",
+      },
+    ]);
+    expect(await adapter.configValue("remote.upstream.gh-resolved")).toBe(
+      "base",
+    );
+    expect(await adapter.configValue("branch.main.merge")).toBeUndefined();
+  });
+
+  test("checkout of a worktree of a bare clone names the bare repo as its clone", async () => {
+    const bare = join(root, "omni.git");
+    execFileSync("git", ["clone", "--bare", "-q", repo, bare]);
+    const tree = join(root, "omni-feature");
+    execFileSync("git", ["-C", bare, "worktree", "add", "-q", "-b", "f", tree]);
+    expect(await new GitAdapter(tree).checkout()).toEqual({
+      root: realpathSync(tree),
+      clone: realpathSync(bare),
+      branch: "f",
+    });
+  });
+
+  test("checkout has no branch on a detached HEAD and fails outside a repository", async () => {
+    git("worktree", "add", "--detach", join(root, "detached"), "HEAD");
+    expect(await new GitAdapter(join(root, "detached")).checkout()).toEqual({
+      root: realpathSync(join(root, "detached")),
+      clone: realpathSync(repo),
+    });
+    await expect(new GitAdapter(root).checkout()).rejects.toBeInstanceOf(
+      GitCommandError,
+    );
+  });
+
   test("merge base of forked branches, undefined without shared history", async () => {
     const fork = git("rev-parse", "HEAD");
     git("branch", "feature");
@@ -134,7 +209,7 @@ describe("real git", () => {
     );
   });
 
-  test("remote branches carry tip time, author email and a noreply login hint", async () => {
+  test("remote branches carry their tip time; branch authors carry a noreply login hint", async () => {
     git("update-ref", "refs/remotes/origin/main", "HEAD");
     git("switch", "-c", "feat/maria");
     writeFileSync(join(repo, "m.txt"), "m\n");
@@ -154,13 +229,22 @@ describe("real git", () => {
     git("update-ref", "refs/remotes/upstream/other", "HEAD");
     git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
     const branches = await adapter.remoteBranches();
-    expect(branches.map((b) => [b.name, b.authorEmail, b.loginHint])).toEqual([
-      ["dmitri", "dmitri@corp.example", null],
-      ["feat/maria", "12345+maria-dev@users.noreply.github.com", "maria-dev"],
-      ["main", "test@example.test", null],
+    expect(branches.map((b) => b.name)).toEqual([
+      "dmitri",
+      "feat/maria",
+      "main",
     ]);
     for (const branch of branches)
       expect(Number.isNaN(Date.parse(branch.lastCommitAt))).toBe(false);
+    expect(
+      await adapter.branchAuthor("origin/main", "origin/feat/maria"),
+    ).toEqual({
+      authorEmail: "12345+maria-dev@users.noreply.github.com",
+      loginHint: "maria-dev",
+    });
+    expect(
+      await adapter.branchAuthor("origin/feat/maria", "origin/dmitri"),
+    ).toEqual({ authorEmail: "dmitri@corp.example", loginHint: null });
   });
 
   test("changed files list both paths of a rename", async () => {
@@ -251,6 +335,25 @@ describe("showFile and landed", () => {
       loginHint: "maria",
     });
     expect(await adapter.landed("main", "main")).toEqual([]);
+  });
+
+  test("branchAuthor names the branch's own last author, not whoever merged main into it", async () => {
+    git("switch", "-c", "maria/x");
+    git("config", "user.email", "5+maria@users.noreply.github.com");
+    writeFileSync(join(repo, "m.txt"), "m\n");
+    commit("maria's work");
+    git("switch", "main");
+    git("config", "user.email", "test@example.test");
+    writeFileSync(join(repo, "main.txt"), "x\n");
+    commit("main moves");
+    git("switch", "maria/x");
+    git("config", "user.email", "9+me@users.noreply.github.com");
+    git("merge", "--no-ff", "-m", "merge main", "main");
+    expect(await adapter.branchAuthor("main", "maria/x")).toEqual({
+      authorEmail: "5+maria@users.noreply.github.com",
+      loginHint: "maria",
+    });
+    expect(await adapter.branchAuthor("maria/x", "main")).toBeUndefined();
   });
 
   test("landed lists the files of a merge commit against its first parent", async () => {

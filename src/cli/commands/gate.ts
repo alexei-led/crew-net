@@ -13,11 +13,21 @@ async function decide(
   ctx: CommandContext,
   argv: readonly string[],
 ): Promise<GateResult> {
-  // Detection needs no repo, token or network.
+  // Detection needs no repo, token or network. Without aliases an unknown
+  // gh command counts as a merge, so this answers "none" only when it is.
   if (!mayMerge(argv))
     return { decision: "allow", reasons: [], checked: [], failed: false };
+  // gh aliases are local: read them so `gh m` is checked as what it runs.
+  const aliases = await Promise.resolve()
+    .then(() => ctx.runtime.ports().env.ghAliases())
+    .catch(() => undefined);
+  if (!mayMerge(argv, aliases))
+    return { decision: "allow", reasons: [], checked: [], failed: false };
   try {
-    return await gateCmd(await writeContext(ctx), { argv });
+    return await gateCmd(await writeContext(ctx), {
+      argv,
+      ...(aliases ? { aliases } : {}),
+    });
   } catch (error) {
     // No repo or no token: still an answer, and the answer is deny.
     return {

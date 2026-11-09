@@ -425,6 +425,72 @@ describe("pulls, comments and reviews", () => {
     });
   });
 
+  test("pull files read every page with renames' old paths and keep no cached body", async () => {
+    const next = `${REPO_URL}/pulls/7/files?per_page=100&page=2`;
+    const { adapter, calls, kv } = setup([
+      json(
+        [
+          { filename: "api/users.yaml", status: "modified", patch: "@@" },
+          {
+            filename: "api/new.yaml",
+            previous_filename: "api/old.yaml",
+            status: "renamed",
+          },
+        ],
+        { etag: '"f1"', link: `<${next}>; rel="next"` },
+      ),
+      json([{ filename: "web/a.ts", status: "added" }], { etag: '"f2"' }),
+      json([{ filename: "web/a.ts", status: "added" }], { etag: '"f3"' }),
+    ]);
+    expect(await adapter.listPullFiles(REPO, 7)).toEqual([
+      "api/users.yaml",
+      "api/new.yaml",
+      "api/old.yaml",
+      "web/a.ts",
+    ]);
+    expect(calls[0]?.url).toBe(`${REPO_URL}/pulls/7/files?per_page=100`);
+    expect([...kv.values.keys()].some((k) => k.includes("/files"))).toBe(false);
+    await adapter.listPullFiles(REPO, 7);
+    expect(header(calls[2], "if-none-match")).toBeNull();
+  });
+
+  test("the default branch comes from the repo and is revalidated with its ETag", async () => {
+    const { adapter, calls } = setup([
+      json({ full_name: REPO, default_branch: "dev" }, { etag: '"r"' }),
+      new Response(null, { status: 304 }),
+    ]);
+    expect(await adapter.defaultBranch(REPO)).toBe("dev");
+    expect(await adapter.defaultBranch(REPO)).toBe("dev");
+    expect(calls.map((c) => c.url)).toEqual([REPO_URL, REPO_URL]);
+    expect(header(calls[1], "if-none-match")).toBe('"r"');
+  });
+
+  test.each([
+    ["an open issue", { state: "open" }, "open"],
+    [
+      "a closed issue",
+      { state: "closed", state_reason: "completed" },
+      "closed",
+    ],
+    [
+      "a PR closed unmerged",
+      { state: "closed", pull_request: { merged_at: null } },
+      "closed",
+    ],
+    [
+      "a merged PR",
+      {
+        state: "closed",
+        pull_request: { merged_at: "2026-11-09T10:00:00Z" },
+      },
+      "merged",
+    ],
+  ])("thread state of %s is %s", async (_name, body, expected) => {
+    const { adapter, calls } = setup([json({ number: 4, ...body })]);
+    expect(await adapter.threadState(REPO, 4)).toBe(expected as never);
+    expect(calls[0]?.url).toBe(`${REPO_URL}/issues/4`);
+  });
+
   test("merged pulls stop at the first pull updated before the cutoff", async () => {
     const closed = (n: number, updated: string, merged: string | null) => ({
       ...pulls[0],

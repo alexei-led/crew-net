@@ -17,8 +17,10 @@ export interface BeatInput {
 }
 
 /**
- * Write a session heartbeat (design §8.3): the repo and branch of its
- * working copy, so routing can find it. Keeps the last prompt time unless
+ * Write a session heartbeat (design §8.3): the repo, branch and clone of
+ * the working copy that holds `dir`, so routing can find it (§9.3). Git
+ * resolves the paths, so a subdirectory or a symlinked path names its
+ * worktree. Keeps the last prompt time unless
  * this beat is a prompt. Marks the repo watched.
  */
 export async function beat(
@@ -26,9 +28,11 @@ export async function beat(
   input: BeatInput,
 ): Promise<SessionHeartbeat> {
   const { store, clock } = ports;
-  const identity = await ports.env.repoIdentity().catch(() => undefined);
+  const identity = await ports.env
+    .repoIdentity(input.dir)
+    .catch(() => undefined);
   const ref = identity ? refFromSlug(identity.host, identity.repo) : undefined;
-  const wt = await worktreeOf(ports.git(input.dir), input.dir);
+  const wt = await worktreeOf(ports.git(input.dir));
   const previous = (await store.sessions.live()).find(
     (s) => s.sessionId === input.sessionId,
   );
@@ -39,8 +43,9 @@ export async function beat(
     harness: input.harness,
     role: input.role,
     worktree: wt?.root ?? input.dir,
+    ...(wt ? { clone: wt.clone } : {}),
     ...(ref ? { repo: repoKey(ref) } : {}),
-    ...(wt ? { branch: wt.branch } : {}),
+    ...(wt?.branch ? { branch: wt.branch } : {}),
     ...(lastPromptAtMs !== undefined ? { lastPromptAtMs } : {}),
   };
   await store.sessions.beat(heartbeat);

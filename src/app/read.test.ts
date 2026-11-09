@@ -1,7 +1,16 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { EnvAdapter } from "../adapters/env/index";
+import { GitAdapter } from "../adapters/git/index";
 import { FileStoreAdapter } from "../adapters/store/index";
 import { buildDigest, contextText, STALE_MS } from "./digest";
 import { type DoctorProbes, doctor } from "./doctor";
@@ -19,6 +28,7 @@ import {
   touches,
   who,
 } from "./views";
+import { deliverTo } from "./watch";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -344,6 +354,13 @@ describe("stats", () => {
         openMs: 1,
         atMs: at,
       },
+      {
+        type: "request",
+        repo: "github.com/o/r",
+        outcome: "thread-merged",
+        openMs: 3 * 86_400_000,
+        atMs: at,
+      },
       { type: "item", repo: "o/r", atMs: at - 7 * 86_400_000 },
       { type: "item", repo: "o/r" },
     ]);
@@ -358,7 +375,7 @@ describe("stats", () => {
         deliveries: 1,
         wakes: 0,
         blockedMerges: 1,
-        requestsClosed: 2,
+        requestsClosed: 3,
         medianAnswerMs: 120_000,
       },
     ]);
@@ -372,6 +389,7 @@ describe("session registry", () => {
       { path: "/work/r", branch: "main" },
       { path: "/work/r-feat", branch: "feat/x" },
     ];
+    w.git.clone = "/work/r";
     await beat(w.ports, {
       sessionId: "s1",
       harness: "claude",
@@ -394,6 +412,7 @@ describe("session registry", () => {
       harness: "claude",
       role: "lead",
       worktree: "/work/r-feat",
+      clone: "/work/r",
       repo: "github.com/o/r",
       branch: "feat/x",
       lastPromptAtMs: START,
@@ -403,6 +422,53 @@ describe("session registry", () => {
     ]);
     await end(w.ports, "s1");
     expect(await w.store.sessions.live()).toEqual([]);
+  });
+
+  test("a session in a subdirectory of a linked worktree, reached through a symlink, beats with the worktree's repo, root, clone and branch", async () => {
+    const root = mkdtempSync(join(tmpdir(), "crew-net-clone-"));
+    dirs.push(root);
+    const clone = join(root, "clone");
+    const run = (cwd: string, ...args: string[]) =>
+      execFileSync("git", args, { cwd, stdio: "ignore" });
+    mkdirSync(clone);
+    run(clone, "init", "--initial-branch=main");
+    run(clone, "remote", "add", "origin", "git@github.com:o/r.git");
+    run(
+      clone,
+      "-c",
+      "user.name=T",
+      "-c",
+      "user.email=t@example.test",
+      "commit",
+      "--allow-empty",
+      "-m",
+      "init",
+    );
+    const linked = join(root, "linked");
+    run(clone, "worktree", "add", "-b", "feat/x", linked);
+    mkdirSync(join(linked, "src", "deep"), { recursive: true });
+    symlinkSync(join(linked, "src"), join(root, "alias"));
+
+    const w = world();
+    // The process runs elsewhere: identity must come from the session's dir.
+    const ports = {
+      ...w.ports,
+      env: new EnvAdapter({ repoDir: tmpdir() }),
+      git: (dir: string) => new GitAdapter(dir),
+    };
+    const hb = await beat(ports, {
+      sessionId: "s1",
+      harness: "claude-code",
+      role: "lead",
+      pid: 42,
+      dir: join(root, "alias", "deep"),
+    });
+    expect(hb).toMatchObject({
+      repo: "github.com/o/r",
+      worktree: realpathSync(linked),
+      clone: realpathSync(clone),
+      branch: "feat/x",
+    });
   });
 
   test("outside a GitHub repo the beat has no repo", async () => {
@@ -418,6 +484,100 @@ describe("session registry", () => {
     expect(hb.repo).toBeUndefined();
     expect(hb.worktree).toBe("/tmp/x");
   });
+});
+
+describe("delivery routing", () => {
+  test("an item on a worker's branch goes to the lead in the worker's clone, not a more recent lead elsewhere", async () => {
+    const w = world();
+    await writeSnapshot(w.store, REF, {
+      fetchedAtMs: START,
+      pulls: [snapshotPull(pull(7, "me", "feat/w"), "o/r")],
+    });
+    const session = (
+      sessionId: string,
+      role: "lead" | "worker",
+      worktree: string,
+      clone: string,
+      branch: string,
+      lastPromptAtMs: number,
+    ) =>
+      w.store.sessions.beat({
+        sessionId,
+        pid: process.pid,
+        harness: "claude-code",
+        role,
+        worktree,
+        clone,
+        repo: "github.com/o/r",
+        branch,
+        lastPromptAtMs,
+      });
+    await session(
+      "lead-a",
+      "lead",
+      "/work/a",
+      "/work/a",
+      "main",
+      START - 60_000,
+    );
+    await session("worker", "worker", "/work/a-w", "/work/a", "feat/w", START);
+    await session("lead-b", "lead", "/work/b", "/work/b", "feat/b", START);
+    const id = "comment:github.com/o/r#7:1";
+    await w.store.inbox.put({
+      type: "item",
+      id,
+      kind: "message",
+      text: "@me does it need the column?",
+      addressed: true,
+      from: "maria",
+      repo: "o/r",
+      thread: 7,
+      event: "ask",
+    });
+    const ids = async (sessionId: string) =>
+      (await deliverTo(w.ports, sessionId, { replayMs: 0 })).map((i) => i.id);
+    expect(await ids("lead-b")).toEqual([]);
+    expect(await ids("lead-a")).toEqual([id]);
+    expect(
+      (await w.store.events.read()).find((e) => e.type === "delivery"),
+    ).toMatchObject({ session: "lead-a", step: "clone" });
+  });
+});
+
+test("heartbeats without a clone root stand alone: a worker's branch reaches the lead through the repo step", async () => {
+  const w = world();
+  await writeSnapshot(w.store, REF, {
+    fetchedAtMs: START,
+    pulls: [snapshotPull(pull(7, "me", "feat/w"), "o/r")],
+  });
+  for (const [sessionId, role, worktree, branch] of [
+    ["lead-a", "lead", "/work/a", "main"],
+    ["worker", "worker", "/work/a-w", "feat/w"],
+  ] as const)
+    await w.store.sessions.beat({
+      sessionId,
+      pid: process.pid,
+      harness: "claude-code",
+      role,
+      worktree,
+      repo: "github.com/o/r",
+      branch,
+    });
+  await w.store.inbox.put({
+    type: "item",
+    id: "comment:github.com/o/r#7:1",
+    kind: "message",
+    text: "x",
+    addressed: true,
+    from: "maria",
+    repo: "o/r",
+    thread: 7,
+    event: "ask",
+  });
+  await deliverTo(w.ports, "lead-a", { replayMs: 0 });
+  expect(
+    (await w.store.events.read()).find((e) => e.type === "delivery"),
+  ).toMatchObject({ session: "lead-a", step: "repo" });
 });
 
 describe("settings", () => {
