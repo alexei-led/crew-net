@@ -12,9 +12,10 @@ The files here are opt-in. The crew-net client does not need them.
   dependent's latest check by hand.
 - `scripts/crew-deps.mjs` is the dependency-free reader and GitHub API client. Both
   workflows use it. It reads the current state block and the old `<!-- crew-net v1 -->`
-  block. `lead` is ignored. It fails closed on a block that does not close, a second
-  `<!-- crew-net` or a nested `<!--`, and a `depends-on` that is not on a line of its
-  own. In the rerun workflow, an unreadable block fails the job.
+  block. `lead` is ignored. It fails closed in three cases. The first is a block that does
+  not close. The second is a second `<!-- crew-net` or a nested `<!--`. The third is a
+  `depends-on` that is not on a line of its own. In the rerun workflow, an unreadable
+  block fails the job.
 - `snippets/draft-gate.md` shows how to skip expensive jobs on draft PRs.
 
 ## Adopt

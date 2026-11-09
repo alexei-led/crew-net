@@ -12,8 +12,8 @@ claude plugin marketplace add alexei-led/crew-net
 claude plugin install crew-net@crew-net
 ```
 
-You need Node 22 or newer, `git`, and `gh` signed in. The plugin ships the
-`crew-net` CLI in `bin/`. Claude Code puts it on the Bash `PATH`.
+Prerequisites are in the [user guide](../docs/user-guide.md#setup). The plugin
+ships the `crew-net` CLI in `bin/`. Claude Code puts it on the Bash `PATH`.
 
 ## What it adds
 
@@ -56,8 +56,8 @@ The mod acks an item through `crew-net watch send --session <id>`. It dedupes it
 by id. A replayed item is acked again and delivered once. The delivery rules are in
 [src/core/delivery/README.md](../src/core/delivery/README.md).
 
-During a wake turn, and while a wake is armed in a turn that is not the developer's
-own prompt, every tool call passes the `core/trust` gate. The allowlist is in
+During a wake turn, every tool call passes the `core/trust` gate. The same holds
+for a turn in which a wake is armed. That turn is not the developer's own prompt. The allowlist is in
 [src/core/trust/README.md](../src/core/trust/README.md). A wake that the engine drops
 gives its request back to the next prompt.
 
@@ -67,13 +67,8 @@ the hook. If `ps` cannot tell, the CLI records its own parent.
 
 ## Settings
 
-| Setting       | Default | Meaning                                                     |
-| ------------- | ------- | ----------------------------------------------------------- |
-| `autoWake`    | `reply` | `reply`: wake for direct requests when idle. `off`: never   |
-| `idleMinutes` | `10`    | Minutes without typing or a prompt before the session idles |
-
-Set them with `/plugin configure crew-net@crew-net`. A worker session sets
-`CREW_NET_ROLE=worker`. It is never routed items.
+The settings `autoWake` and `idleMinutes`, and the worker role, are documented in the
+[user guide](../docs/user-guide.md#plugin-settings-claude-code).
 
 ## How it ships
 
@@ -82,7 +77,7 @@ committed: `bin/crew-net` (the CLI), `hooks/dist/hook.js` (the command hooks) an
 `hooks/dist/register.js` (the mod).
 
 Run `make plugin` and commit the result whenever `src/` or `plugin/hooks/` changes.
-CI runs `make plugin-fresh`, and it fails when a bundle is older than its sources.
+CI runs `make plugin-fresh`. It fails when a bundle is older than its sources.
 
 ## Development
 

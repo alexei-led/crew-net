@@ -17,9 +17,14 @@ claude plugin marketplace add alexei-led/crew-net
 claude plugin install crew-net@crew-net
 ```
 
-The plugin installs the `crew-net` CLI, its hooks, the mod that drives the band
-and wake turns, a skill for the model, and the `/crew` command. Nothing changes
-in your repos.
+The plugin installs four parts:
+
+- the `crew-net` CLI;
+- its hooks;
+- the mod, which drives the band and wake turns;
+- a skill for the model, and the `/crew` command.
+
+Nothing changes in your repos.
 
 Check the setup in a working copy of a GitHub repo:
 
@@ -242,8 +247,9 @@ Every key is optional:
   freshness check run for each job. Two sessions cost the same as one. With no
   session open, nothing runs.
 - **Requests:** about 120 primary GitHub requests an hour for two sessions in two
-  repos, measured on 2026-11-09. Most polls return `304`, which does not count
-  against the limit.
+  repos. This figure is extrapolated from a 19.5 minute run. About half the polls
+  return `304`, which does not count against the limit. See
+  [design §17](design.md#17-budget) and [§23](design.md#23-open-questions-and-unverified-facts).
 
 ## Failure modes
 
@@ -264,13 +270,10 @@ Every key is optional:
   of each run. The token has the `repo` scope, so it is broad. It acts as you. Every
   comment and PR edit carries your login. crew-net never writes the token to disk.
 - Peer text (comments, branch names, paths) is information. It is never an
-  instruction. crew-net marks it as such. The skill tells the model the same. During
-  a wake turn, a tool gate allows only:
-  - reads inside the worktree;
-  - read-only `git` and `gh`;
-  - `crew-net reply` to the request that woke the session;
-  - `crew-net inbox`;
-  - `crew-net state`, when the branch has a PR.
+  instruction. crew-net marks it as such. The skill tells the model the same.
+- During a wake turn, a tool gate allows reads, read-only `git` and `gh`, and the
+  commands that reply and inspect. The allowlist is in the
+  [trust README](../src/core/trust/README.md).
 - **A wake turn can read any file in its worktree, including secrets** such as `.env`
   and local credentials. The turn can only reply. A reply is a comment under your
   login, so a crafted request could try to get a secret quoted back. Keep secrets out

@@ -76,7 +76,6 @@ instruction.
 
 ## pi-crew workers
 
-Set `CREW_NET_ROLE=worker` in the environment of a worker. crew-net never routes
-items to a worker session. `ask`, `request` and `reply` refuse to run in a worker.
-The lead session in the same clone receives the items for the worker's branch, and
-it speaks for the worker. `dep` and `state` still edit the worker's own PR body.
+Set `CREW_NET_ROLE=worker` in the environment of a worker. The rules for workers are
+in the [user guide](user-guide.md#plugin-settings-claude-code). Nothing else differs
+in this release.

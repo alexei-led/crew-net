@@ -2,9 +2,10 @@
 
 There are two kinds of test here.
 
-- `*.test.ts` run with `make test`. They check the architecture rules (`fitness`),
-  one version across the CLI, package, plugin and marketplace (`release`), and
-  `doctor` with a planted MDM plist (`doctor-mdm`, macOS only).
+- `*.test.ts` run with `make test`. They check three things:
+  - the architecture rules (`fitness`);
+  - one version across the CLI, package, plugin and marketplace (`release`);
+  - `doctor` with a planted MDM plist (`doctor-mdm`, macOS only).
 - `laptops/` holds the cross-machine scenarios. You run them by hand against
   `alexei-led/crew-net-sandbox`. They write to that repo only.
 
@@ -31,7 +32,7 @@ teardown                      # run when finished: the inbox job reads the whole
 
 | Script         | Does                                                                     |
 | -------------- | ------------------------------------------------------------------------ |
-| `env.sh`       | Defines `setup`, `lap` (run in a laptop's clone), `cn` and `pretend`     |
+| `env.sh`       | Defines `setup`, `lap` (run in a laptop's clone), `cn`, `pretend` and `teardown` |
 | `watch.mjs`    | Runs `crew-net watch` for a session, prints its events, then SIGKILLs it |
 | `killsync.mjs` | Starts `crew-net sync --once` and SIGKILLs it after N ms                 |
 | `budget.mjs`   | Runs two watchers on laptop `d` (two repos) and logs each `fetch`        |
