@@ -15,6 +15,7 @@ export const INTERVALS = {
   radar: 5 * 60_000,
   deps: 5 * 60_000,
   depsBlocked: 60_000,
+  prune: 24 * 60 * 60_000,
 } as const;
 
 export interface JobReport {
@@ -122,6 +123,8 @@ export async function runSync(
     ? INTERVALS.depsBlocked
     : INTERVALS.deps;
   await run("deps", undefined, depsInterval, () => depsJob(ports, repos));
+  // Delivered items, dead sessions, lock markers and temp files (design §8.3).
+  await run("prune", undefined, INTERVALS.prune, () => store.prune());
 
   const failed = jobs.filter((j) => j.outcome === "failed");
   const status: JsonObject = {

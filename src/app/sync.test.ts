@@ -984,3 +984,39 @@ describe("dependencies", () => {
     ]);
   });
 });
+
+describe("store maintenance", () => {
+  const DAY = 24 * 60 * 60_000;
+  const item = (id: string) => ({
+    type: "item" as const,
+    id,
+    kind: "message" as const,
+    text: "hi",
+    addressed: false,
+    from: "maria",
+    repo: REPO,
+    thread: 2,
+  });
+
+  test("sync prunes items delivered more than 14 days ago, once a day", async () => {
+    const w = world();
+    await w.store.inbox.put(item("old"));
+    await w.store.delivered.claim("old", "s1");
+    w.advance(10 * DAY);
+    await w.store.inbox.put(item("recent"));
+    await w.store.delivered.claim("recent", "s1");
+    await w.store.inbox.put(item("unclaimed"));
+    w.advance(5 * DAY);
+    const report = await w.sync();
+    expect(report.jobs).toContainEqual({ job: "prune", outcome: "ran" });
+    expect((await w.items()).map((i) => i.id).sort()).toEqual([
+      "recent",
+      "unclaimed",
+    ]);
+    w.advance(DAY - 1);
+    expect((await w.sync()).jobs).toContainEqual({
+      job: "prune",
+      outcome: "fresh",
+    });
+  });
+});

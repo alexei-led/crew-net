@@ -3689,7 +3689,8 @@ var INTERVALS = {
   repoWatched: 15 * 60000,
   radar: 5 * 60000,
   deps: 5 * 60000,
-  depsBlocked: 60000
+  depsBlocked: 60000,
+  prune: 24 * 60 * 60000
 };
 var SYNC_STATUS_KEY = "sync:status";
 var HHMM = (ms) => new Date(ms).toTimeString().slice(0, 5);
@@ -3749,6 +3750,7 @@ async function runSync(ports, here) {
   }
   const depsInterval = await anyBlocked(store) ? INTERVALS.depsBlocked : INTERVALS.deps;
   await run("deps", undefined, depsInterval, () => depsJob(ports, repos));
+  await run("prune", undefined, INTERVALS.prune, () => store.prune());
   const failed = jobs.filter((j) => j.outcome === "failed");
   const status = {
     atMs: clock.now(),
