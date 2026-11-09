@@ -1,4 +1,11 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  setDefaultTimeout,
+  test,
+} from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -13,6 +20,9 @@ import {
   redact,
   runGit,
 } from "./index";
+
+// Real git spawns many processes; under full-suite load 5 s is not enough.
+setDefaultTimeout(30_000);
 
 let root: string;
 let repo: string;
@@ -153,6 +163,16 @@ describe("real git", () => {
       expect(Number.isNaN(Date.parse(branch.lastCommitAt))).toBe(false);
   });
 
+  test("changed files list both paths of a rename", async () => {
+    git("switch", "-c", "feature");
+    git("mv", "rename.txt", "renamed.txt");
+    commit("rename");
+    expect((await adapter.changedFiles("main", "feature")).sort()).toEqual([
+      "rename.txt",
+      "renamed.txt",
+    ]);
+  });
+
   test("changed files from the merge base, preserving unusual paths", async () => {
     git("branch", "feature");
     writeFileSync(join(repo, "base-only.txt"), "main\n");
@@ -268,8 +288,16 @@ describe("runner boundary", () => {
   });
 
   test("git never prompts: terminal prompt off, askpass unset", () => {
-    const env = gitEnv({ PATH: "/bin", GIT_ASKPASS: "/usr/bin/gui-prompt" });
-    expect(env).toEqual({ PATH: "/bin", GIT_TERMINAL_PROMPT: "0" });
+    const env = gitEnv({
+      PATH: "/bin",
+      GIT_ASKPASS: "/usr/bin/gui-prompt",
+      SSH_ASKPASS: "/usr/bin/ssh-prompt",
+    });
+    expect(env).toEqual({
+      PATH: "/bin",
+      GIT_ASKPASS: "",
+      GIT_TERMINAL_PROMPT: "0",
+    });
   });
 
   test.each([

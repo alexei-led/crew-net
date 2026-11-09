@@ -21,12 +21,17 @@ export type GitRunner = (
 export const FETCH_TIMEOUT_MS = 120_000;
 export const COMMAND_TIMEOUT_MS = 30_000;
 
-/** Never wait for a password prompt: sync runs with nobody at the keyboard. */
+/**
+ * Never wait for a password prompt: sync runs with nobody at the keyboard.
+ * An empty GIT_ASKPASS stops git falling back to core.askPass and SSH_ASKPASS;
+ * GIT_TERMINAL_PROMPT=0 then refuses the terminal prompt. SSH passphrase prompts
+ * are bounded by the command timeout.
+ */
 export function gitEnv(
   base: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
-  const { GIT_ASKPASS: _askpass, ...env } = base;
-  return { ...env, GIT_TERMINAL_PROMPT: "0" };
+  const { SSH_ASKPASS: _ssh, ...env } = base;
+  return { ...env, GIT_ASKPASS: "", GIT_TERMINAL_PROMPT: "0" };
 }
 
 export const runGit: GitRunner = (repoDir, args, timeoutMs) =>
@@ -42,6 +47,10 @@ export const runGit: GitRunner = (repoDir, args, timeoutMs) =>
         env: gitEnv(),
       },
       (error, stdout, stderr) => {
+        if (error?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
+          reject(new Error("output exceeded 64 MiB"));
+          return;
+        }
         if (error?.killed) {
           reject(new Error(`timed out after ${timeoutMs / 1000} s`));
           return;
@@ -205,6 +214,8 @@ export class GitAdapter implements GitPort {
       "-z",
       "--no-ext-diff",
       "--no-textconv",
+      // A rename must list its old path too, or an edit to that path elsewhere looks unrelated.
+      "--no-renames",
       "--end-of-options",
       `${base}...${head}`,
       "--",

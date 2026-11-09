@@ -56,14 +56,15 @@ export type PolicySource =
 
 export function defaultPolicySources(
   platform: NodeJS.Platform,
-  user: string,
+  /** Called only on macOS: userInfo() throws for a uid without a passwd entry. */
+  user: () => string = () => userInfo().username,
 ): PolicySource[] | undefined {
   if (platform === "darwin") {
     const dir = "/Library/Application Support/ClaudeCode";
     return [
       {
         kind: "plist",
-        path: `/Library/Managed Preferences/${user}/com.anthropic.claudecode.plist`,
+        path: `/Library/Managed Preferences/${user()}/com.anthropic.claudecode.plist`,
       },
       {
         kind: "plist",
@@ -120,6 +121,8 @@ export function parseRepoIdentity(remote: string): RepoIdentity {
     path = url.pathname.replace(/^\//, "");
   }
   host = host.toLowerCase();
+  // GitHub's SSH-over-443 endpoint is still github.com for the API and gh.
+  if (host === "ssh.github.com") host = "github.com";
   if (!/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/.test(host))
     throw new Error("Origin remote has no valid host");
   path = path.replace(/\/$/, "").replace(/\.git$/, "");
@@ -165,10 +168,7 @@ export class EnvAdapter implements EnvPort {
     this.runner = options.runner ?? run;
     this.policySources =
       options.policySources ??
-      defaultPolicySources(
-        options.platform ?? process.platform,
-        userInfo().username,
-      );
+      defaultPolicySources(options.platform ?? process.platform);
     this.env = options.env ?? process.env;
     this.home = options.home ?? homedir();
   }

@@ -1,11 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import {
-  chmodSync,
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -48,6 +42,7 @@ test.each([
   ],
   ["https://GitHub.Example/Owner/my.repo/", "github.example", "Owner/my.repo"],
   ["git@acme.ghe.com:acme/app.git", "acme.ghe.com", "acme/app"],
+  ["ssh://git@ssh.github.com:443/owner/repo.git", "github.com", "owner/repo"],
 ])("repo identity: %s", (remote, host, repo) => {
   expect(parseRepoIdentity(remote)).toEqual({ host, repo });
 });
@@ -253,14 +248,7 @@ test.each([
     },
     drop,
   ],
-  [
-    "unreadable settings file",
-    (p: string) => {
-      writeFileSync(p, '{"allowManagedHooksOnly":false}');
-      chmodSync(p, 0o000);
-    },
-    json,
-  ],
+  ["unreadable settings file", (p: string) => mkdirSync(p), json],
 ] as const)("%s is unknown, never off", async (_name, plant, kind) => {
   const path = join(dir, "managed");
   plant(path);
@@ -271,7 +259,7 @@ test.each([
 });
 
 test("an unsupported platform reports unknown policy", async () => {
-  expect(defaultPolicySources("win32", "u")).toBeUndefined();
+  expect(defaultPolicySources("win32", () => "u")).toBeUndefined();
   const env = new EnvAdapter({ repoDir: dir, platform: "win32" });
   expect(await env.managedHooksOnly()).toEqual({
     status: "unknown",
@@ -298,7 +286,9 @@ test.each([
   ],
 ] as const)("default policy sources on %s", (platform, expected) => {
   expect(
-    defaultPolicySources(platform, "me")?.map((s) => `${s.kind}:${s.path}`),
+    defaultPolicySources(platform, () => "me")?.map(
+      (s) => `${s.kind}:${s.path}`,
+    ),
   ).toEqual([...expected]);
 });
 

@@ -59,6 +59,11 @@ export interface NotificationPage {
   threads: NotificationThread[];
   /** From X-Poll-Interval, in milliseconds; null when GitHub sent none. */
   pollIntervalMs: number | null;
+  /**
+   * Org ids whose threads GitHub left out because the token lacks SSO
+   * authorization (`X-GitHub-SSO: partial-results`). Show the fix (design §18).
+   */
+  ssoPartialOrgs: string[];
 }
 
 export interface PullReview {
@@ -83,40 +88,6 @@ export interface CommentCursor {
   id: number;
 }
 
-/** A conditional-request validator and the body it validates. */
-export interface CachedResponse {
-  etag?: string;
-  lastModified?: string;
-  body: unknown;
-  /** Next-page URL that came with this body. */
-  next?: string;
-}
-
-/** Persistent HTTP cache shared by every process on the laptop. Keys are request URLs. */
-export interface HttpCachePort {
-  get(key: string): Promise<CachedResponse | undefined>;
-  set(key: string, value: CachedResponse): Promise<void>;
-}
-
-export interface BudgetWindow {
-  windowMs: number;
-  max: number;
-}
-
-export type BudgetDecision = { ok: true } | { ok: false; retryAfterMs: number };
-
-/** Content-write counter shared by every process on the laptop (design §9.1). */
-export interface WriteBudgetPort {
-  /**
-   * Atomically records one write at `nowMs` when every window has room.
-   * Otherwise records nothing and returns the wait until the fullest window frees.
-   */
-  reserve(
-    nowMs: number,
-    windows: readonly BudgetWindow[],
-  ): Promise<BudgetDecision>;
-}
-
 /**
  * GitHub operations for one host. Every repository argument is `owner/repo`.
  * Adapters are per host; the token and any GHES base URL belong to the adapter.
@@ -125,7 +96,7 @@ export interface GitHubPort {
   /** Notification threads updated after `since`, filtered to crew-net reasons. */
   notifications(since: string): Promise<NotificationPage>;
   listOpenPulls(repo: string): Promise<PullRequest[]>;
-  /** Pulls merged at or after `sinceIso`, newest first. */
+  /** Pulls merged at or after `sinceIso`, most recently updated first, at most 50. */
   listMergedPulls(repo: string, sinceIso: string): Promise<MergedPull[]>;
   getPull(repo: string, number: number): Promise<PullRequest>;
   /** Every comment on the issue or PR after `after`, ordered by (updatedAt, id). */
@@ -169,7 +140,7 @@ export interface RemoteBranch {
 export interface GitPort {
   /** Fetch and prune remote refs. */
   fetch(): Promise<void>;
-  /** Branches checked out in linked worktrees, with their paths. */
+  /** Branches checked out in the main and linked worktrees, with their paths. */
   worktreeBranches(): Promise<WorktreeBranch[]>;
   /** Remote-tracking branches on origin. */
   remoteBranches(): Promise<RemoteBranch[]>;

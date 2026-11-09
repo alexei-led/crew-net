@@ -19,12 +19,9 @@ become empty strings; merged is definitive on getPull and false in lists.
 `pollIntervalMs`. `listThreadComments(repo, n, after)` returns comments strictly
 after a `CommentCursor` `(updatedAt, id)`.
 
-The adapter takes two persistent ports the store implements, so state survives
-across processes:
-
-- `HttpCachePort`: `get(url)` / `set(url, { etag?, lastModified?, body, next? })`.
-- `WriteBudgetPort`: `reserve(nowMs, windows)` atomically records one write when
-  every `{ windowMs, max }` window has room, else returns `retryAfterMs`.
+`notifications` also returns `ssoPartialOrgs`: orgs GitHub left out because
+the token lacks SSO authorization. The adapter keeps HTTP validators, the write
+log and rate-limit backoff in `StorePort.kv`, so they survive across processes.
 
 ## Store
 

@@ -1,10 +1,8 @@
 import type {
-  BudgetWindow,
-  CachedResponse,
   CommentCursor,
   GitHubPort,
-  HttpCachePort,
   IssueComment,
+  JsonValue,
   MergedPull,
   NotificationPage,
   NotificationReason,
@@ -12,11 +10,11 @@ import type {
   PullRequest,
   PullReview,
   RequestStats,
-  WriteBudgetPort,
+  StorePort,
 } from "../../ports/index";
 
 /** GitHub allows 80/min and 500/h content writes per user; crew-net keeps well under (design §9.1). */
-export const WRITE_WINDOWS: readonly BudgetWindow[] = [
+export const WRITE_WINDOWS: readonly { windowMs: number; max: number }[] = [
   { windowMs: 60_000, max: 20 },
   { windowMs: 3_600_000, max: 200 },
 ];
@@ -98,8 +96,8 @@ export interface GitHubOptions {
   /** github.com, a GHE.com data-residency host (`*.ghe.com`) or a GHES host. */
   host: string;
   tokenProvider: () => Promise<string>;
-  cache: HttpCachePort;
-  budget: WriteBudgetPort;
+  /** The store's cross-process KV: HTTP validators and the write log live there. */
+  kv: StorePort["kv"];
   fetch?: Fetch;
   now?: () => number;
 }
@@ -251,27 +249,77 @@ function thread(value: unknown): NotificationThread | undefined {
   };
 }
 
-/** Comments strictly after the cursor; GitHub `since` is inclusive and second-granular. */
-function after(cursor: CommentCursor, c: IssueComment): boolean {
-  return (
-    c.updatedAt > cursor.updatedAt ||
-    (c.updatedAt === cursor.updatedAt && c.id > cursor.id)
-  );
+/** Orders by time, then id. Times compare as instants: `…00.500Z` and `…00Z` differ as text. */
+function compareCursor(a: CommentCursor, b: CommentCursor): number {
+  return Date.parse(a.updatedAt) - Date.parse(b.updatedAt) || a.id - b.id;
 }
 
-function byCursor(a: IssueComment, b: IssueComment): number {
-  return a.updatedAt < b.updatedAt
-    ? -1
-    : a.updatedAt > b.updatedAt
-      ? 1
-      : a.id - b.id;
+interface Cached {
+  etag?: string;
+  lastModified?: string;
+  body: JsonValue;
+  next?: string;
 }
+
+/**
+ * Notifications are keyed without `since`: the cursor moves after every change,
+ * and a per-cursor key would make each next poll unconditional and leave orphans.
+ * A 304 then replays an older body, which notifications() filters by `since`.
+ */
+function cacheKey(url: string): string {
+  const parsed = new URL(url);
+  if (parsed.pathname.endsWith("/notifications"))
+    parsed.searchParams.delete("since");
+  return `github:cache:${parsed.href}`;
+}
+const writesKey = (host: string) => `github:writes:${host}`;
+const blockedKey = (host: string) => `github:blocked:${host}`;
+
+/** A KV value is data from disk; anything not shaped like an entry is a miss. */
+function cached(value: JsonValue | undefined): Cached | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return undefined;
+  const { etag, lastModified, body, next } = value;
+  if (body === undefined) return undefined;
+  if (typeof etag !== "string" && typeof lastModified !== "string")
+    return undefined;
+  return {
+    ...(typeof etag === "string" ? { etag } : {}),
+    ...(typeof lastModified === "string" ? { lastModified } : {}),
+    body,
+    ...(typeof next === "string" ? { next } : {}),
+  };
+}
+
+/**
+ * Wait until every window has room for one more write at `now`, 0 when it fits.
+ * `log` holds write times inside the longest window.
+ */
+export function budgetWait(log: readonly number[], now: number): number {
+  const waits = WRITE_WINDOWS.flatMap(({ windowMs, max }) => {
+    const inside = log.filter((at) => at > now - windowMs);
+    return inside.length >= max ? [(inside[0] ?? now) + windowMs - now] : [];
+  });
+  return waits.length ? Math.max(...waits) : 0;
+}
+
+const LONGEST_WINDOW_MS = Math.max(...WRITE_WINDOWS.map((w) => w.windowMs));
 
 interface Page {
   body: unknown;
   next?: string;
   modified: boolean;
   pollIntervalMs: number | null;
+  /** Org ids GitHub left out because the token lacks SSO authorization. */
+  ssoPartial: string[];
+}
+
+function ssoPartial(response: Response): string[] {
+  const sso = response.headers.get("x-github-sso");
+  if (!sso?.startsWith("partial-results")) return [];
+  return (sso.match(/organizations=([^;\s]+)/)?.[1] ?? "")
+    .split(",")
+    .filter(Boolean);
 }
 
 interface Call {
@@ -291,8 +339,6 @@ export class GitHubAdapter implements GitHubPort {
   private token: Promise<string> | undefined;
   private reread = false;
   private authFailure: AuthError | undefined;
-  private blockedUntil = 0;
-  private blockedSecondary = false;
   private readonly stats: RequestStats = {
     requests: 0,
     notModified: 0,
@@ -332,18 +378,26 @@ export class GitHubAdapter implements GitHubPort {
       .find((part) => /rel="next"/.test(part))
       ?.match(/<([^>]+)>/)?.[1];
     if (!next) return undefined;
-    const resolved = new URL(next, url);
-    // GitHub may switch to /repositories/{id}/… paths; never follow to another origin with the token.
-    if (resolved.origin !== new URL(url).origin)
-      throw new Error("Invalid GitHub pagination URL");
-    return resolved.href;
+    return new URL(next, url).href;
   }
 
-  private backOff(ms: number, secondary: boolean): never {
+  /** Persisted so the next short-lived sync process waits too. */
+  private async backOff(ms: number, secondary: boolean): Promise<never> {
     const wait = Number.isFinite(ms) ? Math.max(0, ms) : SECONDARY_BACKOFF_MS;
-    this.blockedUntil = this.now() + wait;
-    this.blockedSecondary = secondary;
+    await this.options.kv.set(blockedKey(this.host), {
+      until: this.now() + wait,
+      secondary,
+    });
     throw new RateLimitError(wait, secondary);
+  }
+
+  private async blocked(): Promise<void> {
+    const value = await this.options.kv.get(blockedKey(this.host));
+    if (typeof value !== "object" || value === null || Array.isArray(value))
+      return;
+    const wait =
+      (typeof value.until === "number" ? value.until : 0) - this.now();
+    if (wait > 0) throw new RateLimitError(wait, value.secondary === true);
   }
 
   private async limited(response: Response): Promise<void> {
@@ -356,7 +410,7 @@ export class GitHubAdapter implements GitHubPort {
     const remaining = response.headers.get("x-ratelimit-remaining");
     if (retry !== null) {
       const secondary = remaining !== "0";
-      this.backOff(
+      await this.backOff(
         /^\d+(\.\d+)?$/.test(retry)
           ? Number(retry) * 1000
           : Date.parse(retry) - now,
@@ -365,43 +419,50 @@ export class GitHubAdapter implements GitHubPort {
     }
     if (remaining === "0") {
       const reset = Number(response.headers.get("x-ratelimit-reset"));
-      this.backOff(
+      await this.backOff(
         reset > 0 ? reset * 1000 - now : SECONDARY_BACKOFF_MS,
         false,
       );
     }
-    if (response.status === 429) this.backOff(SECONDARY_BACKOFF_MS, true);
+    if (response.status === 429) await this.backOff(SECONDARY_BACKOFF_MS, true);
     // A secondary limit may come as a plain 403; only its message tells it from a permission error.
     const text = await response.text().catch(() => "");
     if (/secondary rate limit|abuse detection/i.test(text))
-      this.backOff(SECONDARY_BACKOFF_MS, true);
+      await this.backOff(SECONDARY_BACKOFF_MS, true);
   }
 
   private async request(url: string, call: Call = {}): Promise<Page> {
     if (this.authFailure) throw this.authFailure;
-    const wait = this.blockedUntil - this.now();
-    if (wait > 0) throw new RateLimitError(wait, this.blockedSecondary);
+    await this.blocked();
     const method = call.method ?? "GET";
     if (call.budgeted) {
       // Reserved once per logical write: a 401 retry is the same write.
-      const decision = await this.options.budget.reserve(
-        this.now(),
-        WRITE_WINDOWS,
-      );
-      if (!decision.ok) throw new BudgetError(decision.retryAfterMs);
+      const now = this.now();
+      let wait = 0;
+      await this.options.kv.update(writesKey(this.host), (current) => {
+        const log = (Array.isArray(current) ? current : [])
+          .filter((at): at is number => typeof at === "number")
+          .filter((at) => at > now - LONGEST_WINDOW_MS)
+          .sort((a, b) => a - b);
+        wait = budgetWait(log, now);
+        return wait > 0 ? log : [...log, now];
+      });
+      if (wait > 0) throw new BudgetError(wait);
     }
-    const cached: CachedResponse | undefined =
-      method === "GET" ? await this.options.cache.get(url) : undefined;
+    const hit =
+      method === "GET"
+        ? cached(await this.options.kv.get(cacheKey(url)))
+        : undefined;
     for (;;) {
       const token = await this.currentToken();
+      const used = this.token;
       const headers: Record<string, string> = {
         Accept: "application/vnd.github+json",
         Authorization: `Bearer ${token}`,
         "X-GitHub-Api-Version": "2022-11-28",
       };
-      if (cached?.etag) headers["If-None-Match"] = cached.etag;
-      if (cached?.lastModified)
-        headers["If-Modified-Since"] = cached.lastModified;
+      if (hit?.etag) headers["If-None-Match"] = hit.etag;
+      if (hit?.lastModified) headers["If-Modified-Since"] = hit.lastModified;
       if (call.body !== undefined) headers["Content-Type"] = "application/json";
       this.stats.requests++;
       if (method !== "GET") this.stats.writes++;
@@ -413,9 +474,11 @@ export class GitHubAdapter implements GitHubPort {
         ...(call.body === undefined ? {} : { body: JSON.stringify(call.body) }),
       });
       const remaining = response.headers.get("x-ratelimit-remaining");
-      if (remaining !== null && /^\d+$/.test(remaining))
+      if (url !== this.graphql && remaining !== null && /^\d+$/.test(remaining))
         this.stats.rateLimitRemaining = Number(remaining);
       if (response.status === 401) {
+        // A concurrent request already replaced the token this one used: retry with it.
+        if (this.token !== undefined && used !== this.token) continue;
         if (this.reread) {
           this.authFailure = new AuthError(this.host);
           throw this.authFailure;
@@ -430,30 +493,38 @@ export class GitHubAdapter implements GitHubPort {
         poll && /^\d+$/.test(poll) ? Number(poll) * 1000 : null;
       if (response.status === 304) {
         this.stats.notModified++;
-        if (!cached)
+        if (!hit)
           throw new GitHubResponseError(
             304,
             "GitHub returned 304 without a cached body",
           );
         return {
-          body: cached.body,
-          ...(cached.next === undefined ? {} : { next: cached.next }),
+          body: hit.body,
+          ...(hit.next === undefined ? {} : { next: hit.next }),
           modified: false,
           pollIntervalMs,
+          ssoPartial: ssoPartial(response),
         };
       }
       if (!response.ok) throw new GitHubResponseError(response.status);
-      const body: unknown =
-        response.status === 204 ? null : await response.json();
+      let body: unknown = null;
+      if (response.status !== 204) {
+        try {
+          body = await response.json();
+        } catch {
+          // The parser quotes the body; keep it out of error text.
+          throw new GitHubResponseError(response.status, "Invalid GitHub JSON");
+        }
+      }
       const next = this.nextLink(response, url);
       if (method === "GET") {
         const etag = response.headers.get("etag");
         const lastModified = response.headers.get("last-modified");
         if (etag || lastModified)
-          await this.options.cache.set(url, {
+          await this.options.kv.set(cacheKey(url), {
             ...(etag ? { etag } : {}),
             ...(lastModified ? { lastModified } : {}),
-            body,
+            body: body as JsonValue,
             ...(next === undefined ? {} : { next }),
           });
       }
@@ -462,6 +533,7 @@ export class GitHubAdapter implements GitHubPort {
         ...(next === undefined ? {} : { next }),
         modified: true,
         pollIntervalMs,
+        ssoPartial: ssoPartial(response),
       };
     }
   }
@@ -474,24 +546,31 @@ export class GitHubAdapter implements GitHubPort {
     items: unknown[];
     modified: boolean;
     pollIntervalMs: number | null;
+    ssoPartial: string[];
   }> {
     const items: unknown[] = [];
     const visited = new Set<string>();
+    const sso = new Set<string>();
+    const origin = new URL(url).origin;
     let modified = false;
     let pollIntervalMs: number | null = null;
     let next: string | undefined = url;
     while (next) {
+      // Checked here, not only on fresh Link headers: a cached next comes from disk.
+      if (new URL(next).origin !== origin)
+        throw new Error("Invalid GitHub pagination URL");
       if (visited.has(next)) throw new Error("GitHub pagination cycle");
       visited.add(next);
       const page = await this.request(next);
       if (!Array.isArray(page.body)) throw new Error("Invalid GitHub list");
       modified ||= page.modified;
       pollIntervalMs ??= page.pollIntervalMs;
+      for (const org of page.ssoPartial) sso.add(org);
       items.push(...page.body);
       if (stop(page.body)) break;
       next = page.next;
     }
-    return { items, modified, pollIntervalMs };
+    return { items, modified, pollIntervalMs, ssoPartial: [...sso] };
   }
 
   private async list<T>(
@@ -503,13 +582,19 @@ export class GitHubAdapter implements GitHubPort {
 
   async notifications(since: string): Promise<NotificationPage> {
     const query = new URLSearchParams({ all: "true", since, per_page: "50" });
-    const { items, modified, pollIntervalMs } = await this.pages(
+    const after = Date.parse(since);
+    if (!Number.isFinite(after)) throw new Error("Invalid notifications since");
+    const { items, modified, pollIntervalMs, ssoPartial } = await this.pages(
       `${this.rest}/notifications?${query}`,
     );
     return {
       modified,
-      threads: items.flatMap((value) => thread(value) ?? []),
+      // A 304 may replay a body fetched with an older `since`.
+      threads: items
+        .flatMap((value) => thread(value) ?? [])
+        .filter((t) => Date.parse(t.updatedAt) >= after),
       pollIntervalMs,
+      ssoPartialOrgs: ssoPartial,
     };
   }
 
@@ -566,7 +651,11 @@ export class GitHubAdapter implements GitHubPort {
       `${this.rest}${repoPath(repo)}/issues/${integer(number)}/comments?${query}`,
       comment,
     );
-    return comments.filter((c) => after(cursor, c)).sort(byCursor);
+    if (!Number.isFinite(Date.parse(cursor.updatedAt)))
+      throw new Error("Invalid comment cursor");
+    return comments
+      .filter((c) => compareCursor(c, cursor) > 0)
+      .sort(compareCursor);
   }
 
   async listReviews(repo: string, number: number): Promise<PullReview[]> {
@@ -610,6 +699,7 @@ export class GitHubAdapter implements GitHubPort {
   /** Not a content write: it spends no budget. */
   async disableAutoMerge(repo: string, number: number): Promise<void> {
     const pr = await this.getPull(repo, number);
+    if (!pr.autoMerge) return;
     const response = object(
       (
         await this.request(this.graphql, {

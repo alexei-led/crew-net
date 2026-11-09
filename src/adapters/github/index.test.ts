@@ -1,11 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import type {
-  BudgetWindow,
-  CachedResponse,
-  HttpCachePort,
-  WriteBudgetPort,
-} from "../../ports/index";
+import type { JsonValue, StorePort } from "../../ports/index";
 import comments from "./fixtures/comments.json";
 import pulls from "./fixtures/pulls.json";
 import recorded from "./fixtures/recorded.json";
@@ -25,32 +20,25 @@ const API = "https://api.github.com";
 const REPO = "alexei-led/crew-net-sandbox";
 const REPO_URL = `${API}/repos/${REPO}`;
 
-class FakeCache implements HttpCachePort {
-  readonly entries = new Map<string, CachedResponse>();
-  async get(key: string) {
-    return this.entries.get(key);
-  }
-  async set(key: string, value: CachedResponse) {
-    this.entries.set(key, value);
-  }
-}
+/** The store's cross-process KV, as every sync process on the laptop shares it. */
+type Kv = StorePort["kv"];
 
-/** Shared write log, as the store keeps it on disk for every process. */
-class FakeBudget implements WriteBudgetPort {
-  readonly writes: number[] = [];
-  readonly calls: (readonly BudgetWindow[])[] = [];
-  async reserve(nowMs: number, windows: readonly BudgetWindow[]) {
-    this.calls.push(windows);
-    const waits = windows.flatMap(({ windowMs, max }) => {
-      const inside = this.writes.filter((at) => at > nowMs - windowMs);
-      return inside.length >= max
-        ? [(inside[0] ?? nowMs) + windowMs - nowMs]
-        : [];
-    });
-    if (waits.length)
-      return { ok: false as const, retryAfterMs: Math.max(...waits) };
-    this.writes.push(nowMs);
-    return { ok: true as const };
+class FakeKv implements Kv {
+  readonly values = new Map<string, JsonValue>();
+  async get(key: string) {
+    return this.values.get(key);
+  }
+  async set(key: string, value: JsonValue) {
+    this.values.set(key, value);
+  }
+  async update(key: string, fn: (current: JsonValue | undefined) => JsonValue) {
+    const value = fn(this.values.get(key));
+    this.values.set(key, value);
+    return value;
+  }
+  writes(host = "github.com"): unknown[] {
+    const log = this.values.get(`github:writes:${host}`);
+    return Array.isArray(log) ? log : [];
   }
 }
 
@@ -70,17 +58,15 @@ function setup(
     if (!response) throw new Error(`Unexpected HTTP request ${url}`);
     return response;
   };
-  const cache = new FakeCache();
-  const budget = new FakeBudget();
+  const kv = new FakeKv();
   const adapter = new GitHubAdapter({
     host: "github.com",
     tokenProvider: async () => "test-token",
-    cache,
-    budget,
+    kv,
     fetch,
     ...extra,
   });
-  return { adapter, calls, cache, budget };
+  return { adapter, calls, kv: (extra.kv as FakeKv | undefined) ?? kv };
 }
 
 const json = (value: unknown, headers?: HeadersInit) =>
@@ -192,14 +178,14 @@ describe("notifications", () => {
   );
 
   test("persistent cache makes a second adapter instance poll conditionally", async () => {
-    const cache = new FakeCache();
+    const kv = new FakeKv();
     const { adapter: first } = setup([replay(recorded.notifications)], {
-      cache,
+      kv,
     });
     await first.notifications("2026-11-01T00:00:00Z");
     const { adapter: second, calls } = setup(
       [replay(recorded.notificationsNotModified)],
-      { cache },
+      { kv },
     );
     const page = await second.notifications("2026-11-01T00:00:00Z");
     expect(header(calls[0], "if-modified-since")).toBe(
@@ -473,7 +459,9 @@ describe("authentication", () => {
       { tokenProvider: async () => `token-${++reads}` },
     );
     await expect(adapter.listOpenPulls(REPO)).rejects.toBeInstanceOf(AuthError);
-    await expect(adapter.notifications("x")).rejects.toBeInstanceOf(AuthError);
+    await expect(
+      adapter.notifications("2026-11-01T00:00:00Z"),
+    ).rejects.toBeInstanceOf(AuthError);
     expect(reads).toBe(2);
     expect(calls).toHaveLength(2);
   });
@@ -580,15 +568,15 @@ describe("rate limits", () => {
 
 describe("writes", () => {
   test("budget is shared across adapter instances through the persistent counter", async () => {
-    const budget = new FakeBudget();
+    const kv = new FakeKv();
     const now = () => 1_000;
     const first = setup(
       Array.from({ length: 12 }, () => json({})),
-      { budget, now },
+      { kv, now },
     );
     const second = setup(
       Array.from({ length: 8 }, () => json({})),
-      { budget, now },
+      { kv, now },
     );
     for (let i = 0; i < 12; i++)
       await first.adapter.postComment(REPO, 7, "one");
@@ -598,7 +586,7 @@ describe("writes", () => {
     expect(error).toBeInstanceOf(BudgetError);
     if (error instanceof BudgetError) expect(error.retryAfterMs).toBe(60_000);
     expect(second.calls).toHaveLength(8);
-    expect(budget.calls[0]).toEqual(WRITE_WINDOWS);
+    expect(kv.writes()).toHaveLength(20);
     expect(WRITE_WINDOWS).toEqual([
       { windowMs: 60_000, max: 20 },
       { windowMs: 3_600_000, max: 200 },
@@ -606,18 +594,18 @@ describe("writes", () => {
   });
 
   test("a 401 retry spends the budget once", async () => {
-    const { adapter, budget, calls } = setup([
+    const { adapter, kv, calls } = setup([
       new Response(null, { status: 401 }),
       json({}),
     ]);
     await adapter.postComment(REPO, 7, "message");
-    expect(budget.writes).toHaveLength(1);
+    expect(kv.writes()).toHaveLength(1);
     expect(calls).toHaveLength(2);
     expect(adapter.requestStats()).toMatchObject({ requests: 2, writes: 2 });
   });
 
   test("createIssue posts title and body and returns the number", async () => {
-    const { adapter, calls, budget } = setup([json({ number: 12 })]);
+    const { adapter, calls, kv } = setup([json({ number: 12 })]);
     expect(await adapter.createIssue(REPO, "Bug in api", "details")).toBe(12);
     expect(calls[0]?.url).toBe(`${REPO_URL}/issues`);
     expect(calls[0]?.init.method).toBe("POST");
@@ -625,7 +613,7 @@ describe("writes", () => {
       title: "Bug in api",
       body: "details",
     });
-    expect(budget.writes).toHaveLength(1);
+    expect(kv.writes()).toHaveLength(1);
   });
 
   test("comment and body edit hit the repo endpoints; 204 is success", async () => {
@@ -661,7 +649,7 @@ describe("writes", () => {
   });
 
   test("disabling auto-merge on GHES uses its GraphQL endpoint and spends no budget", async () => {
-    const { adapter, calls, budget } = setup(
+    const { adapter, calls, kv } = setup(
       [
         json({ ...pulls[0], state: "open", auto_merge: {} }),
         json({
@@ -682,12 +670,12 @@ describe("writes", () => {
     expect(JSON.parse(String(calls[1]?.init.body)).variables).toEqual({
       id: "PR_sandbox7",
     });
-    expect(budget.writes).toHaveLength(0);
+    expect(kv.writes("github.example")).toHaveLength(0);
   });
 
   test("GraphQL errors are failures even with HTTP 200", async () => {
     const { adapter } = setup([
-      json({ ...pulls[0], state: "open" }),
+      json({ ...pulls[0], auto_merge: {} }),
       json({ errors: [{ message: "denied" }] }),
     ]);
     await expect(adapter.disableAutoMerge(REPO, 7)).rejects.toBeInstanceOf(
@@ -729,8 +717,7 @@ test.skipIf(process.env.CREW_NET_LIVE !== "1")(
           encoding: "utf8",
           stdio: ["ignore", "pipe", "ignore"],
         }).trim(),
-      cache: new FakeCache(),
-      budget: new FakeBudget(),
+      kv: new FakeKv(),
     });
     const since = new Date(Date.now() - 86_400_000).toISOString();
     const page = await adapter.notifications(since);
@@ -749,3 +736,160 @@ test.skipIf(process.env.CREW_NET_LIVE !== "1")(
   },
   60_000,
 );
+
+describe("review regressions", () => {
+  test("two in-flight requests hit by one token expiry both recover with one re-read", async () => {
+    let reads = 0;
+    let arrived = 0;
+    let release: () => void = () => {};
+    const barrier = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { adapter, calls } = setup([], {
+      tokenProvider: async () => `token-${++reads}`,
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        if (header({ url, init }, "authorization") === "Bearer token-1") {
+          if (++arrived === 2) release();
+          await barrier;
+          return new Response(null, { status: 401 });
+        }
+        return json(pulls);
+      },
+    });
+    const [a, b] = await Promise.all([
+      adapter.listOpenPulls(REPO),
+      adapter.getPull(REPO, 7).catch((e: unknown) => e),
+    ]);
+    expect(a).toHaveLength(1);
+    expect(b).not.toBeInstanceOf(AuthError);
+    expect(reads).toBe(2);
+    expect(await adapter.listOpenPulls(REPO)).toHaveLength(1);
+  });
+
+  test("notifications report orgs left out for missing SSO authorization", async () => {
+    const { adapter } = setup([
+      json([], {
+        "x-github-sso": "partial-results; organizations=21955855,20582480",
+      }),
+    ]);
+    const page = await adapter.notifications("2026-11-01T00:00:00Z");
+    expect(page.ssoPartialOrgs).toEqual(["21955855", "20582480"]);
+  });
+
+  test("SSO error without a link falls back to gh auth refresh", async () => {
+    const { adapter } = setup([
+      new Response(null, {
+        status: 403,
+        headers: { "x-github-sso": "required" },
+      }),
+    ]);
+    const error = await caught(adapter.listOpenPulls(REPO));
+    expect(error).toBeInstanceOf(SsoError);
+    expect(String(error)).toContain("gh auth refresh --hostname github.com");
+  });
+
+  test("a moved notifications cursor still polls conditionally and filters the replayed body", async () => {
+    const { adapter, calls, kv } = setup([
+      replay(recorded.notifications),
+      replay(recorded.notificationsNotModified),
+    ]);
+    await adapter.notifications("2026-11-01T00:00:00Z");
+    const page = await adapter.notifications("2026-11-09T08:00:00Z");
+    expect(new URL(calls[1]?.url ?? "").searchParams.get("since")).toBe(
+      "2026-11-09T08:00:00Z",
+    );
+    expect(header(calls[1], "if-modified-since")).toBe(
+      "Mon, 09 Nov 2026 09:01:44 GMT",
+    );
+    expect(page.modified).toBe(false);
+    expect(page.threads.map((t) => t.threadId)).toEqual(["1000", "1001"]);
+    expect(
+      [...kv.values.keys()].filter((k) => k.includes("notifications")),
+    ).toHaveLength(1);
+  });
+
+  test("a cursor with milliseconds compares as time, not text", async () => {
+    const { adapter } = setup([
+      json([
+        { ...comments[0], id: 1, updated_at: "2026-11-09T10:00:00Z" },
+        { ...comments[0], id: 2, updated_at: "2026-11-09T10:00:01Z" },
+      ]),
+    ]);
+    const result = await adapter.listThreadComments(REPO, 7, {
+      updatedAt: "2026-11-09T10:00:00.500Z",
+      id: 0,
+    });
+    expect(result.map((c) => c.id)).toEqual([2]);
+  });
+
+  test("a cached next link to another origin is never followed", async () => {
+    const { adapter, calls, kv } = setup([new Response(null, { status: 304 })]);
+    await kv.set(`github:cache:${REPO_URL}/pulls?state=open&per_page=100`, {
+      etag: '"x"',
+      body: [],
+      next: "https://evil.invalid/steal",
+    });
+    await expect(adapter.listOpenPulls(REPO)).rejects.toThrow("pagination URL");
+    expect(calls).toHaveLength(1);
+  });
+
+  test("invalid JSON errors carry no response body", async () => {
+    const { adapter } = setup([new Response("secret-body-text {")]);
+    const error = await caught(adapter.getPull(REPO, 7));
+    expect(error).toBeInstanceOf(GitHubResponseError);
+    expect(String(error)).not.toContain("secret-body-text");
+  });
+
+  test("a rate-limit backoff is shared with the next process through the store", async () => {
+    const kv = new FakeKv();
+    const now = () => 1_000;
+    const first = setup([new Response(null, { status: 429 })], { kv, now });
+    await expect(first.adapter.listOpenPulls(REPO)).rejects.toBeInstanceOf(
+      RateLimitError,
+    );
+    const second = setup([], { kv, now: () => 31_000 });
+    const error = await caught(
+      second.adapter.notifications("2026-11-01T00:00:00Z"),
+    );
+    expect(error).toBeInstanceOf(RateLimitError);
+    if (error instanceof RateLimitError) {
+      expect(error.retryAfterMs).toBe(30_000);
+      expect(error.secondary).toBe(true);
+    }
+    expect(second.calls).toHaveLength(0);
+  });
+
+  test("disableAutoMerge is a no-op when auto-merge is off", async () => {
+    const { adapter, calls } = setup([json({ ...pulls[0], auto_merge: null })]);
+    await adapter.disableAutoMerge(REPO, 7);
+    expect(calls).toHaveLength(1);
+  });
+
+  test("GraphQL calls do not overwrite the REST rate-limit count", async () => {
+    const { adapter } = setup([
+      json(
+        { ...pulls[0], auto_merge: {} },
+        { "x-ratelimit-remaining": "4000" },
+      ),
+      json(
+        {
+          data: {
+            disablePullRequestAutoMerge: { pullRequest: { id: "PR_sandbox7" } },
+          },
+        },
+        { "x-ratelimit-remaining": "4999" },
+      ),
+    ]);
+    await adapter.disableAutoMerge(REPO, 7);
+    expect(adapter.requestStats().rateLimitRemaining).toBe(4000);
+  });
+
+  test("a GHE.com host sends REST calls to its API subdomain", async () => {
+    const { adapter, calls } = setup([json(pulls)], { host: "acme.ghe.com" });
+    await adapter.listOpenPulls(REPO);
+    expect(calls[0]?.url).toBe(
+      `https://api.acme.ghe.com/repos/${REPO}/pulls?state=open&per_page=100`,
+    );
+  });
+});

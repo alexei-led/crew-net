@@ -6,7 +6,8 @@ with argv, no shell, a 30 s timeout and a 1 MiB output limit.
 
 - `repoIdentity()` runs `git remote get-url origin` and returns
   `{ host, repo }`. HTTPS, `ssh://` and SCP-style remotes are supported; the
-  host is lowercased and the port dropped. Local paths and remotes without
+  host is lowercased and the port dropped; `ssh.github.com` (SSH over 443)
+  maps to `github.com`. Local paths and remotes without
   exactly `owner/repo` are rejected. An SSH config alias as host
   (`git@work:org/repo`) is returned as is.
 - `githubToken(host)` runs `gh auth token --hostname <host>`. Empty output or

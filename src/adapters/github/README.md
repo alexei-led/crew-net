@@ -1,6 +1,6 @@
 # GitHub adapter
 
-`new GitHubAdapter({ host, tokenProvider, cache, budget, fetch?, now? })`
+`new GitHubAdapter({ host, tokenProvider, kv, fetch?, now? })`
 implements [GitHubPort](../../ports/index.ts) for one GitHub host with built-in
 `fetch`. No SDK, no runtime dependency.
 
@@ -36,25 +36,37 @@ Every repo method takes `owner/repo`; anything else is rejected before a request
   second-granular, so more than 100 comments with one `updated_at` are still
   split exactly. Pass `{ updatedAt: cursor, id: 0 }` for "since cursor".
 - Lists follow `Link: rel="next"` to any path on the same origin (GitHub may
-  switch to `/repositories/{id}/…`), never to another origin, and stop on a cycle.
+  switch to `/repositories/{id}/…`), never to another origin, and stop on a
+  cycle. Cached next links are checked the same way.
 - Deleted accounts (`user: null`) become `ghost`.
 
-## Conditional requests
+## State in the store
 
-`cache` is an injected `HttpCachePort` keyed by request URL, implemented by the
-store so validators survive across processes. A GET sends `If-None-Match` and
-`If-Modified-Since` from the cached entry; a 304 returns the cached body and
-next link. Nothing is invalidated on writes: the server compares validators, so
-a changed resource returns 200.
+`kv` is the store's cross-process `StorePort.kv`. Every sync process on the
+laptop shares three kinds of keys:
+
+| Key                     | Holds                                                       |
+| ----------------------- | ----------------------------------------------------------- |
+| `github:cache:<url>`    | `{ etag?, lastModified?, body, next? }` of the last 200 GET |
+| `github:writes:<host>`  | write times inside the last hour                            |
+| `github:blocked:<host>` | `{ until, secondary }` after a rate limit                   |
+
+A GET sends `If-None-Match` and `If-Modified-Since` from its cache entry; a 304
+returns the cached body and next link. Writes invalidate nothing: the server
+compares validators, so a changed resource returns 200. Notification keys
+leave out `since`, so a moved cursor still polls conditionally and no entry is
+orphaned; a 304 replays the older body and `notifications()` drops threads
+updated before `since`. A malformed entry counts as a miss.
 
 ## Writes and budget
 
-`postComment`, `updatePullBody` and `createIssue` are content writes. Each
-reserves one slot from the injected `WriteBudgetPort` before the first attempt,
-with `WRITE_WINDOWS` (20 a minute, 200 an hour, design §9.1). The store keeps
-the count on disk, so every process on the laptop shares it. A refusal throws
-`BudgetError.retryAfterMs` without a request. A 401 retry is the same write and
-spends no second slot. `disableAutoMerge` (GraphQL) spends no budget.
+`postComment`, `updatePullBody` and `createIssue` are content writes. Each one
+records itself in `github:writes:<host>` through `kv.update` (atomic under the
+store lock) before the first attempt, if `WRITE_WINDOWS` (20 a minute, 200 an
+hour, design §9.1) has room. Otherwise it throws `BudgetError.retryAfterMs`
+without a request. A 401 retry is the same write and is not counted again.
+`disableAutoMerge` (GraphQL) spends no budget and does nothing when auto-merge
+is already off.
 
 ## Errors
 
@@ -68,17 +80,19 @@ spends no second slot. `disableAutoMerge` (GraphQL) spends no budget.
 | 429, or 403 whose message names a secondary limit | `RateLimitError`, 60 s, secondary                                                                             |
 | other non-2xx                                     | `GitHubResponseError(status)`                                                                                 |
 
-After a rate limit the adapter refuses further requests until the wait ends,
-without touching the network. It never sleeps. Error messages carry no tokens or
+After a rate limit the adapter writes `github:blocked:<host>`, and every
+adapter on the laptop refuses requests until the wait ends, without touching
+the network. It never sleeps. A 200 with `x-github-sso: partial-results` (some
+orgs left out) is reported on `notifications()` as `ssoPartialOrgs`. Error messages carry no tokens or
 response bodies. Requests time out after 30 s; redirects are refused.
 
 `requestStats()`: `requests` counts every attempt including 304s, `notModified`
-the 304s, `writes` non-GET attempts, `rateLimitRemaining` the last primary count.
+the 304s, `writes` non-GET attempts, `rateLimitRemaining` the last REST primary
+count (GraphQL has its own pool).
 
 ## Tests
 
-`bun test src/adapters/github` uses an injected fetch, a fake cache and a fake
-shared budget. `fixtures/recorded.json` holds read-only responses recorded from
+`bun test src/adapters/github` uses an injected fetch and a fake shared KV. `fixtures/recorded.json` holds read-only responses recorded from
 `alexei-led/crew-net-sandbox` on 2026-11-09 (notifications 200 and live 304,
 merged and closed pulls, comments, reviews), with text redacted and
 notification subjects rewritten to the sandbox.
