@@ -8,6 +8,8 @@ import { join } from "node:path";
 const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const MAIN_SOURCE = "src/cli/main.ts";
+const JSON_VERSION = /"version": "[^"]*"/;
+const JSON_VERSION_ALL = /("version": ")[^"]*(")/g;
 const VERSION_CONST = /(export const VERSION = ")[^"]*(")/;
 
 const JSON_FILES = [
@@ -80,16 +82,14 @@ export function checkVersions(root: string, expected?: string): string {
   return target;
 }
 
-function setVersion(root: string, version: string): void {
+export function setVersion(root: string, version: string): void {
+  // Replace the field in place so the diff of a release commit is only the version.
   for (const file of JSON_FILES) {
     const path = join(root, file);
-    const json = JSON.parse(readFileSync(path, "utf8")) as Json;
-    if (file.endsWith("marketplace.json")) {
-      for (const p of json.plugins ?? []) p.version = version;
-    } else {
-      json.version = version;
-    }
-    writeFileSync(path, `${JSON.stringify(json, null, 2)}\n`);
+    const text = readFileSync(path, "utf8");
+    if (!JSON_VERSION.test(text))
+      throw new Error(`${file} has no "version" field`);
+    writeFileSync(path, text.replace(JSON_VERSION_ALL, `$1${version}$2`));
   }
   const src = join(root, MAIN_SOURCE);
   writeFileSync(

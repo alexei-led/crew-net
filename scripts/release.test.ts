@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -7,6 +7,7 @@ import {
   checkVersions,
   datedChangelog,
   parseVersion,
+  setVersion,
 } from "./release";
 
 const changelog = `# Changelog
@@ -150,4 +151,21 @@ test("checkVersions rejects agreement on the wrong version", () => {
     source: "0.1.0",
   });
   expect(() => checkVersions(root, "0.2.0")).toThrow("differ from 0.2.0");
+});
+
+test("setVersion changes only the version and keeps each file's layout", () => {
+  const root = repo({
+    pkg: "0.1.0",
+    plugin: "0.1.0",
+    market: "0.1.0",
+    source: "0.1.0",
+  });
+  const layout =
+    '{\n  "name": "x",\n  "version": "0.1.0",\n  "keywords": ["a", "b"]\n}\n';
+  writeFileSync(join(root, "plugin/.claude-plugin/plugin.json"), layout);
+  setVersion(root, "0.2.0");
+  expect(
+    readFileSync(join(root, "plugin/.claude-plugin/plugin.json"), "utf8"),
+  ).toBe(layout.replace("0.1.0", "0.2.0"));
+  expect(checkVersions(root, "0.2.0")).toBe("0.2.0");
 });
