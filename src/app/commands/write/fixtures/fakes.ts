@@ -174,6 +174,11 @@ export class FakeGit implements GitPort {
   async remotes(): Promise<GitRemote[]> {
     return this.remoteList;
   }
+  /** git config values by key. */
+  readonly config = new Map<string, string>();
+  async configValue(key: string): Promise<string | undefined> {
+    return this.config.get(key);
+  }
   checkout(): never {
     throw new Error("not used by write commands");
   }

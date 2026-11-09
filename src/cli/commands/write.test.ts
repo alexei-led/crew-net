@@ -26,6 +26,7 @@ function world(
     host: "github.com",
     repo: REPO,
   }),
+  aliases?: ReadonlyMap<string, string>,
 ) {
   const github = new FakeGitHub();
   github
@@ -39,7 +40,7 @@ function world(
     clock: { now: () => 5 },
     settings: DEFAULT_SETTINGS,
     settingsProblems: [],
-    env: { repoIdentity } as EnvPort,
+    env: { repoIdentity, ghAliases: async () => aliases } as EnvPort,
     github: () => github,
     git: () => new FakeGit([{ path: DIR, branch: "feat" }]),
   };
@@ -181,6 +182,17 @@ describe("crew-net gate", () => {
       reasons: ["acme/app#10: depends-on #1 is not merged"],
       checked: ["acme/app#10"],
       failed: false,
+    });
+  });
+
+  test("a gh alias is checked as the merge it runs", async () => {
+    // Without the alias map `gh m` would gate the current PR #10, which waits on #1.
+    const w = world(undefined, new Map([["m", "pr merge 20 -R acme/app"]]));
+    await w.run("dep", "add", "#1");
+    expect(await w.run("gate", "--json", "--", "gh m")).toBe(0);
+    expect(JSON.parse(w.out().split("\n")[1] ?? "")).toMatchObject({
+      decision: "allow",
+      checked: ["acme/app#20"],
     });
   });
 

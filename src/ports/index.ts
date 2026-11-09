@@ -187,8 +187,10 @@ export interface GitPort {
   fetch(): Promise<void>;
   /** The worktree, clone and branch of the directory this port runs in. */
   checkout(): Promise<Checkout>;
-  /** Remotes with a URL, in config order. */
+  /** Remotes with their fetch URL as git uses it (`insteadOf` applied), in `git remote -v` order. */
   remotes(): Promise<GitRemote[]>;
+  /** `git config --get <key>`; undefined when unset. */
+  configValue(key: string): Promise<string | undefined>;
   /** Branches checked out in the main and linked worktrees, with their paths. */
   worktreeBranches(): Promise<WorktreeBranch[]>;
   /** Remote-tracking branches on origin. */
@@ -386,6 +388,8 @@ export interface EnvPort {
   githubToken(host: string): Promise<string>;
   /** The origin remote of the working copy that contains `dir`. */
   repoIdentity(dir: string): Promise<RepoIdentity>;
+  /** `gh alias list` as name → expansion; undefined when gh cannot tell. */
+  ghAliases(): Promise<ReadonlyMap<string, string> | undefined>;
   managedHooksOnly(): Promise<ManagedHooksPolicy>;
   /** `${XDG_STATE_HOME:-~/.local/state}/crew-net`. */
   stateDir(): string;

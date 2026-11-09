@@ -106,8 +106,22 @@ const FIND_EXEC = new Set(["-exec", "-execdir", "-ok", "-okdir"]);
 
 /** Commands that change which repo a later `gh` acts on. */
 const CHANGES_DIR = new Set(["cd", "pushd", "popd"]);
-const GH_CONTEXT_VAR = /^GH_(REPO|HOST)=/;
-const GH_HOST_VAR = /^GH_HOST=/;
+/** Words that may change which repo gh resolves: a GH_ or GIT_ variable named anywhere (`+=`, `export`, `read`, `printf -v`), HOME or XDG_CONFIG_HOME set. */
+const REPO_CONTEXT_WORD =
+  /GH_(?:HOST|REPO|CONFIG_DIR)|GIT_(?:DIR|WORK_TREE|COMMON_DIR|CONFIG)|^(?:HOME|XDG_CONFIG_HOME)\+?=/;
+/** Words that may change which host gh sends a repo named without one to. */
+const HOST_CONTEXT_WORD =
+  /GH_(?:HOST|CONFIG_DIR)|^(?:HOME|XDG_CONFIG_HOME)\+?=/;
+/** `source f`, `. f` and `set -a` can set any variable. */
+function setsVariables(words: readonly Word[]): boolean {
+  const head = words.find((w) => !ASSIGNMENT.test(w.text))?.text;
+  return (
+    head === "source" ||
+    head === "." ||
+    (head === "set" &&
+      words.some((w) => /^-\w*a/.test(w.text) || w.text === "allexport"))
+  );
+}
 
 const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*\+?=/;
@@ -214,7 +228,9 @@ function splitArgs(words: readonly Word[]): {
 
 type RepoHost = { host?: string; repo: string };
 
-const host = (name: string): string => name.toLowerCase().replace(/:\d+$/, "");
+/** A host as gh names it; undefined with a port, which the gate cannot follow. */
+const host = (name: string): string | undefined =>
+  /:/.test(name) ? undefined : name.toLowerCase();
 
 /** `-R` values: `owner/name` or `[https://]host/owner/name`. */
 function repoFromFlag(value: string): RepoHost | undefined {
@@ -224,9 +240,9 @@ function repoFromFlag(value: string): RepoHost | undefined {
     .filter(Boolean);
   if (parts.length < 2 || parts.length > 3) return undefined;
   const repo = parts.slice(-2).join("/");
-  return parts.length === 3
-    ? { host: host(parts[0] as string), repo }
-    : { repo };
+  if (parts.length === 2) return { repo };
+  const named = host(parts[0] as string);
+  return named === undefined ? undefined : { host: named, repo };
 }
 
 function repoFlag(
@@ -262,12 +278,15 @@ function prMerge(args: readonly Word[]): MergeDetection {
     };
   const url =
     /^https?:\/\/([^/]+)\/([^/]+\/[^/]+)\/pull\/(\d{1,9})(?:[/?#].*)?$/.exec(t);
+  const urlHost = url ? host(url[1] as string) : undefined;
+  if (url && urlHost === undefined)
+    return denied(`gh pr merge: cannot follow the port in ${t}`);
   if (url)
     return {
       kind: "merge",
       targets: [
         {
-          host: host(url[1] as string),
+          host: urlHost as string,
           repo: url[2] as string,
           pr: Number(url[3]),
         },
@@ -306,6 +325,7 @@ function apiUrlHost(endpoint: string): string | undefined {
   const m = /^[A-Za-z][A-Za-z0-9+.-]*:\/\/([^/?#]*)/.exec(endpoint);
   if (!m) return undefined;
   const name = host((m[1] as string).replace(/^[^@]*@/, ""));
+  if (name === undefined) return "";
   const api = name.startsWith("api.") ? name.slice(4) : undefined;
   return api === "github.com" || api?.endsWith(".ghe.com") ? api : name;
 }
@@ -320,6 +340,8 @@ function hostnameFlag(
     if (!f.value || f.value.dynamic || f.value.text === "")
       return { error: "the --hostname value is not literal" };
     found = host(f.value.text);
+    if (found === undefined)
+      return { error: "the --hostname value has a port" };
   }
   return found === undefined ? {} : { host: found };
 }
@@ -378,16 +400,16 @@ function api(args: readonly Word[]): MergeDetection {
   const pull = /^repos\/([^/]+)\/([^/]+)\/pulls\/(\d{1,9})\/merge$/.exec(path);
   if (pull) {
     if (readOnly) return NONE;
-    const repo =
-      pull[1] === "{owner}" && pull[2] === "{repo}"
-        ? {}
-        : { repo: `${pull[1]}/${pull[2]}` };
-    if (/[{}]/.test(repo.repo ?? ""))
-      return denied(`gh api: cannot read the repo in ${endpoint.text}`);
+    // gh api fills {owner}/{repo} by its own rules; the repo must be named.
+    const repo = { repo: `${pull[1]}/${pull[2]}` };
+    if (/[{}]/.test(repo.repo))
+      return denied(`gh api: name the repo in ${endpoint.text}`);
     const named = hostnameFlag(flags);
     if ("error" in named) return denied(`gh api: ${named.error}`);
     // A full URL goes to its own host whatever --hostname says.
     const urlHost = apiUrlHost(endpoint.text);
+    if (urlHost === "")
+      return denied(`gh api: cannot follow the port in ${endpoint.text}`);
     const target = urlHost === undefined ? named : { host: urlHost };
     return {
       kind: "merge",
@@ -428,7 +450,8 @@ function gh(
   if (top === undefined) return NONE;
   if (top.dynamic) return denied("gh: the command is not literal");
   const at = args.indexOf(top);
-  const rest = args.slice(at + 1);
+  // Flags before the command (`gh -R x pr merge`) still reach it.
+  const rest = [...args.slice(0, at), ...args.slice(at + 1)];
   if (top.text === "pr") {
     const action = splitArgs(rest).positionals[0];
     if (action === undefined) return NONE;
@@ -555,7 +578,8 @@ function changesRepoContext(commands: readonly Word[][]): boolean {
     const name = head?.text.split("/").pop() ?? "";
     return (
       CHANGES_DIR.has(name) ||
-      words.some((w) => GH_CONTEXT_VAR.test(w.text)) ||
+      setsVariables(words) ||
+      words.some((w) => REPO_CONTEXT_WORD.test(w.text)) ||
       (name === "env" && words.some((w) => /^(-C|--chdir)/.test(w.text)))
     );
   });
@@ -613,10 +637,14 @@ function detectIn(
   if (
     result.kind === "merge" &&
     result.targets.some((t) => t.host === undefined) &&
-    lexed.commands.some((words) => words.some((w) => GH_HOST_VAR.test(w.text)))
+    lexed.commands.some(
+      (words) =>
+        setsVariables(words) ||
+        words.some((w) => HOST_CONTEXT_WORD.test(w.text)),
+    )
   )
     return denied(
-      `${where}: sets GH_HOST before a merge; name the host with -R host/owner/repo or a PR URL`,
+      `${where}: may set GH_HOST before a merge; name the host with -R host/owner/repo or a PR URL`,
     );
   return result;
 }

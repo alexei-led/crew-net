@@ -437,8 +437,12 @@ var WRAPPERS = {
 };
 var FIND_EXEC = new Set(["-exec", "-execdir", "-ok", "-okdir"]);
 var CHANGES_DIR = new Set(["cd", "pushd", "popd"]);
-var GH_CONTEXT_VAR = /^GH_(REPO|HOST)=/;
-var GH_HOST_VAR = /^GH_HOST=/;
+var REPO_CONTEXT_WORD = /GH_(?:HOST|REPO|CONFIG_DIR)|GIT_(?:DIR|WORK_TREE|COMMON_DIR|CONFIG)|^(?:HOME|XDG_CONFIG_HOME)\+?=/;
+var HOST_CONTEXT_WORD = /GH_(?:HOST|CONFIG_DIR)|^(?:HOME|XDG_CONFIG_HOME)\+?=/;
+function setsVariables(words) {
+  const head = words.find((w) => !ASSIGNMENT.test(w.text))?.text;
+  return head === "source" || head === "." || head === "set" && words.some((w) => /^-\w*a/.test(w.text) || w.text === "allexport");
+}
 var SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
 var ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*\+?=/;
 var GH_VALUE_FLAGS = new Set([
@@ -525,13 +529,16 @@ function splitArgs(words) {
   }
   return { flags, positionals };
 }
-var host = (name) => name.toLowerCase().replace(/:\d+$/, "");
+var host = (name) => /:/.test(name) ? undefined : name.toLowerCase();
 function repoFromFlag(value) {
   const parts = value.replace(/^https?:\/\//, "").split("/").filter(Boolean);
   if (parts.length < 2 || parts.length > 3)
     return;
   const repo = parts.slice(-2).join("/");
-  return parts.length === 3 ? { host: host(parts[0]), repo } : { repo };
+  if (parts.length === 2)
+    return { repo };
+  const named = host(parts[0]);
+  return named === undefined ? undefined : { host: named, repo };
 }
 function repoFlag(flags) {
   let found;
@@ -568,12 +575,15 @@ function prMerge(args) {
       targets: [{ ...repo, pr: Number(t.replace("#", "")) }]
     };
   const url = /^https?:\/\/([^/]+)\/([^/]+\/[^/]+)\/pull\/(\d{1,9})(?:[/?#].*)?$/.exec(t);
+  const urlHost = url ? host(url[1]) : undefined;
+  if (url && urlHost === undefined)
+    return denied(`gh pr merge: cannot follow the port in ${t}`);
   if (url)
     return {
       kind: "merge",
       targets: [
         {
-          host: host(url[1]),
+          host: urlHost,
           repo: url[2],
           pr: Number(url[3])
         }
@@ -608,6 +618,8 @@ function apiUrlHost(endpoint) {
   if (!m)
     return;
   const name = host(m[1].replace(/^[^@]*@/, ""));
+  if (name === undefined)
+    return "";
   const api = name.startsWith("api.") ? name.slice(4) : undefined;
   return api === "github.com" || api?.endsWith(".ghe.com") ? api : name;
 }
@@ -619,6 +631,8 @@ function hostnameFlag(flags) {
     if (!f.value || f.value.dynamic || f.value.text === "")
       return { error: "the --hostname value is not literal" };
     found = host(f.value.text);
+    if (found === undefined)
+      return { error: "the --hostname value has a port" };
   }
   return found === undefined ? {} : { host: found };
 }
@@ -667,13 +681,15 @@ function api(args) {
   if (pull) {
     if (readOnly)
       return NONE;
-    const repo = pull[1] === "{owner}" && pull[2] === "{repo}" ? {} : { repo: `${pull[1]}/${pull[2]}` };
-    if (/[{}]/.test(repo.repo ?? ""))
-      return denied(`gh api: cannot read the repo in ${endpoint.text}`);
+    const repo = { repo: `${pull[1]}/${pull[2]}` };
+    if (/[{}]/.test(repo.repo))
+      return denied(`gh api: name the repo in ${endpoint.text}`);
     const named = hostnameFlag(flags);
     if ("error" in named)
       return denied(`gh api: ${named.error}`);
     const urlHost = apiUrlHost(endpoint.text);
+    if (urlHost === "")
+      return denied(`gh api: cannot follow the port in ${endpoint.text}`);
     const target = urlHost === undefined ? named : { host: urlHost };
     return {
       kind: "merge",
@@ -708,7 +724,7 @@ function gh(args, options, depth) {
   if (top.dynamic)
     return denied("gh: the command is not literal");
   const at = args.indexOf(top);
-  const rest = args.slice(at + 1);
+  const rest = [...args.slice(0, at), ...args.slice(at + 1)];
   if (top.text === "pr") {
     const action = splitArgs(rest).positionals[0];
     if (action === undefined)
@@ -823,7 +839,7 @@ function changesRepoContext(commands) {
   return commands.some((words) => {
     const head = words.find((w) => !ASSIGNMENT.test(w.text));
     const name = head?.text.split("/").pop() ?? "";
-    return CHANGES_DIR.has(name) || words.some((w) => GH_CONTEXT_VAR.test(w.text)) || name === "env" && words.some((w) => /^(-C|--chdir)/.test(w.text));
+    return CHANGES_DIR.has(name) || setsVariables(words) || words.some((w) => REPO_CONTEXT_WORD.test(w.text)) || name === "env" && words.some((w) => /^(-C|--chdir)/.test(w.text));
   });
 }
 function detectCommand(words, options, depth) {
@@ -855,8 +871,8 @@ function detectIn(src, options, depth, where) {
   const result = combine(lexed.commands.map((c) => detectCommand(c, options, depth)));
   if (result.kind === "merge" && result.targets.some((t) => t.repo === undefined) && changesRepoContext(lexed.commands))
     return denied(`${where}: changes directory or GH_REPO before a merge; name the PR with -R owner/repo or a URL`);
-  if (result.kind === "merge" && result.targets.some((t) => t.host === undefined) && lexed.commands.some((words) => words.some((w) => GH_HOST_VAR.test(w.text))))
-    return denied(`${where}: sets GH_HOST before a merge; name the host with -R host/owner/repo or a PR URL`);
+  if (result.kind === "merge" && result.targets.some((t) => t.host === undefined) && lexed.commands.some((words) => setsVariables(words) || words.some((w) => HOST_CONTEXT_WORD.test(w.text))))
+    return denied(`${where}: may set GH_HOST before a merge; name the host with -R host/owner/repo or a PR URL`);
   return result;
 }
 function detectMerge(command, options = {}) {

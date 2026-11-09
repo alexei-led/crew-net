@@ -103,10 +103,20 @@ async function defaultRepo(
     try {
       return [{ ...r, ...parseRepoIdentity(r.url) }];
     } catch {
+      // A local path is no GitHub repo; a URL gh may read but crew-net cannot denies.
+      if (/:/.test(r.url))
+        throw new GateFailure(`cannot read remote ${r.name} (${r.url})`);
       return [];
     }
   });
-  const ranked = remotes
+  // gh keeps only the remotes on GH_HOST when it is set.
+  const onHost =
+    ctx.ghHost === undefined
+      ? remotes
+      : remotes.filter((r) => same(r.host, ctx.ghHost as string));
+  if (ctx.ghHost !== undefined && remotes.length > 0 && onHost.length === 0)
+    throw new GateFailure(`no remote on GH_HOST ${ctx.ghHost}`);
+  const ranked = onHost
     .map((r, i) => ({ r, i, rank: REMOTE_RANK[r.name.toLowerCase()] ?? 0 }))
     .sort((a, b) => b.rank - a.rank || a.i - b.i)
     .map((x) => x.r);
@@ -167,6 +177,12 @@ async function resolve(
         "no branch checked out here to find the PR; name it: gh pr merge N",
       );
     branch = tree.branch;
+    // gh follows the branch's upstream (`gh pr checkout` sets refs/pull/N/head).
+    const upstream = await ctx.git.configValue(`branch.${branch}.merge`);
+    if (upstream !== undefined && upstream !== `refs/heads/${branch}`)
+      throw new GateFailure(
+        `branch ${branch} tracks ${upstream}; name the PR: gh pr merge N`,
+      );
   }
   const head = branch;
   const matches = (await where.github.listOpenPulls(repo)).filter(

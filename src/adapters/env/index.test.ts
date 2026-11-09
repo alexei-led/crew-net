@@ -8,6 +8,7 @@ import {
   EnvCommandError,
   type EnvRunner,
   type PolicySource,
+  parseAliases,
 } from "./index";
 
 let dir: string;
@@ -267,4 +268,33 @@ test.each([
   const env = new EnvAdapter({ repoDir: dir, env: vars, home: "/home/me" });
   expect(env.stateDir()).toBe(state);
   expect(env.configDir()).toBe(config);
+});
+
+test.each<[string, [string, string][]]>([
+  ["", []],
+  ["co: pr checkout\n", [["co", "pr checkout"]]],
+  [
+    'm: \'pr merge 123 -R acme/x\'\nq: "!gh pr merge \\"5\\""\n',
+    [
+      ["m", "pr merge 123 -R acme/x"],
+      ["q", '!gh pr merge "5"'],
+    ],
+  ],
+])("gh alias list %p", (out, expected) => {
+  expect([...(parseAliases(out) ?? new Map())]).toEqual(expected);
+});
+
+test.each(["m: |\n  pr merge 5\n", "garbage line\n"])(
+  "gh alias list it cannot read: %p",
+  (out) => {
+    expect(parseAliases(out)).toBeUndefined();
+  },
+);
+
+test("gh alias list failing is unknown", async () => {
+  const env = new EnvAdapter({
+    repoDir: dir,
+    runner: async () => ({ stdout: "", exitCode: 1 }),
+  });
+  expect(await env.ghAliases()).toBeUndefined();
 });

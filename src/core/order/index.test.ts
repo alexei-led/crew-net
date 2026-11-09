@@ -164,6 +164,10 @@ describe("detectMerge: gh pr merge", () => {
       merge({ host: "github.com", repo: "o/r", pr: 5 }),
     ],
     ["gh pr -R o/r merge 5", merge({ repo: "o/r", pr: 5 })],
+    [
+      "gh -R ghe.example.com/o/r pr merge 5",
+      merge({ host: "ghe.example.com", repo: "o/r", pr: 5 }),
+    ],
     ["gh pr --repo o/r merge --auto", merge({ repo: "o/r" })],
     [
       "gh pr merge https://github.com/o/r/pull/7",
@@ -255,6 +259,18 @@ describe("detectMerge: wrappers and chains", () => {
     "GH_HOST=ghe.example.com gh pr merge 5 -R o/r",
     "export GH_HOST=ghe.example.com; gh pr merge 5 -R o/r",
     "env GH_HOST=ghe.example.com gh api -X PUT repos/o/r/pulls/5/merge",
+    "GH_HOST+=ghe.example.com gh pr merge 5 -R o/r",
+    "GH_REPO+=o/blocked gh pr merge 5",
+    "printf -v GH_HOST %s ghe; export GH_HOST; gh pr merge 5 -R o/r",
+    "read GH_REPO < f; export GH_REPO; gh pr merge 5",
+    ". ./ghe.env && gh pr merge 5 -R o/r",
+    "source ./ghe.env; gh pr merge 5",
+    "set -a; gh pr merge 5",
+    "GIT_DIR=../blocked/.git gh pr merge 5",
+    "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.upstream.url GIT_CONFIG_VALUE_0=https://github.com/o/blocked gh pr merge 5",
+    "HOME=/tmp/other gh pr merge 5 -R o/r",
+    "gh pr merge 5 -R ghe.example.com:8443/o/r",
+    "gh pr merge https://ghe.example.com:8443/o/r/pull/5",
     "pushd ../other; gh pr merge 7",
     "(cd ../other; gh pr merge 7)",
     "GH_REPO=acme/other gh pr merge 7",
@@ -336,17 +352,17 @@ describe("detectMerge: gh api", () => {
       merge({ host: "ghe.example.com", repo: "o/r", pr: 5 }),
     ],
     [
-      "gh api --hostname=GHE.example.com -X PUT repos/{owner}/{repo}/pulls/5/merge",
-      merge({ host: "ghe.example.com", pr: 5 }),
-    ],
-    [
       "gh api -X PUT 'repos/o/r/pulls/9/../5/merge?x=1'",
       merge({ repo: "o/r", pr: 5 }),
     ],
     ["gh api -X PUT repos/o/r/pulls/5%2Fmerge", merge({ repo: "o/r", pr: 5 })],
     ["gh api -iXPUT repos/o/r/pulls/1/merge", merge({ repo: "o/r", pr: 1 })],
     ["gh api -iX PUT repos/o/r/pulls/1/merge", merge({ repo: "o/r", pr: 1 })],
-    ["gh api -X PUT repos/{owner}/{repo}/pulls/5/merge", merge({ pr: 5 })],
+    ["gh -X PUT api repos/o/r/pulls/5/merge", merge({ repo: "o/r", pr: 5 })],
+    [
+      "gh --hostname ghe.example.com api -X PUT repos/o/r/pulls/5/merge",
+      merge({ host: "ghe.example.com", repo: "o/r", pr: 5 }),
+    ],
     [
       "gh api repos/o/r/pulls/5/merge -H 'X-HTTP-Method-Override: PUT'",
       merge({ repo: "o/r", pr: 5 }),
@@ -378,6 +394,8 @@ describe("detectMerge: gh api", () => {
     "gh api -X PUT repos/$R/pulls/5/merge",
     "gh api -X PUT repos/o/r/pulls/$N/merge",
     "gh api --hostname $H -X PUT repos/o/r/pulls/5/merge",
+    "gh api -X PUT repos/{owner}/{repo}/pulls/5/merge",
+    "gh api -X PUT https://ghe.example.com:8443/api/v3/repos/o/r/pulls/5/merge",
   ])("denies %s", (command) => {
     expect(detectMerge(command).kind).toBe("deny");
   });

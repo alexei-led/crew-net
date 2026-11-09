@@ -144,13 +144,20 @@ describe("real git", () => {
     });
   });
 
-  test("remotes list each url with gh's resolved default, in config order", async () => {
+  test("remotes list each url with gh's resolved default, as git remote -v lists them", async () => {
     expect(await adapter.remotes()).toEqual([]);
     git("remote", "add", "origin", "git@github.com:me/app.git");
     git("remote", "add", "upstream", "https://github.com/acme/app.git");
     git("config", "remote.upstream.gh-resolved", "base");
     git("config", "--add", "remote.origin.pushurl", "git@github.com:x/y.git");
+    git(
+      "config",
+      "url.https://github.com/acme/.insteadOf",
+      "https://mirror.example/",
+    );
+    git("remote", "add", "mirror", "https://mirror.example/lib.git");
     expect(await adapter.remotes()).toEqual([
+      { name: "mirror", url: "https://github.com/acme/lib.git" },
       { name: "origin", url: "git@github.com:me/app.git" },
       {
         name: "upstream",
@@ -158,6 +165,10 @@ describe("real git", () => {
         ghResolved: "base",
       },
     ]);
+    expect(await adapter.configValue("remote.upstream.gh-resolved")).toBe(
+      "base",
+    );
+    expect(await adapter.configValue("branch.main.merge")).toBeUndefined();
   });
 
   test("checkout of a worktree of a bare clone names the bare repo as its clone", async () => {

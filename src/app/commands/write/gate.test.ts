@@ -11,6 +11,7 @@ import {
   harness,
   pull,
   REPO,
+  ROOT,
 } from "./fixtures/fakes";
 import {
   type GateResult,
@@ -401,6 +402,65 @@ describe("hosts and default repos", () => {
       decision: "deny",
       checked: [`${expected}#10`],
     });
+  });
+});
+
+describe("what gh would merge differs from what the gate reads", () => {
+  test("a remote crew-net cannot read denies instead of being skipped", async () => {
+    const h = harness({
+      git: new FakeGit(
+        [],
+        [
+          { name: "origin", url: "git@github.com:me/app.git" },
+          { name: "upstream", url: "git://github.com/acme/app.git" },
+        ],
+      ),
+    });
+    h.github.add("me/app", pull(10));
+    expect(await run(h, "gh pr merge 10")).toMatchObject({
+      decision: "deny",
+      failed: true,
+    });
+  });
+
+  test("with GH_HOST in the environment gh keeps only that host's remotes", async () => {
+    const GHE = "ghe.example.com";
+    const h = harness({
+      ghHost: GHE,
+      git: new FakeGit(
+        [],
+        [
+          { name: "origin", url: "git@github.com:me/app.git" },
+          { name: "ghe", url: `git@${GHE}:acme/app.git` },
+        ],
+      ),
+    });
+    h.github.add("me/app", pull(10));
+    const ghe = new FakeGitHub();
+    ghe.add(REPO, pull(10, { body: deps("#1") })).add(REPO, pull(1));
+    h.hosts.set(GHE, ghe);
+    expect(await run(h, "gh pr merge 10")).toMatchObject({
+      decision: "deny",
+      checked: [`${GHE}/acme/app#10`],
+    });
+  });
+
+  test("a current branch that tracks another PR's head is denied", async () => {
+    const git = new FakeGit([{ path: ROOT, branch: BRANCH }]);
+    git.config.set(`branch.${BRANCH}.merge`, "refs/pull/123/head");
+    const h = harness({ git });
+    h.github.add(REPO, pull(40, { headRef: BRANCH }));
+    const result = await run(h, "gh pr merge --squash");
+    expect(result).toMatchObject({ decision: "deny", failed: true });
+    expect(result.reasons[0]).toContain("refs/pull/123/head");
+  });
+
+  test("a current branch that tracks its own name is fine", async () => {
+    const git = new FakeGit([{ path: ROOT, branch: BRANCH }]);
+    git.config.set(`branch.${BRANCH}.merge`, `refs/heads/${BRANCH}`);
+    const h = harness({ git });
+    h.github.add(REPO, pull(40, { headRef: BRANCH }));
+    expect(await run(h, "gh pr merge")).toMatchObject({ decision: "allow" });
   });
 });
 

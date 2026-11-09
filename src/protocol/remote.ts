@@ -17,7 +17,7 @@ export function parseRepoIdentity(remote: string): RemoteRepo {
   } else {
     // scheme://[userinfo@]host[:port]/path, without query or fragment.
     const url = remote.match(
-      /^(?:https?|ssh):\/\/(?:[^/@\s]*@)?([^/:@\s]+)(?::\d+)?\/([^?#\s]*)$/i,
+      /^(?:https?|ssh):\/\/(?:[^/@\s]*@)?([^/:@\s]+)(?::\d*)?\/([^?#\s]*)(?:[?#]\S*)?$/i,
     );
     if (!url) throw new Error("Unsupported origin remote URL");
     host = url[1] ?? "";

@@ -244,6 +244,7 @@ export class FakeGit implements GitPort {
       checkout: async () => this.checkoutOf(dir),
       fetch: () => this.fetch(),
       remotes: () => this.remotes(),
+      configValue: (key) => this.configValue(key),
       worktreeBranches: () => this.worktreeBranches(),
       remoteBranches: () => this.remoteBranches(),
       mergeBase: (a, b) => this.mergeBase(a, b),
@@ -278,6 +279,12 @@ export class FakeGit implements GitPort {
 
   async remotes(): Promise<GitRemote[]> {
     return this.remoteList;
+  }
+
+  /** git config values by key. */
+  readonly config = new Map<string, string>();
+  async configValue(key: string): Promise<string | undefined> {
+    return this.config.get(key);
   }
 
   async worktreeBranches(): Promise<WorktreeBranch[]> {
@@ -335,6 +342,10 @@ export class FakeEnv implements EnvPort {
     this.identityDirs.push(dir);
     if (this.identity instanceof Error) throw this.identity;
     return this.identity;
+  }
+  aliases: ReadonlyMap<string, string> | undefined;
+  async ghAliases(): Promise<ReadonlyMap<string, string> | undefined> {
+    return this.aliases;
   }
   async managedHooksOnly(): Promise<ManagedHooksPolicy> {
     return this.policy;

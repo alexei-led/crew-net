@@ -161,33 +161,35 @@ export class GitAdapter implements GitPort {
   }
 
   async remotes(): Promise<GitRemote[]> {
-    // Exit 1: no such keys. -z: `key\nvalue\0` records.
-    const { stdout } = await this.run(
-      ["config", "-z", "--get-regexp", "^remote\\..*\\.(url|gh-resolved)$"],
+    // `git remote -v` applies url.<x>.insteadOf, as gh sees the remotes.
+    const listed = await this.run(["remote", "-v"]);
+    const urls = new Map<string, string>();
+    for (const line of listed.stdout.split("\n")) {
+      const m = /^(\S+)\t(.*) \(fetch\)$/.exec(line);
+      if (m && !urls.has(m[1] as string))
+        urls.set(m[1] as string, m[2] as string);
+    }
+    const resolved = await this.run(
+      ["config", "-z", "--get-regexp", "^remote\\..*\\.gh-resolved$"],
       [0, 1],
     );
-    const byName = new Map<string, { url?: string; ghResolved?: string }>();
-    for (const record of stdout.split("\0")) {
-      const m = /^remote\.(.+)\.(url|gh-resolved)\n([\s\S]*)$/.exec(record);
-      if (!m) continue;
-      const name = m[1] as string;
-      const value = m[3] as string;
-      const entry = byName.get(name) ?? {};
-      if (m[2] === "url") entry.url ??= value;
-      else entry.ghResolved = value;
-      byName.set(name, entry);
+    const ghResolved = new Map<string, string>();
+    for (const record of resolved.stdout.split("\0")) {
+      const m = /^remote\.(.+)\.gh-resolved\n([\s\S]*)$/.exec(record);
+      if (m) ghResolved.set(m[1] as string, m[2] as string);
     }
-    return [...byName].flatMap(([name, e]) =>
-      e.url === undefined
-        ? []
-        : [
-            {
-              name,
-              url: e.url,
-              ...(e.ghResolved ? { ghResolved: e.ghResolved } : {}),
-            },
-          ],
+    return [...urls].map(([name, url]) => {
+      const value = ghResolved.get(name);
+      return { name, url, ...(value ? { ghResolved: value } : {}) };
+    });
+  }
+
+  async configValue(key: string): Promise<string | undefined> {
+    const result = await this.run(
+      ["config", "--get", "--end-of-options", key],
+      [0, 1],
     );
+    return result.exitCode === 0 ? result.stdout.replace(/\n$/, "") : undefined;
   }
 
   async worktreeBranches(): Promise<WorktreeBranch[]> {

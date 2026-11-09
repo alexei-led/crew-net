@@ -101,6 +101,29 @@ export class EnvCommandError extends Error {
   }
 }
 
+/**
+ * `gh alias list` output: `name: expansion` per line, YAML-quoted when
+ * needed. Undefined when any line does not read that way: the caller then
+ * treats every unknown gh command as a possible merge.
+ */
+export function parseAliases(
+  out: string,
+): ReadonlyMap<string, string> | undefined {
+  const aliases = new Map<string, string>();
+  for (const line of out.split("\n")) {
+    if (line.trim() === "") continue;
+    const m = /^([^\s:]+):\s+(.*)$/.exec(line);
+    if (!m) return undefined;
+    let value = (m[2] as string).trim();
+    if (/^'.*'$/.test(value)) value = value.slice(1, -1).replaceAll("''", "'");
+    else if (/^".*"$/.test(value))
+      value = value.slice(1, -1).replace(/\\(["\\])/g, "$1");
+    else if (/^["'|>]/.test(value)) return undefined;
+    aliases.set(m[1] as string, value);
+  }
+  return aliases;
+}
+
 type Lookup = { found: false } | { found: true; value: ManagedHooksPolicy };
 
 const missing = (error: unknown): boolean =>
@@ -170,6 +193,16 @@ export class EnvAdapter implements EnvPort {
     return parseRepoIdentity(
       await this.command("git", ["remote", "get-url", "origin"], dir),
     );
+  }
+
+  async ghAliases(): Promise<ReadonlyMap<string, string> | undefined> {
+    let out: string;
+    try {
+      out = await this.command("gh", ["alias", "list"]);
+    } catch {
+      return undefined;
+    }
+    return parseAliases(out);
   }
 
   /** XDG base directory: the variable when it is absolute, else the default under home. */

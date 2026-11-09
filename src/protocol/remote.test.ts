@@ -25,6 +25,10 @@ test.each([
   ["https://GitHub.Example/Owner/my.repo/", "github.example", "Owner/my.repo"],
   ["git@acme.ghe.com:acme/app.git", "acme.ghe.com", "acme/app"],
   ["ssh://git@ssh.github.com:443/owner/repo.git", "github.com", "owner/repo"],
+  ["https://github.com/owner/repo?x=1", "github.com", "owner/repo"],
+  ["https://github.com/owner/repo.git#frag", "github.com", "owner/repo"],
+  ["https://github.com:/owner/repo", "github.com", "owner/repo"],
+  ["https://user:pa%40ss@github.com/owner/repo", "github.com", "owner/repo"],
 ])("repo identity: %s", (remote, host, repo) => {
   expect(parseRepoIdentity(remote)).toEqual({ host, repo });
 });
