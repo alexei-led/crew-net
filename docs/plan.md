@@ -1,7 +1,8 @@
 # Plan: crew-net
 
 One release with everything in the design. Steps are build order, not
-releases. [design.md](design.md) wins over this plan. Inside a module the implementer picks the details; a change to the
+releases. [design.md](design.md) wins over this plan. Inside a module the
+implementer picks the details; a change to the
 GitHub protocol (§7) or to a dependency rule (§19) needs a design update first.
 
 ## Ground rules
