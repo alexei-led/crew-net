@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.0 (unreleased)
+## 0.3.0 - 2026-11-10
 
 A quiet screen, and a pane for the detail.
 
