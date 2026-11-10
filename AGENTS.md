@@ -24,6 +24,7 @@ crew-net is one TypeScript CLI (`crew-net`) and a Claude Code plugin. Read
 - `bun install --frozen-lockfile`: install dependencies once.
 - `make check`: typecheck, lint, tests, dependency rules, plugin tests. Run it before each commit.
 - `make test-fast`: only the test files affected by your changes against `origin/main`. Use it while you work.
+- The suite runs in seconds. `make test` kills a run over 120 s with all its workers (`scripts/guard.ts`). Run each test file alone with `bun test <file>` to find the stuck one. A test must not leave a process, timer or loop running when it fails.
 - `make build`: build `dist/crew-net.js`.
 - `make plugin`: rebuild the plugin bundles. Commit them with changes under `src/` or `plugin/hooks/`. See [plugin/README.md](plugin/README.md#how-it-ships).
 - `make fmt`: apply biome formatting.

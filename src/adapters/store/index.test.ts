@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { spawn, spawnSync } from "node:child_process";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
   existsSync,
@@ -13,7 +13,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { setImmediate } from "node:timers/promises";
+import { setTimeout as sleep } from "node:timers/promises";
 import type {
   JobOutcome,
   OutboundRequest,
@@ -42,6 +42,8 @@ beforeEach(() => {
   now = T0;
 });
 afterEach(() => {
+  // A child left by a failed or timed-out test must not outlive it.
+  for (const proc of children.splice(0)) proc.kill("SIGKILL");
   rmSync(join(dir, ".."), { recursive: true, force: true });
 });
 
@@ -96,6 +98,8 @@ function plantLock(path: string, pid: number, expiresAtMs: number): string {
   return token;
 }
 
+const children: ChildProcess[] = [];
+
 /** A store in a separate process that starts on a signal, so several can race. */
 function child(code: string) {
   const script = `import { FileStoreAdapter } from ${JSON.stringify(new URL("./index.ts", import.meta.url).href)};
@@ -107,6 +111,9 @@ function child(code: string) {
   const proc = spawn(process.execPath, ["-e", script], {
     stdio: ["pipe", "pipe", "pipe"],
   });
+  children.push(proc);
+  // A child that died before the start signal is reported by its exit code, not EPIPE.
+  proc.stdin.on("error", () => {});
   let output = "";
   let stderr = "";
   let readyResolve: () => void = () => {};
@@ -415,7 +422,7 @@ describe("repos, cursors, kv", () => {
         expect(value).toMatch(/^[ab]\d+x{20000}$/);
         reads++;
       }
-      await setImmediate();
+      await sleep(1);
     }
     await completed;
     expect(reads).toBeGreaterThan(0);
