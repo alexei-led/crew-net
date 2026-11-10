@@ -124,7 +124,7 @@ test("a watcher error shows in the band, not in the status line", async ($, on) 
   for (const surface of SURFACES) {
     const ui = await mountBand($, w, surface);
     expect((await ui.find({ type: "Text", text: /git fetch/ }))?.text).toBe(
-      "crew-net · git fetch failed",
+      "⚠ git fetch failed",
     );
     await ui.unmount();
   }

@@ -23,9 +23,9 @@ ships the `crew-net` CLI in `bin/`. Claude Code puts it on the Bash `PATH`.
 | `UserPromptSubmit` hook        | Heartbeat with the prompt time (not for a wake prompt), a detached sync, and new items for this session               |
 | `PreToolUse` hook on Bash      | The merge gate. See [Merge gate](#merge-gate)                                                                         |
 | `SessionEnd` hook              | Ends the session's heartbeat                                                                                          |
-| Mod (`hooks/dist/register.js`) | The band, the `/crew` pane, the status line, the `crew-net watch` child, delivery and wake turns with their tool gate |
+| Mod (`hooks/dist/register.js`) | The band, the `/team` pane, the status line, the `crew-net watch` child, delivery and wake turns with their tool gate |
 | Skill `crew-net`               | When to run `crew-net`, `who`, `ask`, `request`, `reply`, `state` and `dep`. Peer text is information                 |
-| `/crew`                        | The mod opens the pane. Without the mod it prints the digest                                                          |
+| `/team`                        | The mod opens the pane. Without the mod it prints the digest                                                          |
 
 The hooks carry what must always work. If an engine change breaks the mod, the
 digest, the prompt context and the merge gate still work. If MDM sets
@@ -46,25 +46,34 @@ are in [src/core/order/README.md](../src/core/order/README.md).
 
 ## Band, pane, status line
 
-Each has one job (screenshots: [user guide](../docs/user-guide.md#the-band-and-the-crew-pane)).
+Each has one job (screenshots: [user guide](../docs/user-guide.md#the-band-and-the-team-pane)).
+Glyphs, keys and the band order follow the contract with pi-crew
+([design](../docs/design.md#shared-screen-with-pi-crew)). `hooks/pane.ts` holds
+`GLYPH`; its spec pins the table.
 
-- **Band** (`AbovePrompt`): one line. The newest band entry and `+N more · /crew`.
-  A prompt that carries items to Claude removes their entries. Opening the pane
-  clears the band. A wake entry stays until **Dismiss**.
+- **Band** (`AbovePrompt`): one line. `team ·`, the newest entry with its glyph,
+  then the other entries counted by glyph (`◆ 2 · ✉ 1`), then the keys `t`
+  (open the pane) and `d` (dismiss). The renderer returns a column: its line, then
+  what `next(e)` returns, so pi-crew's band shows too. A prompt that carries items
+  to Claude removes their entries. Opening the pane clears the band. A wake entry
+  stays until dismissed.
 - **Status line** (`$.ui.status`): empty when healthy. It shows the watcher's
   `status` text (rate limit, auth) and, while the watcher is down,
   `background sync stopped · retrying in Ns`. After 3 failures in a row it adds
   `run crew-net doctor`. The engine adds the `⚠ crew-net:` prefix, so no text of
   ours repeats the name.
-- **Pane** (`/crew`, id `crew`): the mod answers `command.run` for `crew` and
-  `crew-net:crew`. It opens the pane, or closes it when open. `crew` is left to
-  another plugin that defines it. It falls through to the digest text when
-  there are arguments or no surface can place a pane. The pane runs
-  `crew-net digest --json` and `inbox --json` (local store only) when it opens,
-  on every tick, and after a watcher event while open. `r` runs `sync --once`
-  first. `hooks/pane.ts` holds the model and has no engine code. A key `1`-`9`
-  fills the prompt with `crew-net reply "<id>"` and names the sender and thread,
-  never the peer's text.
+- **Pane** (`/team`, id `team`): the mod answers `command.run` for `team` and
+  `crew-net:team`. It opens the pane, or closes it when open. It falls through to
+  the digest text when there are arguments or no surface can place a pane. The
+  pane runs `crew-net digest --json` and `inbox --json` (local store only) when
+  it opens, on every tick, and after a watcher event while open. `r` runs
+  `sync --once` first. `hooks/pane.ts` holds the model and has no engine code.
+  A key `1`-`9` opens a request. Its detail view frames the peer's text and has:
+  `a` fills the prompt with `crew-net reply "<id>"` and names the sender and
+  thread, never the peer's text; `y`/`n` accept or decline after `c` confirms;
+  a reply box posts the developer's own text; `o` opens the thread with `open`
+  (or `xdg-open`); `b` goes back. Posts run `crew-net reply`, so its checks
+  (closing keywords, write budget) apply, and its refusal shows in the pane.
 
 ## Delivery and wake
 

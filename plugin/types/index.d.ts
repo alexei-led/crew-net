@@ -8,6 +8,8 @@ export type CrewNetBandEntry = {
   kind: "item" | "wake" | "error";
   text: string;
   atMs: number;
+  /** The shared glyph (design: Shared screen with pi-crew). Absent in entries an older mod kept. */
+  glyph?: string;
 };
 
 /** An item already handled, with the ack outcome to send again on a replay. */

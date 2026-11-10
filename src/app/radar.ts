@@ -437,7 +437,8 @@ async function landedOn(
       {
         repo: mine.repo,
         // Never an email in findings; a merge commit names whoever merged.
-        owner: c.loginHint ?? "someone",
+        // Unknown stays empty: the text then names only the PR.
+        owner: c.loginHint ?? "",
         number,
         base: mine.base,
         changedPaths: c.paths,

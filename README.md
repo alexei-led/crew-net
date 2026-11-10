@@ -26,7 +26,7 @@ By then the work is done twice, or done in the wrong order.
 
 | You get                     | How it shows up                                                                  |
 | --------------------------- | -------------------------------------------------------------------------------- |
-| **Awareness**               | A short digest of who works on what in the repo, at session start and in `/crew` |
+| **Awareness**               | A short digest of who works on what in the repo, at session start and in `/team` |
 | **Early collision warning** | `⚠ conflicts with #2310` while both branches are still in progress               |
 | **Requests between agents** | `crew-net ask` and `crew-net request` post a PR comment. The other agent answers |
 | **Merge order**             | `crew-net dep add #2301`: this PR merges only after #2301 has merged             |
@@ -56,11 +56,14 @@ Inbox   maria asks on #2310: "Does #2310 need the new column first?"  12 min
 
 ## In your session
 
-![The /crew pane lists the request to answer, radar findings, your PRs and others' work.](docs/img/crew-pane.svg)
+![The /team pane lists the request that needs you, radar findings, merge order, your PRs and the team's work.](docs/img/team-pane.svg)
 
 A healthy session shows nothing extra. When an item arrives, one line appears above
-the prompt. `/crew` opens this pane. Press `1` and your agent drafts the answer.
-Details are in the [user guide](docs/user-guide.md#the-band-and-the-crew-pane).
+the prompt. `/team` opens this pane. Press `1` to open a request, then `a` and your
+agent drafts the answer, or accept, decline and reply right there. Works beside
+[pi-crew](https://github.com/alexei-led/pi-crew), which leads your own agents on
+this laptop: same glyphs, same keys.
+Details are in the [user guide](docs/user-guide.md#the-band-and-the-team-pane).
 
 ## Start alone
 

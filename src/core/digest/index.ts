@@ -378,11 +378,12 @@ export function compose(input: DigestInput, nowMs: number): Digest {
   };
 }
 
+/** `now`, `4m`, `2h`, `3d`: the age format pi-crew uses too (design: Shared screen with pi-crew). */
 export function formatAge(ageMs: number): string {
-  if (ageMs < MINUTE) return "<1 min";
-  if (ageMs < HOUR) return `${Math.floor(ageMs / MINUTE)} min`;
-  if (ageMs < DAY) return `${Math.floor(ageMs / HOUR)} h`;
-  return `${Math.floor(ageMs / DAY)} d`;
+  if (ageMs < MINUTE) return "now";
+  if (ageMs < HOUR) return `${Math.floor(ageMs / MINUTE)}m`;
+  if (ageMs < DAY) return `${Math.floor(ageMs / HOUR)}h`;
+  return `${Math.floor(ageMs / DAY)}d`;
 }
 
 const INBOX_VERBS: Record<string, string> = {

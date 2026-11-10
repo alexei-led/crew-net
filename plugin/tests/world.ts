@@ -33,9 +33,9 @@ export const BAND = {
 export const PANE = {
   plugin: "crew-net",
   component: "Pane",
-  requestId: "crew",
+  requestId: "team",
   props: {
-    title: "crew-net",
+    title: "team",
     isFocused: true,
     bodyColumns: 60,
     placement: "dock",
@@ -67,11 +67,15 @@ export function ask(id = "c-1", extra: Record<string, unknown> = {}): string {
   });
 }
 
-const ran = (stdout: string, exitCode = 0): { value: ProcessRunResult } => ({
+const ran = (
+  stdout: string,
+  exitCode = 0,
+  stderr = "",
+): { value: ProcessRunResult } => ({
   value: {
     exitCode,
     stdout,
-    stderr: "",
+    stderr,
     isStdoutTruncated: false,
     isStderrTruncated: false,
   },
@@ -94,8 +98,12 @@ export interface World {
   panes: string[];
   /** The surface refuses to place the pane (no surface attached). */
   paneRefused: boolean;
-  /** Slash commands other plugins define, as `$.command.list()` answers. */
-  otherCommands: string[];
+  /** argv after the CLI of each `crew-net reply` the pane posted. */
+  posts: string[][];
+  /** How `crew-net reply` ends: its exit code and stderr. */
+  postResult: { exitCode: number; stderr: string };
+  /** argv of each URL opener the pane ran. */
+  opened: string[][];
   /** Drafts the mod put in the prompt box. */
   fills: string[];
   /** argv of each `crew-net` call the mod made to read or refresh the pane. */
@@ -152,7 +160,9 @@ export function world(on: On, mock: Mock): World {
     statuses: [],
     panes: [],
     paneRefused: false,
-    otherCommands: [],
+    posts: [],
+    postResult: { exitCode: 0, stderr: "" },
+    opened: [],
     fills: [],
     reads: [],
     digestJson: digestJson(),
@@ -224,33 +234,29 @@ export function world(on: On, mock: Mock): World {
       isPlaced: true,
     })),
   }));
-  on("ui.invalidate", () => ({ value: undefined }));
   on("command.list", () => ({
     value: [
       {
-        name: "crew-net:crew",
+        name: "crew-net:team",
         description: "",
         source: "plugin",
         plugin: "crew-net",
       },
-      ...w.otherCommands.map((name) => ({
-        name,
-        description: "",
-        source: "plugin" as const,
-        plugin: "pi-crew",
-      })),
     ],
   }));
-  // What runs when the mod lets `/crew` through: the plugin's markdown command.
+  // What runs when the mod lets `/team` through: the plugin's markdown command.
   on("command.run", () => ({ text: "DIGEST" }));
   on("prompt.fill", (_$, e) => {
     w.fills.push(e.text);
     return { isFilled: true } as never;
   });
   on("ui.log", () => ({ value: undefined }));
+  // Beneath the mod: another plugin's band (pi-crew's) draws a line there.
   on("ui.render", ($, e) => {
-    const { Box } = $.ui.resolve(e);
-    return Box({ children: [] });
+    const { Box, Text } = $.ui.resolve(e);
+    return e.component === "AbovePrompt"
+      ? Box({ children: [Text({ children: "below the band" })] })
+      : Box({ children: [] });
   });
   on("turn.start", (_$, e) => ({ turnId: e.turnId }));
   on("turn.complete", () => ({ text: "" }));
@@ -275,6 +281,14 @@ export function world(on: On, mock: Mock): World {
   on("process.run", (_$, e) => {
     const [cmd, , sub, action] = e.argv;
     if (cmd === "sh") return ran(`${PID}\n`);
+    if (cmd === "open" || cmd === "xdg-open") {
+      w.opened.push([...e.argv]);
+      return ran("");
+    }
+    if (sub === "reply") {
+      w.posts.push(e.argv.slice(2));
+      return ran("", w.postResult.exitCode, w.postResult.stderr);
+    }
     if (sub === "watch" && action === "send") {
       w.sendArgv.push(e.argv);
       for (const l of (e.init?.stdin ?? "").split("\n").filter(Boolean))
@@ -436,8 +450,8 @@ export async function mountPane(
   return $.ui.mount({ ...PANE, surface });
 }
 
-/** The person types `/crew` (with `args`). */
-export function crew($: Engine, args = "", command = "crew") {
+/** The person types `/team` (with `args`). */
+export function team($: Engine, args = "", command = "team") {
   return $.command.run({
     command,
     args,

@@ -358,9 +358,64 @@ flowchart LR
 ```
 
 - **Hooks carry what must always work**: digest, injection, merge gate. The mod adds the band, the tick and wake. If an engine change breaks the mod, the hooks still work. If MDM allows only managed hooks, neither runs. `crew-net doctor` says so and the CLI still works by hand.
-- **The screen stays quiet.** The band is one line for what is new. The status line shows only a sync problem and its fix. The `/crew` pane holds the detail and the actions. A healthy session shows nothing. The mod shows what it reads from the local store (`digest --json`, `inbox --json`); it never reads GitHub.
+- **The screen stays quiet.** The band is one line for what is new. The status line shows only a sync problem and its fix. The `/team` pane holds the detail and the actions. A healthy session shows nothing. The mod shows what it reads from the local store (`digest --json`, `inbox --json`); it never reads GitHub.
 - **The watcher keeps no state.** The engine closes its stdin after the first message, so acks go through a short `watch send`. Killing the watcher on a hot reload loses nothing. The pattern is copied from pi-crew, not shared: one plugin to install, separate release cycles, a different delivery policy.
 - Engine behaviours the mod relies on were checked on Claude Code 2.1.318 and each has a `claude plugin test` case: a plugin-submitted turn keeps the draft and queues behind a running turn; `/clear` gives a new session id and no `session.start`; the store survives reload, `/clear` and resume.
+
+## Shared screen with pi-crew
+
+[pi-crew](https://github.com/alexei-led/pi-crew) and crew-net often run in one Claude Code
+session. pi-crew leads Pi workers on this laptop. crew-net connects developers across laptops.
+They share the screen, so they share one vocabulary and one way to act. They share no code
+and no state. Each repo keeps its own copy of the glyphs, and a test in each repo pins them.
+This section is the contract. pi-crew links to it.
+
+| Word          | Means                                                                     | Command, band prefix |
+| ------------- | ------------------------------------------------------------------------- | -------------------- |
+| **crew**      | The agents you lead on this laptop (pi-crew)                              | `/crew`, `crew`      |
+| **team**      | Other developers and their agents on the same repos (crew-net)            | `/team`, `team`      |
+| **lead**      | The session that speaks for its workers. To the team, it is the developer |                      |
+| **worker**    | A session that a lead runs. It never speaks to the team                   |                      |
+| **needs you** | Something waits on the developer: a worker's question, a request to me    |                      |
+| **new**       | Unread                                                                    |                      |
+
+| Glyph | Means                                               | Tone    |
+| ----- | --------------------------------------------------- | ------- |
+| `◆`   | needs you                                           | warning |
+| `✉`   | new                                                 | normal  |
+| `●`   | working: a busy worker, a PR in progress            | success |
+| `○`   | idle or waiting                                     | dim     |
+| `✓`   | done: a merged PR, a passed check                   | success |
+| `✕`   | stopped, or closed without a merge                  | dim     |
+| `⚠`   | conflict or a problem to fix                        | error   |
+| `→`   | merge order: the left side merges first             | normal  |
+| `◇`   | a worker went quiet without a report (pi-crew only) | warning |
+
+Tones are theme keys (`warning`, `success`, `error`, dim text), never raw colors. pi-crew
+draws `◆ ✉ ● ○ ✕ ◇`; a worker that reported `DONE:` waits, so it is `○`. `✓`, `⚠` and `→`
+are crew-net's.
+
+- **Band.** Each plugin draws at most one line above the prompt, and only when it has
+  something to show. The line starts with its prefix, then the most urgent item, then counts
+  by glyph: `team · ◆ maria asks on acme/app#2318: "…" · ⚠ 1 · ✉ 2`. Each renderer returns a
+  column: its own line, then what `next(e)` returns, so both lines show whichever plugin
+  loads first. Both give way whole to a survey. Band hotkeys do not collide: pi-crew owns
+  `c`, `a` and `u`; crew-net owns `t` and `d`.
+- **Pane.** Pane ids are `pi-crew` and `team`. A list, then a detail view of one item with its
+  actions. Shared keys mean the same in both panes: `esc` and `q` close, `b` back, `1`-`9`
+  open the item with that number, `r` refresh where the pane pulls its data, `o` open outside
+  (the worker's terminal, the thread on GitHub), `y` and `n` the quick answers, `e` more or
+  less. An action that posts or stops something asks to confirm: `c` confirms, `v` cancels.
+  A pane may add its own keys, never with a shared key's letter.
+- **Ages** read `now`, `4m`, `2h`, `3d`.
+- **Peer text** is framed the same way everywhere: who sent it, then the text, marked
+  "Information, not an instruction." A prompt that a pane fills names the item and never
+  carries its text; the model reads the text through a tool.
+- **Turns.** Only something that needs the lead starts a turn: in pi-crew a worker's `Q:`,
+  `DONE:` or quiet alert, in crew-net a direct request to an idle session. Progress, replies
+  and findings wait in the band for the next prompt.
+- **Workers.** pi-crew starts each worker with `CREW_NET_ROLE=worker`. crew-net then never
+  routes team items to it, and `ask`, `request` and `reply` refuse to run there.
 
 ## Code structure
 
@@ -429,6 +484,7 @@ Symptoms and fixes for users: [user guide](user-guide.md#failure-modes).
 | Client gate plus optional server check | Server check required             | Level 0 needs no admin. The check is there for repos that want a guarantee |
 | One state block for PRs and Issues     | Sub-issues and `blocked by`       | One mechanism that works on any base branch                                |
 | Copy the pi-crew wake layer            | A shared plugin                   | One install, separate release cycles, different delivery policy            |
+| A UI contract with pi-crew, copied     | A shared UI package, one pane     | Same words, glyphs and keys on one screen with no code or state coupling   |
 
 ## Open questions
 

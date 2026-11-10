@@ -28,6 +28,7 @@ import type {
 } from "../types/index";
 import {
   backoffMs,
+  bandGlyph,
   bandText,
   frame,
   inRoot,
@@ -41,11 +42,18 @@ import {
 } from "./mod";
 import {
   answerPrompt,
+  type Decision,
+  decisionArgs,
+  detailView,
+  FRAME,
+  GLYPH,
   PANE_ID,
   type PaneData,
   paneView,
   parseDigest,
   parseRequests,
+  type Request,
+  replyArgs,
   type Tone,
 } from "./pane";
 
@@ -124,6 +132,10 @@ let lastComposerText: string | undefined;
 /** What the pane shows: the last refresh. A reload loses it and the pane loads it again. */
 let paneData: PaneData | undefined;
 let paneRefreshing = false;
+/** The pane's view: the request open in detail, a decision waiting to be confirmed, the last action's result. */
+let paneSelected: string | undefined;
+let paneConfirm: Decision | undefined;
+let paneNote: { text: string; tone: Tone } | undefined;
 
 function ignore(): void {}
 
@@ -155,12 +167,13 @@ function bandEntry(
   kind: CrewNetBandEntry["kind"],
   text: string,
   atMs: number,
+  glyph?: string,
 ): (s: CrewNetSession) => CrewNetSession {
   return (s) => ({
     ...s,
     band: [
       ...s.band.filter((b) => !(b.id === id && b.kind === kind)),
-      { id, kind, text, atMs },
+      { id, kind, text, atMs, ...(glyph === undefined ? {} : { glyph }) },
     ].slice(-BAND_KEEP),
   });
 }
@@ -296,7 +309,13 @@ async function onItem($: Engine, r: Run, event: ItemEvent): Promise<void> {
       actions.includes("wake") && (await wake($, pending)) ? "wake" : "context";
   }
   await change($, (x) => ({
-    ...bandEntry(item.id, "item", bandText(item, outcome), nowMs)(x),
+    ...bandEntry(
+      item.id,
+      "item",
+      bandText(item, outcome),
+      nowMs,
+      bandGlyph(item),
+    )(x),
     seen: [...x.seen, { id: item.id, outcome }].slice(-SEEN_KEEP),
   }));
   await send($, r, [{ type: "ack", id: item.id, outcome }]);
@@ -410,12 +429,6 @@ async function refresh($: Engine, sync = false): Promise<void> {
     paneRefreshing = false;
   }
   $.ui.invalidate("ui.render");
-}
-
-/** True when a plugin other than crew-net defines a slash command named `crew`. */
-async function otherOwnsCrew($: Engine): Promise<boolean> {
-  const commands = await $.command.list();
-  return commands.some((c) => c.name === "crew" && c.plugin !== "crew-net");
 }
 
 /** A watcher event may have changed what the pane shows; look again only while it is open. */
@@ -644,34 +657,60 @@ export function register(on: On, options: PluginOptions): void {
       : { deny: "crew-net wake turn: the tool gate failed; refused" },
   );
 
-  // The band: one line for what is new, the rest is in the pane.
+  // The band: one line for what is new, the rest is in the pane. It sits above
+  // what the next renderer draws, so another plugin's band (pi-crew's) still
+  // shows (design: Shared screen with pi-crew).
   on("ui.render", { component: "AbovePrompt" }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e);
     const line = ticker((await readSession($)).band);
-    if (line === undefined) return next(e);
+    const below = await next(e);
+    if (line === undefined) return below;
     const { Box, Button, Text } = $.ui.resolve(e);
-    // The text shrinks and is cut with an ellipsis; the way to the pane and
-    // the button keep their width.
+    // The text shrinks and is cut with an ellipsis; the counts and the
+    // buttons keep their width.
     const fixed = { flexShrink: 0 };
-    return Box({
+    const rest = line.rest.map((r) => `${r.glyph} ${r.count}`).join(" · ");
+    const color =
+      line.error || line.glyph === GLYPH.problem
+        ? { color: "error" as const }
+        : line.glyph === GLYPH.needsYou
+          ? { color: "warning" as const }
+          : {};
+    const band = Box({
+      key: "crew-net-band",
       gap: 1,
       children: [
+        Box({
+          ...fixed,
+          children: [Text({ dimColor: true, children: "team ·" })],
+        }),
         Box({
           flexShrink: 1,
           children: [
             Text({
               wrap: "truncate-end",
-              ...(line.error ? { color: "error" as const } : {}),
-              children: `crew-net · ${line.text}`,
+              ...color,
+              children: `${line.glyph} ${line.text}`,
             }),
           ],
         }),
+        ...(rest === ""
+          ? []
+          : [
+              Box({
+                ...fixed,
+                children: [Text({ dimColor: true, children: `· ${rest}` })],
+              }),
+            ]),
         Box({
           ...fixed,
           children: [
-            Text({
-              dimColor: true,
-              children: line.more > 0 ? `+${line.more} more · /crew` : "/crew",
+            Button({
+              key: "team",
+              label: "team",
+              hotkey: "t",
+              plain: true,
+              onPress: () => openPane($).then(ignore),
             }),
           ],
         }),
@@ -680,7 +719,9 @@ export function register(on: On, options: PluginOptions): void {
           children: [
             Button({
               key: "dismiss",
-              label: "Dismiss",
+              label: "dismiss",
+              hotkey: "d",
+              plain: true,
               onPress: () =>
                 change($, (x) => ({ ...x, band: [] })).then(ignore),
             }),
@@ -688,39 +729,28 @@ export function register(on: On, options: PluginOptions): void {
         }),
       ],
     });
+    return below === undefined || below === null
+      ? band
+      : Box({ flexDirection: "column", children: [band, below] });
   });
 
-  // `/crew` opens the pane, and a second `/crew` closes it. Without a mod, or
+  // `/team` opens the pane, and a second `/team` closes it. Without a mod, or
   // when no surface draws a pane, the command falls through to the digest text.
-  for (const command of ["crew", "crew-net:crew"]) {
+  for (const command of ["team", "crew-net:team"]) {
     on("command.run", { command }, async ($, e, next) => {
       if (e.args.trim() !== "" || run === undefined) return next(e);
-      // Another plugin may own the bare `/crew`: leave it alone.
-      if (command === "crew" && (await otherOwnsCrew($))) return next(e);
       if ((await $.ui.panes()).some((p) => p.id === PANE_ID)) {
         await $.ui.close({ id: PANE_ID });
         return {};
       }
-      const opened = await $.ui.open({
-        id: PANE_ID,
-        title: "crew-net",
-        focus: true,
-        closeOnEscape: true,
-        columns: PANE_COLUMNS,
-      });
-      if (!opened.isPlaced) return next(e);
-      // Opening the pane is reading the band.
-      await change($, (s) => ({ ...s, band: [] }));
-      void refresh($);
-      return {};
+      return (await openPane($)) ? {} : next(e);
     });
   }
 
   on("ui.render", { component: "Pane" }, async ($, e, next) => {
     if (e.requestId !== PANE_ID) return next(e);
     if (paneData === undefined) void refresh($);
-    const view = paneView(paneData, (await readSession($)).status);
-    const { Box, Button, Text } = $.ui.resolve(e);
+    const { Box, Button, Input, Text } = $.ui.resolve(e);
     const tone = (t: Tone) =>
       t === "dim"
         ? { dimColor: true }
@@ -731,18 +761,172 @@ export function register(on: On, options: PluginOptions): void {
             : t === "good"
               ? { color: "success" as const }
               : {};
-    const requests = new Map(
-      (paneData?.requests ?? []).map((q) => [q.id, q] as const),
-    );
+    const redraw = () => $.ui.invalidate("ui.render");
+    const note = paneNote
+      ? [Text({ ...tone(paneNote.tone), children: paneNote.text })]
+      : [];
+    const keys = (...extra: ReturnType<typeof Button>[]) =>
+      Box({
+        key: "keys",
+        marginTop: 1,
+        gap: 2,
+        children: [
+          ...extra,
+          Button({
+            key: "refresh",
+            label: "refresh",
+            hotkey: "r",
+            plain: true,
+            onPress: () => refresh($, true),
+          }),
+          Button({
+            key: "close",
+            label: "close",
+            hotkey: "q",
+            plain: true,
+            onPress: () => $.ui.close({ id: PANE_ID }).then(ignore),
+          }),
+        ],
+      });
+
+    const selected =
+      paneSelected === undefined
+        ? undefined
+        : paneData?.requests.find((q) => q.id === paneSelected);
+    if (selected !== undefined) {
+      const v = detailView(selected);
+      const decide = (d: Decision) =>
+        Button({
+          key: d,
+          label: d,
+          hotkey: d === "accept" ? "y" : "n",
+          plain: true,
+          onPress: () => {
+            paneConfirm = d;
+            redraw();
+          },
+        });
+      return Box({
+        flexDirection: "column",
+        paddingX: 1,
+        children: [
+          Text({ bold: true, color: "warning", children: v.heading }),
+          ...(v.url ? [Text({ dimColor: true, children: v.url })] : []),
+          Box({
+            key: "text",
+            flexDirection: "column",
+            marginTop: 1,
+            children: [
+              Text({ dimColor: true, children: FRAME }),
+              Text({ children: `"${v.quote}"` }),
+            ],
+          }),
+          Box({
+            key: "actions",
+            marginTop: 1,
+            gap: 2,
+            children: [
+              Button({
+                key: "answer",
+                label: "answer with Claude",
+                hotkey: "a",
+                plain: true,
+                onPress: async () => {
+                  await $.prompt.fill({ text: answerPrompt(selected) });
+                  await $.ui.close({ id: PANE_ID });
+                },
+              }),
+              ...(v.canDecide ? [decide("accept"), decide("decline")] : []),
+              ...(v.url
+                ? [
+                    Button({
+                      key: "open",
+                      label: "open on GitHub",
+                      hotkey: "o",
+                      plain: true,
+                      onPress: () => openUrl($, v.url ?? "").then(ignore),
+                    }),
+                  ]
+                : []),
+            ],
+          }),
+          ...(paneConfirm === undefined
+            ? []
+            : [
+                Box({
+                  key: "confirm",
+                  marginTop: 1,
+                  gap: 2,
+                  children: [
+                    Text({
+                      color: "warning",
+                      children: `Post "${paneConfirm}" on GitHub as you?`,
+                    }),
+                    Button({
+                      key: "confirm",
+                      label: "confirm",
+                      hotkey: "c",
+                      plain: true,
+                      onPress: () =>
+                        post(
+                          $,
+                          selected,
+                          decisionArgs(selected, paneConfirm ?? "accept"),
+                        ),
+                    }),
+                    Button({
+                      key: "cancel",
+                      label: "cancel",
+                      hotkey: "v",
+                      plain: true,
+                      onPress: () => {
+                        paneConfirm = undefined;
+                        redraw();
+                      },
+                    }),
+                  ],
+                }),
+              ]),
+          Box({
+            key: "reply",
+            marginTop: 1,
+            children: [
+              Input({
+                key: `reply:${selected.id}`,
+                placeholder: `reply to ${selected.from} on GitHub as you · Enter posts`,
+                submitLabel: "post",
+                rows: 2,
+                onSubmit: (value) => {
+                  const args = replyArgs(selected, value);
+                  if (args !== undefined) void post($, selected, args);
+                },
+              }),
+            ],
+          }),
+          ...note,
+          keys(
+            Button({
+              key: "back",
+              label: "back",
+              hotkey: "b",
+              plain: true,
+              onPress: () => {
+                showList();
+                redraw();
+              },
+            }),
+          ),
+        ],
+      });
+    }
+
+    const view = paneView(paneData, (await readSession($)).status);
     return Box({
       flexDirection: "column",
       paddingX: 1,
       children: [
         Text({ bold: true, children: view.heading }),
-        Text({
-          ...tone(view.sync.tone),
-          children: view.sync.text,
-        }),
+        Text({ ...tone(view.sync.tone), children: view.sync.text }),
         ...(view.sections.length === 0
           ? [
               Text({
@@ -758,17 +942,24 @@ export function register(on: On, options: PluginOptions): void {
             marginTop: 1,
             children: [
               Text({ bold: true, children: section.title }),
-              ...section.lines.map((l, i) => {
-                const q = l.answer ? requests.get(l.answer.id) : undefined;
-                const text = Text({
-                  ...tone(l.tone),
-                  children: l.text,
-                });
-                return Box({
+              ...section.lines.map((l, i) =>
+                Box({
                   key: `line:${section.title}:${i}`,
                   flexDirection: "column",
                   children: [
-                    text,
+                    l.open
+                      ? Button({
+                          key: `open:${l.open.key}`,
+                          label: l.text,
+                          hotkey: l.open.key,
+                          plain: true,
+                          onPress: () => {
+                            showList();
+                            paneSelected = l.open?.id;
+                            redraw();
+                          },
+                        })
+                      : Text({ ...tone(l.tone), children: l.text }),
                     ...(l.quote
                       ? [
                           Text({
@@ -778,41 +969,86 @@ export function register(on: On, options: PluginOptions): void {
                           }),
                         ]
                       : []),
-                    ...(l.answer && q
-                      ? [
-                          Button({
-                            key: `answer:${l.answer.key}`,
-                            label: "answer with Claude",
-                            hotkey: l.answer.key,
-                            plain: true,
-                            onPress: async () => {
-                              await $.prompt.fill({ text: answerPrompt(q) });
-                              await $.ui.close({ id: PANE_ID });
-                            },
-                          }),
-                        ]
-                      : []),
                   ],
-                });
-              }),
+                }),
+              ),
             ],
           }),
         ),
-        Box({
-          marginTop: 1,
-          gap: 2,
-          children: [
-            Button({
-              key: "refresh",
-              label: "refresh",
-              hotkey: "r",
-              plain: true,
-              onPress: () => refresh($, true),
-            }),
-            Text({ dimColor: true, children: "esc closes" }),
-          ],
-        }),
+        ...note,
+        keys(),
       ],
     });
   });
+}
+
+/** Back to the list, with no decision pending. */
+function showList(): void {
+  paneSelected = undefined;
+  paneConfirm = undefined;
+  paneNote = undefined;
+}
+
+/** Opens the pane on the list; false when no surface places it. */
+async function openPane($: Engine): Promise<boolean> {
+  if ((await $.ui.panes()).some((p) => p.id === PANE_ID)) return true;
+  const opened = await $.ui.open({
+    id: PANE_ID,
+    title: "team",
+    focus: true,
+    closeOnEscape: true,
+    columns: PANE_COLUMNS,
+  });
+  if (!opened.isPlaced) return false;
+  showList();
+  // Opening the pane is reading the band.
+  await change($, (s) => ({ ...s, band: [] }));
+  void refresh($);
+  return true;
+}
+
+/**
+ * Posts what the developer chose in the pane: `crew-net reply` with their
+ * decision or their text. The CLI checks the text (no closing keyword) and
+ * the write budget; its refusal is shown under the actions.
+ */
+async function post($: Engine, r: Request, args: string[]): Promise<void> {
+  const cli = run;
+  if (cli === undefined) return;
+  paneConfirm = undefined;
+  try {
+    const ran = await $.process.run([NODE, cli.cli, ...args], {
+      cwd: cli.root,
+      timeoutMs: SEND_TIMEOUT_MS,
+    });
+    if (ran.exitCode === 0) {
+      showList();
+      paneNote = { text: `${GLYPH.done} posted to ${r.from}`, tone: "good" };
+      await refresh($);
+      return;
+    }
+    const why = (ran.stderr.trim().split("\n")[0] ?? "").slice(0, 160);
+    paneNote = {
+      text: `${GLYPH.problem} not posted: ${why || `exit ${ran.exitCode}`}`,
+      tone: "error",
+    };
+  } catch (error) {
+    paneNote = {
+      text: `${GLYPH.problem} not posted: ${String(error)}`,
+      tone: "error",
+    };
+  }
+  $.ui.invalidate("ui.render");
+}
+
+/** Opens a GitHub URL in the browser: `open` on macOS, `xdg-open` elsewhere. */
+async function openUrl($: Engine, url: string): Promise<void> {
+  for (const opener of ["open", "xdg-open"]) {
+    const ran = await $.process
+      .run([opener, url], { timeoutMs: SEND_TIMEOUT_MS })
+      .catch(() => undefined);
+    if (ran?.exitCode === 0) return;
+  }
+  paneNote = { text: `open ${url} in a browser`, tone: "dim" };
+  $.ui.invalidate("ui.render");
 }
