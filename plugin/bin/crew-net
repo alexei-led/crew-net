@@ -2692,12 +2692,12 @@ function compose(input, nowMs) {
 }
 function formatAge(ageMs) {
   if (ageMs < MINUTE)
-    return "<1 min";
+    return "now";
   if (ageMs < HOUR)
-    return `${Math.floor(ageMs / MINUTE)} min`;
+    return `${Math.floor(ageMs / MINUTE)}m`;
   if (ageMs < DAY)
-    return `${Math.floor(ageMs / HOUR)} h`;
-  return `${Math.floor(ageMs / DAY)} d`;
+    return `${Math.floor(ageMs / HOUR)}h`;
+  return `${Math.floor(ageMs / DAY)}d`;
 }
 var INBOX_VERBS = {
   ask: "asks",
@@ -3545,7 +3545,7 @@ async function landedOn(git, ref, mine) {
     return [
       {
         repo: mine.repo,
-        owner: c.loginHint ?? "someone",
+        owner: c.loginHint ?? "",
         number,
         base: mine.base,
         changedPaths: c.paths

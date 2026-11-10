@@ -4,6 +4,7 @@ import { clean } from "../../src/core/digest/index";
 import { frameUntrusted } from "../../src/core/trust/index";
 import type { ItemEvent } from "../../src/protocol/index";
 import type { CrewNetBandEntry } from "../types/index";
+import { GLYPH } from "./pane";
 
 /** An item event with the optional fields newer watchers send, read tolerantly. */
 export interface Item {
@@ -107,7 +108,8 @@ export function bandText(item: Item, outcome: Outcome): string {
         : "";
   switch (item.kind) {
     case "finding":
-      return `radar ${where(item)}: ${preview}${suffix}`;
+      // The band draws the ⚠ itself.
+      return `${where(item)}: ${preview.replace(/^⚠\s*/, "")}${suffix}`;
     case "digest":
       return `digest: ${preview}`;
     default: {
@@ -115,6 +117,16 @@ export function bandText(item: Item, outcome: Outcome): string {
       return `${sender(item)} ${verb} on ${where(item)}: "${preview}"${suffix}`;
     }
   }
+}
+
+const REQUESTS = new Set(["ask", "review", "fix", "bug"]);
+
+/** The band glyph of an item: a request needs you, a finding is a problem, the rest is new. */
+export function bandGlyph(item: Item): string {
+  if (item.kind === "finding") return GLYPH.problem;
+  if (item.kind === "message" && REQUESTS.has(item.request))
+    return GLYPH.needsYou;
+  return GLYPH.new;
 }
 
 /** Matches the first line of `wakePrompt`. */
@@ -137,20 +149,41 @@ export function wakePrompt(framed: string, ref: string, token: string): string {
   ].join("\n");
 }
 
-/** The band: one line, the newest entry, and how many others wait behind it. */
+/** The band: one line, the newest entry, then the others counted by glyph. */
 export interface Ticker {
+  glyph: string;
   text: string;
-  more: number;
   error: boolean;
+  /** The other entries, counted per glyph, most urgent first. */
+  rest: { glyph: string; count: number }[];
 }
+
+const URGENCY: string[] = [GLYPH.needsYou, GLYPH.problem, GLYPH.new];
+
+/** An entry from an older mod has no glyph: derive it from its kind. */
+const glyphOf = (b: CrewNetBandEntry): string =>
+  b.glyph ??
+  (b.kind === "error"
+    ? GLYPH.problem
+    : b.kind === "wake"
+      ? GLYPH.needsYou
+      : GLYPH.new);
 
 export function ticker(band: CrewNetBandEntry[]): Ticker | undefined {
   const last = band.at(-1);
   if (last === undefined) return undefined;
+  const counts = new Map<string, number>();
+  for (const b of band.slice(0, -1))
+    counts.set(glyphOf(b), (counts.get(glyphOf(b)) ?? 0) + 1);
+  const rank = (g: string) =>
+    URGENCY.includes(g) ? URGENCY.indexOf(g) : URGENCY.length;
   return {
+    glyph: glyphOf(last),
     text: last.text,
-    more: band.length - 1,
     error: last.kind === "error",
+    rest: [...counts]
+      .map(([glyph, count]) => ({ glyph, count }))
+      .sort((a, b) => rank(a.glyph) - rank(b.glyph)),
   };
 }
 

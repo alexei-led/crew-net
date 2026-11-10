@@ -26,7 +26,7 @@ test("an item shows in the band at once, on every surface", async ($, on) => {
   for (const surface of SURFACES) {
     const ui = await mountBand($, w, surface);
     expect((await ui.find({ type: "Text", text: /maria/ }))?.text).toBe(
-      'crew-net · maria asks on doiteng/reflex#2318: "Does #2310 need the new users.tier column first?" · next prompt',
+      '◆ maria asks on doiteng/reflex#2318: "Does #2310 need the new users.tier column first?" · next prompt',
     );
     await ui.unmount();
   }
@@ -89,10 +89,10 @@ test("a slash command does not take the pending items", async ($, on) => {
   await start($, w);
   await w.emit(ask("c-1"));
   await $.prompt.submit({
-    text: "/crew",
+    text: "/team",
     origin: { kind: "composer" },
     wait: false,
-    command: { name: "crew", args: "" },
+    command: { name: "team", args: "" },
   });
   expect((await userPrompt($, "go")).context).toHaveLength(1);
 });
@@ -142,13 +142,11 @@ test("idle: a direct request starts one wake turn, not awaited, and it is acked"
   );
   expect(acks(w)["f-1"]).toBe("context");
   const ui = await mountBand($, w, "terminal");
-  // The band is one line, the newest; the wake line waits behind it.
-  expect((await ui.find({ type: "Text", text: /radar/ }))?.text).toContain(
-    "conflicts with maria #2318",
+  // The band is one line, the newest; the request and the wake line are counted behind it.
+  expect((await ui.find({ type: "Text", text: /^⚠ / }))?.text).toBe(
+    "⚠ doiteng/reflex: conflicts with maria #2318: users.yaml · next prompt",
   );
-  expect((await ui.find({ type: "Text", text: /more · \/crew/ }))?.text).toBe(
-    "+2 more · /crew",
-  );
+  expect((await ui.find({ type: "Text", text: /^· / }))?.text).toBe("· ◆ 2");
   await ui.unmount();
   w.releaseSubmits();
 });
@@ -166,7 +164,7 @@ test("a dropped wake gives the request back to the next prompt and frees the gat
   expect(denied(await bash($, "make build"))).toBeUndefined();
   const ui = await mountBand($, w, "terminal");
   expect((await ui.find({ type: "Text", text: /wake failed/ }))?.text).toBe(
-    "crew-net · wake failed for c-1 · next prompt",
+    "◆ wake failed for c-1 · next prompt",
   );
   await ui.unmount();
 });

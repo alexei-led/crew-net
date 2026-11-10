@@ -1,11 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import {
   answerPrompt,
+  decisionArgs,
+  detailView,
+  GLYPH,
   type PaneData,
   paneView,
   parseDigest,
   parseRequests,
   type Request,
+  type Tone,
 } from "./pane";
 
 const section = (shown: unknown[] = [], hidden = 0) => ({ shown, hidden });
@@ -119,7 +123,7 @@ describe("paneView", () => {
   test("a sync problem outranks stale and fresh", () => {
     const stale = data({ stale: true });
     expect(paneView(stale, "rate-limited until 14:32").sync).toEqual({
-      text: "rate-limited until 14:32",
+      text: "⚠ rate-limited until 14:32",
       tone: "warn",
     });
     expect(paneView(stale, "").sync.text).toBe(
@@ -136,12 +140,12 @@ describe("paneView", () => {
     expect(v.sections).toEqual([]);
   });
 
-  test("requests get answer keys 1-9; the rest wait in the inbox command", () => {
+  test("requests get keys 1-9; the rest wait in the inbox command", () => {
     const requests = Array.from({ length: 11 }, (_, i) =>
       request({ id: `c:${i}`, thread: i + 1 }),
     );
     const lines = paneView(data({ requests }), "").sections[0]?.lines ?? [];
-    expect(lines.filter((l) => l.answer).map((l) => l.answer?.key)).toEqual([
+    expect(lines.filter((l) => l.open).map((l) => l.open?.key)).toEqual([
       "1",
       "2",
       "3",
@@ -160,7 +164,7 @@ describe("paneView", () => {
       paneView(data({ requests: [request({ text: 'say "hi"\nnow' })] }), "")
         .sections[0]?.lines ?? [];
     expect(line).toMatchObject({
-      text: "maria asks on o/r#7 · 12 min",
+      text: "◆ maria asks on o/r#7 · 12m",
       quote: "say 'hi' now",
     });
   });
@@ -187,7 +191,7 @@ describe("paneView", () => {
     );
     const radar = v.sections.find((s) => s.title === "Radar")?.lines ?? [];
     expect(radar.map((l) => l.tone)).toEqual(["error", "warn"]);
-    const others = v.sections.find((s) => s.title === "Others")?.lines ?? [];
+    const others = v.sections.find((s) => s.title === "Team")?.lines ?? [];
     expect(others.map((l) => l.tone)).toEqual(["dim"]);
   });
 
@@ -210,13 +214,10 @@ describe("paneView", () => {
       "",
     );
     const lines = v.sections.flatMap((x) => x.lines);
-    expect(v.sections.map((x) => x.title)).toEqual([
-      "Needs your answer",
-      "New",
-    ]);
-    expect(lines.map((l) => [l.text, l.answer !== undefined])).toEqual([
-      ["maria asks on o/r#7 · 12 min", true],
-      ["dmitri replies on #7 · 1 min", false],
+    expect(v.sections.map((x) => x.title)).toEqual(["Needs you", "New"]);
+    expect(lines.map((l) => [l.text, l.open !== undefined])).toEqual([
+      ["◆ maria asks on o/r#7 · 12m", true],
+      ["✉ dmitri replies on #7 · 1m", false],
     ]);
   });
 });
@@ -242,8 +243,111 @@ describe("paneView, other repos", () => {
       "",
     );
     expect(v.sections.flatMap((x) => x.lines.map((l) => l.text))).toEqual([
-      "erez reviews on #3 · 1 min",
+      "✉ erez reviews on #3 · 1m",
       "+4 in other repos: crew-net inbox",
+    ]);
+  });
+});
+
+describe("glyphs", () => {
+  // The contract with pi-crew (design: Shared screen with pi-crew): change both or neither.
+  test("one meaning per glyph", () => {
+    expect(GLYPH).toEqual({
+      needsYou: "◆",
+      new: "✉",
+      working: "●",
+      idle: "○",
+      done: "✓",
+      closed: "✕",
+      problem: "⚠",
+      order: "→",
+    });
+  });
+});
+
+describe("merge order", () => {
+  const lanes = (mine: unknown[], waitsOnMe: unknown[] = []) =>
+    paneView(
+      data({
+        digest: digest({
+          mine: section(mine),
+          waitsOnMe: section(waitsOnMe),
+        }) as never,
+      }),
+      "",
+    ).sections.find((s) => s.title === "Merge order")?.lines ?? [];
+  const pr = (dependsOn: { ref: string; status: string }[]) => ({
+    pr: 10,
+    state: "building",
+    scope: "",
+    dependsOn,
+  });
+
+  test.each([
+    [
+      "all merged",
+      [{ ref: "#1", status: "merged" }],
+      "#1 ✓ → #10 ● you",
+      "good",
+    ],
+    ["one open", [{ ref: "#1", status: "open" }], "#1 ● → #10 ● you", "warn"],
+    [
+      "one closed unmerged",
+      [
+        { ref: "#1", status: "merged" },
+        { ref: "o/web#2", status: "closed" },
+      ],
+      "#1 ✓ → o/web#2 ✕ → #10 ● you",
+      "error",
+    ],
+    [
+      "unreadable",
+      [{ ref: "#1", status: "unknown" }],
+      "#1 ? → #10 ● you",
+      "warn",
+    ],
+  ] as [string, { ref: string; status: string }[], string, string][])(
+    "%s",
+    (_name, deps, text, tone) => {
+      expect(lanes([pr(deps)])).toEqual([{ text, tone: tone as Tone }]);
+    },
+  );
+
+  test("a PR waited on shows its dependents on the right", () => {
+    expect(lanes([pr([])], [{ ref: "#11", owner: "maria", on: 10 }])).toEqual([
+      { text: "#10 ● you → #11 maria ○", tone: "good" },
+    ]);
+  });
+
+  test("a PR with no order has no lane", () => {
+    expect(lanes([pr([])])).toEqual([]);
+  });
+});
+
+describe("detailView", () => {
+  test("an ask is answered; review, fix and bug can be accepted or declined", () => {
+    expect(detailView(request()).canDecide).toBe(false);
+    for (const event of ["review", "fix", "bug"])
+      expect(detailView(request({ event })).canDecide).toBe(true);
+  });
+
+  test("the thread URL only for a well-formed repo and a thread", () => {
+    expect(detailView(request()).url).toBe("https://github.com/o/r/issues/7");
+    expect(detailView(request({ repo: "evil.com/x?y" })).url).toBeUndefined();
+    const { thread: _t, ...noThread } = request();
+    expect(detailView(noThread).url).toBeUndefined();
+  });
+
+  test("the quote is cleaned to one line", () => {
+    expect(detailView(request({ text: "a\n‮b" })).quote).toBe("a b");
+  });
+
+  test("a decision is a reply with its flag", () => {
+    expect(decisionArgs(request(), "decline")).toEqual([
+      "reply",
+      "comment:github.com/o/r#7:1",
+      "--decline",
+      "Declined.",
     ]);
   });
 });

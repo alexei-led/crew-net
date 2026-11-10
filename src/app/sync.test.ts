@@ -807,10 +807,18 @@ describe("fetch and radar", () => {
           loginHint: null,
           paths: ["api/server.ts"],
         },
+        {
+          sha: "c",
+          subject: "fix: users (#6)",
+          authorEmail: "x@y.z",
+          loginHint: null,
+          paths: ["api/server.ts"],
+        },
       ],
     );
     await w.sync();
-    expect((await w.items()).map((i) => i.text)).toEqual([
+    expect((await w.items()).map((i) => i.text).sort()).toEqual([
+      "rebase feat/mine: #6 touched api/server.ts",
       "rebase feat/mine: maria #5 touched api/server.ts",
     ]);
   });

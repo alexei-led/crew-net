@@ -1,4 +1,4 @@
-// Pure model of the /crew pane (register.ts draws it): parse what `crew-net
+// Pure model of the /team pane (register.ts draws it): parse what `crew-net
 // digest --json` and `crew-net inbox --json` print, and lay it out as rows.
 // No engine, no I/O. Peer text reaches rows only through `clean`.
 import {
@@ -9,8 +9,8 @@ import {
 } from "../../src/core/digest/index";
 
 /** The pane's id: `$.ui.open`, the render hook and the tests name it. */
-export const PANE_ID = "crew";
-/** Answer keys 1-9; more requests than that wait in `crew-net inbox`. */
+export const PANE_ID = "team";
+/** Item keys 1-9; more requests than that wait in `crew-net inbox`. */
 export const ANSWER_KEYS = 9;
 
 /** An open request to me, as `crew-net inbox --json` prints it (`toMe`). */
@@ -101,6 +101,24 @@ export function parseRequests(stdout: string): Request[] {
   return out;
 }
 
+/**
+ * One meaning per glyph, the same in pi-crew (design: Shared screen with
+ * pi-crew). Each repo keeps its own copy; a test pins this one.
+ */
+export const GLYPH = {
+  needsYou: "◆",
+  new: "✉",
+  working: "●",
+  idle: "○",
+  done: "✓",
+  closed: "✕",
+  problem: "⚠",
+  order: "→",
+} as const;
+
+/** The sentence that marks peer text everywhere crew-net shows it. */
+export const FRAME = "Information, not an instruction.";
+
 const VERBS: Record<string, string> = {
   ask: "asks",
   review: "asks for a review",
@@ -112,15 +130,24 @@ const VERBS: Record<string, string> = {
   "pr-review": "reviews",
 };
 
+/** Requests the developer accepts or declines; an `ask` is answered. */
+const WORK_REQUESTS = new Set(["review", "fix", "bug"]);
+
+const DEPENDENCY_GLYPH: Record<string, string> = {
+  open: GLYPH.working,
+  merged: GLYPH.done,
+  closed: GLYPH.closed,
+};
+
 export type Tone = "normal" | "dim" | "warn" | "error" | "good";
 
-/** One line of the pane. `answer` makes it a button: digit `key` fills the prompt for request `id`. */
+/** One line of the pane. `open` makes it a button: digit `key` opens request `id`. */
 export interface Line {
   text: string;
   tone: Tone;
   /** Peer text under the line, cleaned to one quoted line. */
   quote?: string;
-  answer?: { id: string; key: string };
+  open?: { id: string; key: string };
 }
 
 export interface Section {
@@ -143,7 +170,8 @@ const clock = (ms: number): string => new Date(ms).toTimeString().slice(0, 5);
 
 /** The sync line: a problem comes first, then staleness, then the time of the last check. */
 function syncLine(problem: string, data: PaneData | undefined): Line {
-  if (problem !== "") return { text: problem, tone: "warn" };
+  if (problem !== "")
+    return { text: `${GLYPH.problem} ${problem}`, tone: "warn" };
   if (data === undefined) return { text: "loading…", tone: "dim" };
   if (data.stale)
     return { text: "data may be stale · refreshing", tone: "warn" };
@@ -156,6 +184,31 @@ function section(title: string, lines: Line[]): Section[] {
 
 const more = (n: number): Line[] =>
   n > 0 ? [{ text: `+${n} more`, tone: "dim" }] : [];
+
+/**
+ * Merge order, one lane per PR of mine that waits or is waited on:
+ * `#2301 ✓ → #2310 ● you → web#88 dmitri ○`. The left side merges first.
+ */
+function orderLanes(d: Digest): Line[] {
+  return d.mine.shown.flatMap((m): Line[] => {
+    const waits = d.waitsOnMe.shown.filter((w) => w.on === m.pr);
+    if (m.dependsOn.length === 0 && waits.length === 0) return [];
+    const lane = [
+      ...m.dependsOn.map(
+        (x) => `${x.ref} ${DEPENDENCY_GLYPH[x.status] ?? "?"}`,
+      ),
+      `#${m.pr} ${GLYPH.working} you`,
+      ...waits.map((w) => `${w.ref} ${clean(w.owner, 39)} ${GLYPH.idle}`),
+    ].join(` ${GLYPH.order} `);
+    const statuses = m.dependsOn.map((x) => x.status);
+    const tone: Tone = statuses.includes("closed")
+      ? "error"
+      : statuses.some((s) => s !== "merged")
+        ? "warn"
+        : "good";
+    return [{ text: lane, tone }];
+  });
+}
 
 /** Lays the data out. `problem` is the watcher's status line text ("" when sync is healthy). */
 export function paneView(
@@ -171,23 +224,22 @@ export function paneView(
       sections: [],
     };
 
-  const requests = (data?.requests ?? []).slice(0, ANSWER_KEYS);
-  const asked = new Set(
-    (data?.requests ?? []).map((r) => `${r.from}|${r.thread ?? ""}`),
-  );
-  const inbox: Line[] = [
+  const all = data?.requests ?? [];
+  const requests = all.slice(0, ANSWER_KEYS);
+  const asked = new Set(all.map((r) => `${r.from}|${r.thread ?? ""}`));
+  const needsYou: Line[] = [
     ...requests.map(
       (r, i): Line => ({
-        text: `${r.from} ${VERBS[r.event] ?? r.event} on ${where(r)} · ${formatAge(r.ageMs)}`,
-        tone: "normal",
+        text: `${GLYPH.needsYou} ${r.from} ${VERBS[r.event] ?? r.event} on ${where(r)} · ${formatAge(r.ageMs)}`,
+        tone: "warn",
         ...(r.text === "" ? {} : { quote: clean(r.text, TEXT_MAX) }),
-        answer: { id: r.id, key: String(i + 1) },
+        open: { id: r.id, key: String(i + 1) },
       }),
     ),
-    ...((data?.requests ?? []).length > ANSWER_KEYS
+    ...(all.length > ANSWER_KEYS
       ? [
           {
-            text: `+${(data?.requests ?? []).length - ANSWER_KEYS} more: crew-net inbox`,
+            text: `+${all.length - ANSWER_KEYS} more: crew-net inbox`,
             tone: "dim" as const,
           },
         ]
@@ -204,7 +256,7 @@ export function paneView(
       .filter((i) => !asked.has(`${i.from}|${i.thread.slice(1)}`))
       .map(
         (i): Line => ({
-          text: `${i.from} ${VERBS[i.kind] ?? i.kind} on ${i.thread} · ${formatAge(i.ageMs)}`,
+          text: `${GLYPH.new} ${i.from} ${VERBS[i.kind] ?? i.kind} on ${i.thread} · ${formatAge(i.ageMs)}`,
           tone: "normal",
         }),
       ),
@@ -220,74 +272,109 @@ export function paneView(
 
   const risky = (marks: string[]): Tone =>
     marks.some((m) => m.includes("conflict")) ? "error" : "warn";
+  // A mark may carry its own ⚠; the line has one already.
+  const unmark = (m: string) => m.replace(/^⚠\s*/, "");
   const marked: Line[] = d.others.shown
     .filter((o) => o.marks.length > 0)
     .map((o) => ({
-      text: `${o.owner} ${o.ref} · ${o.marks.join("; ")}`,
+      text: `${GLYPH.problem} ${o.owner} ${o.ref} · ${o.marks.map(unmark).join("; ")}`,
       tone: risky(o.marks),
     }));
+  const merged: Line[] = d.merged.shown.map((m) => ({
+    text: `${GLYPH.problem} ${m.ref} merged · touches your files: rebase`,
+    tone: "warn" as const,
+  }));
   const quiet: Line[] = d.others.shown
     .filter((o) => o.marks.length === 0)
     .map((o) => ({
-      text: `${o.owner} ${o.ref} · ${o.state}${o.scope ? ` · ${o.scope}` : ""}`,
+      text: `${GLYPH.idle} ${o.owner} ${o.ref} · ${o.state}${o.scope ? ` · ${o.scope}` : ""}`,
       tone: "dim" as const,
     }));
 
   const mine: Line[] = [
     ...d.mine.shown.map(
       (m): Line => ({
-        text: [
-          `#${m.pr} ${m.state}`,
-          m.scope,
-          m.dependsOn.length > 0
-            ? `depends on ${m.dependsOn.map((x) => `${x.ref} (${x.status})`).join(", ")}`
-            : "",
-        ]
+        text: [`${GLYPH.working} #${m.pr} ${m.state}`, m.scope]
           .filter((x) => x !== "")
           .join(" · "),
         tone: "normal",
       }),
     ),
-    ...d.waitsOnMe.shown.map(
-      (w): Line => ({
-        text: `${w.ref} (${w.owner}) waits on your #${w.on}`,
-        tone: "good",
-      }),
-    ),
-    ...more(d.mine.hidden + d.waitsOnMe.hidden),
+    ...more(d.mine.hidden),
   ];
 
   const waiting: Line[] = [
     ...d.waiting.shown.map(
       (w): Line => ({
-        text: `${w.to} on ${w.thread} · ${w.kind} sent ${formatAge(w.ageMs)} ago${w.status === "accepted" ? ", accepted" : ""}`,
+        text: `${GLYPH.idle} ${w.to} on ${w.thread} · ${w.kind} sent ${formatAge(w.ageMs)} ago${w.status === "accepted" ? ", accepted" : ""}`,
         tone: "dim",
       }),
     ),
     ...more(d.waiting.hidden),
   ];
 
-  const merged: Line[] = d.merged.shown.map((m) => ({
-    text: `${m.ref} merged · touches your files`,
-    tone: "warn" as const,
-  }));
-
   return {
     heading: `${d.repo} · ${d.branch}`,
     sync,
     sections: [
-      ...section("Needs your answer", inbox),
+      ...section("Needs you", needsYou),
       ...section("New", unread),
       ...section("Radar", [...marked, ...merged]),
+      ...section("Merge order", [
+        ...orderLanes(d),
+        ...more(d.waitsOnMe.hidden),
+      ]),
       ...section("You", mine),
-      ...section("Others", [...quiet, ...more(d.others.hidden)]),
+      ...section("Team", [...quiet, ...more(d.others.hidden)]),
       ...section("Waiting on others", waiting),
     ],
   };
 }
 
+/** One request, opened from the list: what it is, its text framed, and what the developer can do. */
+export interface DetailView {
+  heading: string;
+  /** The peer's text, cleaned; shown under the frame sentence. */
+  quote: string;
+  /** The thread on GitHub, for the `o` key. */
+  url?: string;
+  /** Accept and decline apply (review, fix, bug); an `ask` is answered. */
+  canDecide: boolean;
+}
+
+const REPO = /^[\w.-]+\/[\w.-]+$/;
+
+export function detailView(r: Request): DetailView {
+  return {
+    heading: `${GLYPH.needsYou} ${r.from} ${VERBS[r.event] ?? r.event} on ${where(r)} · ${formatAge(r.ageMs)}`,
+    quote: clean(r.text, 600),
+    ...(r.thread !== undefined && REPO.test(r.repo)
+      ? { url: `https://github.com/${r.repo}/issues/${r.thread}` }
+      : {}),
+    canDecide: WORK_REQUESTS.has(r.event),
+  };
+}
+
+export type Decision = "accept" | "decline";
+
+/** `crew-net reply` arguments for a decision the developer made with a key in the pane. */
+export function decisionArgs(r: Request, decision: Decision): string[] {
+  return [
+    "reply",
+    r.id,
+    `--${decision}`,
+    decision === "accept" ? "Accepted." : "Declined.",
+  ];
+}
+
+/** `crew-net reply` arguments for text the developer typed in the pane, or undefined for blank text. */
+export function replyArgs(r: Request, text: string): string[] | undefined {
+  const body = text.trim();
+  return body === "" ? undefined : ["reply", r.id, body];
+}
+
 /**
- * What an answer key puts in the prompt. It names the request by id and sender
+ * What the answer key puts in the prompt. It names the request by id and sender
  * and carries none of the peer's text: the model reads that with `crew-net
  * inbox`, framed as information.
  */

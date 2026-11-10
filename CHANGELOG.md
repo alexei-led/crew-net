@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.4.0 (unreleased)
+
+A team pane you can act from, on one screen with pi-crew.
+
+### Changed
+
+- **`/crew` is now `/team`** (and `/crew-net:team`). **team** is other
+  developers and their agents; **crew** is the agents you lead on this laptop,
+  which [pi-crew](https://github.com/alexei-led/pi-crew) owns as `/crew`. crew-net
+  no longer checks who owns `/crew`.
+- **The band** reads `team · ◆ <newest item> · ⚠ 1 · ✉ 2`: the newest entry with
+  its glyph, then the rest counted by glyph. `t` opens the pane, `d` dismisses.
+  It draws its line above the next renderer's, so pi-crew's band shows too.
+- **Ages** read `now`, `4m`, `2h`, `3d` in the digest, the band and the pane.
+- A finding about a PR merged by an unknown author names only the PR
+  (`#6 touched …`), not `someone #6`.
+
+### Added
+
+- **One vocabulary with pi-crew**: the same glyphs (`◆ ✉ ● ○ ✓ ✕ ⚠ →`), keys and
+  framing of peer text. The contract is in
+  [design.md](docs/design.md#shared-screen-with-pi-crew). No shared code or state.
+- **Merge order lane** in the pane: `#2301 ✓ → #2310 ● you → acme/web#88 dmitri ○`,
+  red when a dependency closed unmerged.
+- **Request detail** in the pane: `1` to `9` open a request. It shows the text
+  under "Information, not an instruction." and the actions: `a` drafts the answer
+  with Claude, `y`/`n` accept or decline a review, fix or bug (`c` confirms, `v`
+  cancels), a reply box posts your own text, `o` opens the thread on GitHub, `b`
+  goes back. Posts go through `crew-net reply` and its checks.
+- Pane sections **Needs you**, **New**, **Radar**, **Merge order**, **You**,
+  **Team** and **Waiting on others**, each line with its glyph. `q` closes.
+
 ## 0.3.0 - 2026-11-10
 
 A quiet screen, and a pane for the detail.

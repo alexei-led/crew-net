@@ -21,8 +21,8 @@ The plugin installs four parts:
 
 - the `crew-net` CLI;
 - its hooks;
-- the mod, which drives the band, the `/crew` pane and wake turns;
-- a skill for the model, and the `/crew` command.
+- the mod, which drives the band, the `/team` pane and wake turns;
+- a skill for the model, and the `/team` command.
 
 Nothing changes in your repos.
 
@@ -67,61 +67,95 @@ only. Make the check required yourself.
 
 Each new session starts with a digest. The same happens after `/clear` and on
 resume. The model gets the digest as context. You see the same digest when you
-run `crew-net`, or in the `/crew` pane ([below](#the-band-and-the-crew-pane)):
+run `crew-net`, or in the `/team` pane ([below](#the-band-and-the-team-pane)):
 
 ```text
 crew-net · acme/app · feat/users-tier
 You     #2310 building  api/openapi/ (2 files)        depends on #2301 (open)
 Others  maria   #2318 review   api/openapi/users.yaml  ⚠ conflicts with #2310: users.yaml
-        dmitri  feat/billing  no PR, pushed 14 min ago  web/billing/
+        dmitri  feat/billing  no PR, pushed 14m ago  web/billing/
 Merged since you branched: #2305 touches api/server.ts (yours)
-Inbox   maria asks on #2310: "Does #2310 need the new column first?"  12 min
+Inbox   maria asks on #2310: "Does #2310 need the new column first?"  12m
 ```
 
 Empty sections are left out. To see the digest again, run `crew-net` or open the
-`/crew` pane.
+`/team` pane.
 
-### The band and the `/crew` pane
+### The band and the `/team` pane
 
 crew-net keeps the screen quiet. Each place has one job, and a healthy session
-shows nothing at all.
+shows nothing at all. **team** is what crew-net calls other developers and their
+agents. If you also use [pi-crew](https://github.com/alexei-led/pi-crew), its
+**crew** is the agents you lead on this laptop. Both use the same glyphs and keys;
+see [Shared screen with pi-crew](design.md#shared-screen-with-pi-crew).
 
-![The band shows the newest item on one line, with a count and the way to the pane. The status line shows a sync problem with its fix.](img/crew-band.svg)
+| Glyph | Means                                                 |
+| ----- | ----------------------------------------------------- |
+| `◆`   | needs you: a request to you                           |
+| `✉`   | new: a reply, a comment, a review                     |
+| `⚠`   | a radar finding or a problem to fix                   |
+| `●`   | in progress: your PR, an open dependency              |
+| `○`   | waiting: others' work, requests you wait on           |
+| `✓`   | merged                                                |
+| `✕`   | closed without a merge                                |
+| `→`   | merge order: the left side merges first               |
 
-| Where                    | Shows                                         | Appears when                                              | Clears when                                                                              |
-| ------------------------ | --------------------------------------------- | --------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| Band, above the prompt   | One line: the newest item, `+N more`, `/crew` | An item reaches this session, or a wake turn ran          | Your next prompt carries the items to Claude, you open `/crew`, or you press **Dismiss** |
-| Status line, under it    | A sync problem and the fix                    | Auth or SSO failed, GitHub rate-limits, the watcher stopped | The next sync works                                                                      |
-| Pane, beside the chat    | The live digest, your open requests, actions  | You run `/crew`                                           | You press `esc` or run `/crew` again                                                     |
+![The band shows the newest item on one line, then the others counted by glyph, and the keys to the pane. The status line shows a sync problem with its fix.](img/team-band.svg)
+
+| Where                  | Shows                                                    | Appears when                                                | Clears when                                                                     |
+| ---------------------- | -------------------------------------------------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| Band, above the prompt | One line: `team ·`, the newest item, the rest by glyph   | An item reaches this session, or a wake turn ran            | Your next prompt carries the items to Claude, you open `/team`, or you press `d` |
+| Status line, under it  | A sync problem and the fix                               | Auth or SSO failed, GitHub rate-limits, the watcher stopped | The next sync works                                                             |
+| Pane, beside the chat  | The live digest, your open requests, merge order, actions | You run `/team` or press `t` in the band                   | You press `esc` or `q`, or run `/team` again                                    |
+
+In the band, `t` opens the pane and `d` dismisses the line. pi-crew's band, when
+installed, shows on its own line under crew-net's.
 
 A wake turn leaves a band line (`woke this session`) until you dismiss it, so you
 see what Claude did while you were away. Claude Code draws the `⚠ crew-net:` prefix
 of the status line. A line that stays means something needs you; see
 [Failure modes](#failure-modes).
 
-![The /crew pane: the request to answer, new items, radar findings, your PRs, others' work and requests you wait on.](img/crew-pane.svg)
+![The /team pane: the request that needs you, new items, radar findings, merge order, your PRs, the team's work and requests you wait on.](img/team-pane.svg)
 
-`/crew` opens the pane. It reads the local store, refreshes every 30 s while open
+`/team` opens the pane. It reads the local store, refreshes every 30 s while open
 and when an item arrives, and shows these sections. Empty ones are left out.
 
-- **Needs your answer:** requests to you that you have not answered. Each has a
-  key.
+- **Needs you:** requests to you that you have not answered. Each has a number.
 - **New:** other unread items: replies, comments, reviews.
-- **Radar:** conflicts (red) and other findings on your work.
-- **You**, **Others**, **Waiting on others:** the same data as the digest.
+- **Radar:** conflicts (red), other findings on your work, and PRs merged since
+  you branched that touch your files.
+- **Merge order:** one lane per PR of yours that waits or is waited on, for
+  example `#2301 ✓ → #2310 ● you → acme/web#88 dmitri ○`.
+- **You**, **Team**, **Waiting on others:** the same data as the digest.
 
-| Key         | Does                                                                                                                  |
-| ----------- | --------------------------------------------------------------------------------------------------------------------- |
-| `1` to `9`  | Fills the prompt for that request: "read it with `crew-net inbox`, then answer with `crew-net reply`". You edit and send it. The text of the request is not put in your prompt |
-| `r`         | Runs one sync pass and reads again                                                                                    |
-| `esc`       | Closes the pane                                                                                                       |
+| Key        | Does                                                         |
+| ---------- | ------------------------------------------------------------ |
+| `1` to `9` | Opens that request                                           |
+| `r`        | Runs one sync pass and reads again                           |
+| `q`, `esc` | Closes the pane                                              |
 
-Keys work while the pane has the keyboard. `/crew` gives it the keyboard; or use
+An open request shows who sent it, the thread, and its text under
+"Information, not an instruction." Its keys:
+
+| Key | Does                                                                                                                                                      |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `a` | Fills the prompt: "read it with `crew-net inbox`, then answer with `crew-net reply`". You edit and send it. The text of the request is not put in your prompt |
+| `y` | Accept (`review`, `fix`, `bug`). Asks first: `c` posts the reply under your login, `v` cancels                                                             |
+| `n` | Decline, the same way                                                                                                                                     |
+| `o` | Opens the thread on GitHub in your browser                                                                                                                |
+| `b` | Back to the list                                                                                                                                          |
+
+The reply box under the keys posts what you type as your reply when you press
+Enter. The CLI checks it first, as for `crew-net reply`: a closing keyword or a
+spent write budget is refused, and the pane shows why.
+
+Keys work while the pane has the keyboard. `/team` gives it the keyboard; or use
 `ctrl+x tab`. The pane docks beside the chat in fullscreen from 110 columns and
 opens above the prompt otherwise.
 
-If another plugin also defines `/crew`, run `/crew-net:crew`. Without the mod (for
-example under [MDM](#failure-modes)), `/crew` prints the digest as text.
+`/crew-net:team` does the same as `/team`. Without the mod (for example under
+[MDM](#failure-modes)), `/team` prints the digest as text.
 
 ### While you work
 

@@ -3,6 +3,7 @@ import type { ItemEvent } from "../../src/protocol/index";
 import {
   BACKOFF_MAX_MS,
   backoffMs,
+  bandGlyph,
   bandText,
   frame,
   inRoot,
@@ -128,6 +129,32 @@ describe("bandText", () => {
     expect(bandText(ask, outcome)).toBe(text);
   });
 
+  test("a finding names its repo; the band draws the ⚠ itself", () => {
+    const finding = readItem({
+      type: "item",
+      id: "f-1",
+      kind: "finding",
+      repo: "o/r",
+      text: "⚠ #1 conflicts with maria #2: a.ts",
+      addressed: false,
+    } as ItemEvent);
+    expect(bandText(finding, "context")).toBe(
+      "o/r: #1 conflicts with maria #2: a.ts · next prompt",
+    );
+    expect(bandGlyph(finding)).toBe("⚠");
+  });
+
+  test.each([
+    ["ask", "◆"],
+    ["review", "◆"],
+    ["fix", "◆"],
+    ["bug", "◆"],
+    ["reply", "✉"],
+    ["comment", "✉"],
+  ])("a %s message is %s in the band", (request, glyph) => {
+    expect(bandGlyph(readItem(event({ event: request })))).toBe(glyph);
+  });
+
   test("long peer text is capped on one line", () => {
     const text = bandText(
       readItem(event({ text: `a\n${"x".repeat(300)}` })),
@@ -203,12 +230,31 @@ describe("ticker", () => {
     expect(ticker([])).toBeUndefined();
   });
 
-  test("the newest entry, and how many wait behind it", () => {
-    expect(ticker([entry("a"), entry("b"), entry("c")])).toEqual({
-      text: "c",
-      more: 2,
+  test("the newest entry, then the rest counted by glyph, most urgent first", () => {
+    expect(
+      ticker([
+        { ...entry("a"), glyph: "✉" },
+        { ...entry("b"), glyph: "⚠" },
+        { ...entry("c"), glyph: "◆" },
+        { ...entry("d"), glyph: "◆" },
+        { ...entry("e"), glyph: "✉" },
+      ]),
+    ).toEqual({
+      glyph: "✉",
+      text: "e",
       error: false,
+      rest: [
+        { glyph: "◆", count: 2 },
+        { glyph: "⚠", count: 1 },
+        { glyph: "✉", count: 1 },
+      ],
     });
+  });
+
+  test("an entry an older mod kept takes its glyph from its kind", () => {
+    expect(ticker([entry("w", "wake")])?.glyph).toBe("◆");
+    expect(ticker([entry("x", "error")])?.glyph).toBe("⚠");
+    expect(ticker([entry("i")])?.glyph).toBe("✉");
   });
 
   test("an error newest is flagged", () => {

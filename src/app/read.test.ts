@@ -140,7 +140,7 @@ describe("digest", () => {
     expect(view.text).toContain("⚠ conflicts with #7");
     expect(view.text).toContain("olga/x");
     expect(view.text).toContain('maria asks on #7: "Does #7 need the column?"');
-    expect(view.text).toContain("maria on #8: review requested 40 min ago");
+    expect(view.text).toContain("maria on #8: review requested 40m ago");
   });
 
   test("is stale without a snapshot or with an old one", async () => {

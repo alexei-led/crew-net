@@ -982,8 +982,28 @@ var GH_PR_LIST_RULES = {
 };
 var HEADER = matches(/^(?![^:]*(override|authorization))[A-Za-z][A-Za-z0-9-]*: [\x20-\x7e]*$/i);
 var STATES = matches(/^(planning|building|review|blocked)$/);
+// plugin/hooks/pane.ts
+var GLYPH = {
+  needsYou: "◆",
+  new: "✉",
+  working: "●",
+  idle: "○",
+  done: "✓",
+  closed: "✕",
+  problem: "⚠",
+  order: "→"
+};
+var WORK_REQUESTS = new Set(["review", "fix", "bug"]);
+var DEPENDENCY_GLYPH = {
+  open: GLYPH.working,
+  merged: GLYPH.done,
+  closed: GLYPH.closed
+};
+
 // plugin/hooks/mod.ts
+var REQUESTS = new Set(["ask", "review", "fix", "bug"]);
 var WAKE_MARK = /^crew-net wake turn [0-9a-f]{32}\.$/m;
+var URGENCY = [GLYPH.needsYou, GLYPH.problem, GLYPH.new];
 
 // plugin/hooks/hook.ts
 var HOOK_EVENTS = [
