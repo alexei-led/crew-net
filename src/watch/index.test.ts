@@ -10,7 +10,10 @@ import type { HelloEvent, HelperEvent, ItemEvent } from "../protocol/index";
 import { runWatch, sendToWatch } from "./index";
 
 const dirs: string[] = [];
-afterEach(() => {
+/** Stops for every watcher a test started: a failed test must not leave one ticking. */
+const running: (() => Promise<unknown>)[] = [];
+afterEach(async () => {
+  for (const stop of running.splice(0)) await stop();
   for (const dir of dirs.splice(0))
     rmSync(dir, { recursive: true, force: true });
 });
@@ -54,7 +57,7 @@ async function until(check: () => boolean | Promise<boolean>): Promise<void> {
   const deadline = Date.now() + 5000;
   while (Date.now() < deadline) {
     if (await check()) return;
-    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setTimeout(r, 1));
   }
   throw new Error("condition not reached");
 }
@@ -106,6 +109,11 @@ function start(
   let finished = false;
   void done.then(() => {
     finished = true;
+  });
+  running.push(() => {
+    signal();
+    stdin.close();
+    return done;
   });
   return { stdin, out, done, signal, finished: () => finished };
 }

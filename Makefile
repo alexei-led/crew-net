@@ -26,7 +26,9 @@ fmt: ## Apply Biome fixes and formatting
 
 # plugin/tests run inside the Claude Code engine (plugin-test), not under bun.
 # Test files run in parallel worker processes, so no test may share a path with another file.
-TEST := bun test --parallel --path-ignore-patterns='plugin/tests/**'
+# The suite takes seconds; the guard kills it (workers included) when it hangs.
+TEST_LIMIT_S := 120
+TEST := bun scripts/guard.ts $(TEST_LIMIT_S) bun test --parallel --path-ignore-patterns='plugin/tests/**'
 
 test: ## Bun tests
 	$(TEST)

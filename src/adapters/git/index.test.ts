@@ -57,6 +57,11 @@ function exec(
   });
 }
 
+// The machine's git config (signing, hooks, fsmonitor) must not reach these
+// tests: every git below, the adapter's included, inherits this env.
+process.env.GIT_CONFIG_GLOBAL = "/dev/null";
+process.env.GIT_CONFIG_NOSYSTEM = "1";
+
 // Real git spawns many processes; under full-suite load 5 s is not enough.
 setDefaultTimeout(30_000);
 
