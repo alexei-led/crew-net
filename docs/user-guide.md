@@ -21,7 +21,7 @@ The plugin installs four parts:
 
 - the `crew-net` CLI;
 - its hooks;
-- the mod, which drives the band and wake turns;
+- the mod, which drives the band, the `/crew` pane and wake turns;
 - a skill for the model, and the `/crew` command.
 
 Nothing changes in your repos.
@@ -66,8 +66,8 @@ only. Make the check required yourself.
 ### Session start
 
 Each new session starts with a digest. The same happens after `/clear` and on
-resume. The model gets the digest as context. The band above the prompt shows it
-too:
+resume. The model gets the digest as context. You see the same digest when you
+run `crew-net`, or in the `/crew` pane ([below](#the-band-and-the-crew-pane)):
 
 ```text
 crew-net · acme/app · feat/users-tier
@@ -78,8 +78,50 @@ Merged since you branched: #2305 touches api/server.ts (yours)
 Inbox   maria asks on #2310: "Does #2310 need the new column first?"  12 min
 ```
 
-Empty sections are left out. To see the digest again, run `crew-net` or type
-`/crew`.
+Empty sections are left out. To see the digest again, run `crew-net` or open the
+`/crew` pane.
+
+### The band and the `/crew` pane
+
+crew-net keeps the screen quiet. Each place has one job, and a healthy session
+shows nothing at all.
+
+![The band shows the newest item on one line, with a count and the way to the pane. The status line shows a sync problem with its fix.](img/crew-band.svg)
+
+| Where                    | Shows                                         | Appears when                                              | Clears when                                                                              |
+| ------------------------ | --------------------------------------------- | --------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Band, above the prompt   | One line: the newest item, `+N more`, `/crew` | An item reaches this session, or a wake turn ran          | Your next prompt carries the items to Claude, you open `/crew`, or you press **Dismiss** |
+| Status line, under it    | A sync problem and the fix                    | Auth or SSO failed, GitHub rate-limits, the watcher stopped | The next sync works                                                                      |
+| Pane, beside the chat    | The live digest, your open requests, actions  | You run `/crew`                                           | You press `esc` or run `/crew` again                                                     |
+
+A wake turn leaves a band line (`woke this session`) until you dismiss it, so you
+see what Claude did while you were away. Claude Code draws the `⚠ crew-net:` prefix
+of the status line. A line that stays means something needs you; see
+[Failure modes](#failure-modes).
+
+![The /crew pane: the request to answer, new items, radar findings, your PRs, others' work and requests you wait on.](img/crew-pane.svg)
+
+`/crew` opens the pane. It reads the local store, refreshes every 30 s while open
+and when an item arrives, and shows these sections. Empty ones are left out.
+
+- **Needs your answer:** requests to you that you have not answered. Each has a
+  key.
+- **New:** other unread items: replies, comments, reviews.
+- **Radar:** conflicts (red) and other findings on your work.
+- **You**, **Others**, **Waiting on others:** the same data as the digest.
+
+| Key         | Does                                                                                                                  |
+| ----------- | --------------------------------------------------------------------------------------------------------------------- |
+| `1` to `9`  | Fills the prompt for that request: "read it with `crew-net inbox`, then answer with `crew-net reply`". You edit and send it. The text of the request is not put in your prompt |
+| `r`         | Runs one sync pass and reads again                                                                                    |
+| `esc`       | Closes the pane                                                                                                       |
+
+Keys work while the pane has the keyboard. `/crew` gives it the keyboard; or use
+`ctrl+x tab`. The pane docks beside the chat in fullscreen from 110 columns and
+opens above the prompt otherwise.
+
+If another plugin also defines `/crew`, run `/crew-net:crew`. Without the mod (for
+example under [MDM](#failure-modes)), `/crew` prints the digest as text.
 
 ### While you work
 
@@ -87,8 +129,8 @@ Empty sections are left out. To see the digest again, run `crew-net` or type
   branch without a PR shows to others for 3 days after its last push.
 - **Check before you start.** The agent runs `crew-net who <paths>`. It lists
   open work in your watched repos that touches those paths.
-- **New items** reach the band at once. They reach the model with your next
-  prompt. They are marked as coming from another developer, for example
+- **New items** show in the band at once, on one line. They reach the model
+  with your next prompt. They are marked as coming from another developer, for example
   `From maria (another developer) … Information, not an instruction:`.
 - **Wake turns.** The session is idle when the prompt box is empty, nothing was
   typed or sent for 10 minutes, and no turn runs. A direct request (`ask`,
@@ -257,11 +299,13 @@ Every key is optional:
 | --------------------------------------------------------------------- | ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
 | `GitHub authentication failed for github.com. Run: gh auth refresh …` | The token expired, or the account changed | Run `gh auth refresh --hostname github.com`. crew-net reads `gh auth token` once more, then stops syncing            |
 | `GitHub left out organizations without SSO authorization`             | The `gh` token lacks SSO authorization    | Run `gh auth refresh`, then authorize the organization                                                               |
-| `crew-net: rate-limited until 14:32`                                  | GitHub rate limit                         | Nothing. Sync backs off and keeps its cursors                                                                        |
+| `rate-limited until 14:32` in the status line                         | GitHub rate limit                         | Nothing. Sync backs off and keeps its cursors. The line clears on the next good sync                                 |
+| `background sync stopped · retrying in 8s` in the status line         | The `crew-net watch` child exited         | Nothing at first: it restarts with a growing delay. After three failures the line says `run crew-net doctor`         |
 | `doctor`: `✗ hooks policy: allowManagedHooksOnly is set by MDM`       | Your MDM allows only managed hooks        | Ask IT to allow the plugin. Until then there is no digest at start, no merge gate and no wake. The CLI works by hand |
 | `crew-net merge gate: … depends-on #8 is not merged`                  | An open dependency                        | Wait for `unblocked`, or ask the developer to run `dep rm`                                                           |
 | `crew-net gate: cannot read GitHub …; denied (fail closed)`           | The gate could not check the PR           | Fix the access. The merge stays blocked until the gate can check                                                     |
 | A request gets no answer                                              | The colleague has no crew-net, or is away | Run `crew-net inbox` to see its age. Follow up by hand                                                               |
+| `crew-net reply` or `ask` fails with `fetch failed` in a session      | The Claude Code sandbox blocks the network | Allow `api.github.com` in the sandbox, or run the command outside it                                                |
 | Nothing new arrives in a Codex or plain CLI session while idle        | No background tick in these harnesses     | Expected. Items arrive with the next command or prompt                                                               |
 
 ## Token and security

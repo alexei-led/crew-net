@@ -3,6 +3,7 @@
 import { clean } from "../../src/core/digest/index";
 import { frameUntrusted } from "../../src/core/trust/index";
 import type { ItemEvent } from "../../src/protocol/index";
+import type { CrewNetBandEntry } from "../types/index";
 
 /** An item event with the optional fields newer watchers send, read tolerantly. */
 export interface Item {
@@ -134,6 +135,32 @@ export function wakePrompt(framed: string, ref: string, token: string): string {
     "",
     framed,
   ].join("\n");
+}
+
+/** The band: one line, the newest entry, and how many others wait behind it. */
+export interface Ticker {
+  text: string;
+  more: number;
+  error: boolean;
+}
+
+export function ticker(band: CrewNetBandEntry[]): Ticker | undefined {
+  const last = band.at(-1);
+  if (last === undefined) return undefined;
+  return {
+    text: last.text,
+    more: band.length - 1,
+    error: last.kind === "error",
+  };
+}
+
+/** Failures in a row after which the status line sends the developer to `crew-net doctor`. */
+export const DOCTOR_AFTER = 3;
+
+/** The status line while the watcher is down; it clears when the watcher is ready again. */
+export function restartStatus(waitMs: number, failures: number): string {
+  const base = `background sync stopped · retrying in ${Math.round(waitMs / 1000)}s`;
+  return failures >= DOCTOR_AFTER ? `${base} · run crew-net doctor` : base;
 }
 
 const BACKOFF_BASE_MS = 1_000;

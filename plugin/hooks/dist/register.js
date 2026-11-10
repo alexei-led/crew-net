@@ -487,6 +487,7 @@ function frameUntrusted(text, meta, nonce) {
 var MINUTE = 60000;
 var HOUR = 60 * MINUTE;
 var DAY = 24 * HOUR;
+var TEXT_MAX = 120;
 var UNSAFE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
 var QUOTES = /["“”„‟″＂]/g;
 var cap = (text, max) => {
@@ -496,6 +497,15 @@ var cap = (text, max) => {
 function clean(text, max) {
   const flat = text.replace(UNSAFE, " ").replace(/\s+/g, " ").trim();
   return cap(flat.replace(QUOTES, "'"), max);
+}
+function formatAge(ageMs) {
+  if (ageMs < MINUTE)
+    return "<1 min";
+  if (ageMs < HOUR)
+    return `${Math.floor(ageMs / MINUTE)} min`;
+  if (ageMs < DAY)
+    return `${Math.floor(ageMs / HOUR)} h`;
+  return `${Math.floor(ageMs / DAY)} d`;
 }
 
 // plugin/hooks/mod.ts
@@ -581,6 +591,21 @@ function wakePrompt(framed, ref, token) {
   ].join(`
 `);
 }
+function ticker(band) {
+  const last = band.at(-1);
+  if (last === undefined)
+    return;
+  return {
+    text: last.text,
+    more: band.length - 1,
+    error: last.kind === "error"
+  };
+}
+var DOCTOR_AFTER = 3;
+function restartStatus(waitMs, failures) {
+  const base = `background sync stopped · retrying in ${Math.round(waitMs / 1000)}s`;
+  return failures >= DOCTOR_AFTER ? `${base} · run crew-net doctor` : base;
+}
 var BACKOFF_BASE_MS = 1000;
 var BACKOFF_MAX_MS = 60000;
 var STABLE_MS = 60000;
@@ -609,14 +634,196 @@ function inRoot(root, command) {
   return SAFE_ROOT.test(root) && !root.split("/").includes("..") ? `cd -- '${root}' && ${command}` : null;
 }
 
+// plugin/hooks/pane.ts
+var PANE_ID = "crew";
+var ANSWER_KEYS = 9;
+var isObject = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+function json(stdout) {
+  try {
+    return JSON.parse(stdout);
+  } catch {
+    return;
+  }
+}
+function parseDigest(stdout) {
+  const raw = json(stdout);
+  if (!isObject(raw) || !isObject(raw.digest))
+    return;
+  const d = raw.digest;
+  const sections = [
+    "mine",
+    "waitsOnMe",
+    "others",
+    "merged",
+    "inbox",
+    "waiting"
+  ];
+  const ok = sections.every((k) => {
+    const s = d[k];
+    return isObject(s) && Array.isArray(s.shown) && typeof s.hidden === "number";
+  });
+  if (!ok || typeof d.repo !== "string" || typeof d.branch !== "string")
+    return;
+  return {
+    digest: d,
+    stale: raw.stale === true || raw.refreshing === true
+  };
+}
+var ID = /^[\w:.@#/-]{1,200}$/;
+function parseRequests(stdout) {
+  const raw = json(stdout);
+  if (!isObject(raw) || !Array.isArray(raw.toMe))
+    return [];
+  const out = [];
+  for (const r of raw.toMe) {
+    if (!isObject(r))
+      continue;
+    if (typeof r.id !== "string" || !ID.test(r.id))
+      continue;
+    if (typeof r.from !== "string" || typeof r.event !== "string")
+      continue;
+    out.push({
+      id: r.id,
+      event: r.event,
+      from: clean(r.from, 39),
+      repo: typeof r.repo === "string" ? r.repo : "",
+      ...typeof r.thread === "number" && Number.isInteger(r.thread) ? { thread: r.thread } : {},
+      text: typeof r.text === "string" ? r.text : "",
+      ageMs: typeof r.ageMs === "number" ? r.ageMs : 0
+    });
+  }
+  return out;
+}
+var VERBS2 = {
+  ask: "asks",
+  review: "asks for a review",
+  fix: "asks for a fix",
+  bug: "reports a bug",
+  info: "says",
+  reply: "replies",
+  comment: "comments",
+  "pr-review": "reviews"
+};
+var where2 = (r) => r.thread === undefined ? r.repo : `${r.repo}#${r.thread}`;
+var clock = (ms) => new Date(ms).toTimeString().slice(0, 5);
+function syncLine(problem, data) {
+  if (problem !== "")
+    return { text: problem, tone: "warn" };
+  if (data === undefined)
+    return { text: "loading…", tone: "dim" };
+  if (data.stale)
+    return { text: "data may be stale · refreshing", tone: "warn" };
+  return { text: `up to date · checked ${clock(data.atMs)}`, tone: "dim" };
+}
+function section(title, lines) {
+  return lines.length === 0 ? [] : [{ title, lines }];
+}
+var more = (n) => n > 0 ? [{ text: `+${n} more`, tone: "dim" }] : [];
+function paneView(data, problem) {
+  const d = data?.digest;
+  const sync = syncLine(problem, data);
+  if (d === undefined)
+    return {
+      heading: "crew-net",
+      sync,
+      sections: []
+    };
+  const requests = (data?.requests ?? []).slice(0, ANSWER_KEYS);
+  const asked = new Set((data?.requests ?? []).map((r) => `${r.from}|${r.thread ?? ""}`));
+  const inbox = [
+    ...requests.map((r, i) => ({
+      text: `${r.from} ${VERBS2[r.event] ?? r.event} on ${where2(r)} · ${formatAge(r.ageMs)}`,
+      tone: "normal",
+      ...r.text === "" ? {} : { quote: clean(r.text, TEXT_MAX) },
+      answer: { id: r.id, key: String(i + 1) }
+    })),
+    ...(data?.requests ?? []).length > ANSWER_KEYS ? [
+      {
+        text: `+${(data?.requests ?? []).length - ANSWER_KEYS} more: crew-net inbox`,
+        tone: "dim"
+      }
+    ] : []
+  ];
+  const local = d.inbox.shown.filter((i) => i.thread.startsWith("#"));
+  const elsewhere = d.inbox.shown.length - local.length + d.inbox.hidden;
+  const unread = [
+    ...local.filter((i) => !asked.has(`${i.from}|${i.thread.slice(1)}`)).map((i) => ({
+      text: `${i.from} ${VERBS2[i.kind] ?? i.kind} on ${i.thread} · ${formatAge(i.ageMs)}`,
+      tone: "normal"
+    })),
+    ...elsewhere > 0 ? [
+      {
+        text: `+${elsewhere} in other repos: crew-net inbox`,
+        tone: "dim"
+      }
+    ] : []
+  ];
+  const risky = (marks) => marks.some((m) => m.includes("conflict")) ? "error" : "warn";
+  const marked = d.others.shown.filter((o) => o.marks.length > 0).map((o) => ({
+    text: `${o.owner} ${o.ref} · ${o.marks.join("; ")}`,
+    tone: risky(o.marks)
+  }));
+  const quiet = d.others.shown.filter((o) => o.marks.length === 0).map((o) => ({
+    text: `${o.owner} ${o.ref} · ${o.state}${o.scope ? ` · ${o.scope}` : ""}`,
+    tone: "dim"
+  }));
+  const mine = [
+    ...d.mine.shown.map((m) => ({
+      text: [
+        `#${m.pr} ${m.state}`,
+        m.scope,
+        m.dependsOn.length > 0 ? `depends on ${m.dependsOn.map((x) => `${x.ref} (${x.status})`).join(", ")}` : ""
+      ].filter((x) => x !== "").join(" · "),
+      tone: "normal"
+    })),
+    ...d.waitsOnMe.shown.map((w) => ({
+      text: `${w.ref} (${w.owner}) waits on your #${w.on}`,
+      tone: "good"
+    })),
+    ...more(d.mine.hidden + d.waitsOnMe.hidden)
+  ];
+  const waiting = [
+    ...d.waiting.shown.map((w) => ({
+      text: `${w.to} on ${w.thread} · ${w.kind} sent ${formatAge(w.ageMs)} ago${w.status === "accepted" ? ", accepted" : ""}`,
+      tone: "dim"
+    })),
+    ...more(d.waiting.hidden)
+  ];
+  const merged = d.merged.shown.map((m) => ({
+    text: `${m.ref} merged · touches your files`,
+    tone: "warn"
+  }));
+  return {
+    heading: `${d.repo} · ${d.branch}`,
+    sync,
+    sections: [
+      ...section("Needs your answer", inbox),
+      ...section("New", unread),
+      ...section("Radar", [...marked, ...merged]),
+      ...section("You", mine),
+      ...section("Others", [...quiet, ...more(d.others.hidden)]),
+      ...section("Waiting on others", waiting)
+    ]
+  };
+}
+function answerPrompt(r) {
+  const verb = VERBS2[r.event] ?? r.event;
+  return [
+    `${r.from} ${verb} on ${where2(r)}.`,
+    "Read the request with `crew-net inbox`, check what it needs against this repo,",
+    `then answer it with \`crew-net reply "${r.id}" "<answer>"\`.`
+  ].join(" ");
+}
+
 // plugin/hooks/register.ts
 var CLI = "bin/crew-net";
 var NODE = "node";
 var BAND_KEEP = 20;
-var BAND_SHOWN = 5;
 var SEEN_KEEP = 500;
 var SEND_TIMEOUT_MS = 1e4;
 var TICK_MS = 30000;
+var PANE_COLUMNS = 60;
+var SYNC_TIMEOUT_MS = 120000;
 var CHANGE_ATTEMPTS = 20;
 var INITIAL = {
   sessionId: "",
@@ -648,6 +855,8 @@ var generation = 0;
 var lastTypingMs;
 var lastUserPromptMs;
 var lastComposerText;
+var paneData;
+var paneRefreshing = false;
 function ignore() {}
 function log($, text) {
   $.ui.log(`crew-net: ${text}`, { to: "debug" });
@@ -784,21 +993,22 @@ async function onLine($, r, line) {
   const event = decoded.event;
   switch (event.type) {
     case "ready":
-      $.ui.status("crew-net: connected");
-      await change($, (s) => ({ ...s, status: "connected" }));
+      $.ui.status(undefined);
+      await change($, (s) => ({ ...s, status: "" }));
       return;
     case "status":
-      $.ui.status(`crew-net: ${event.text}`);
+      $.ui.status(event.text === "" ? undefined : event.text);
       await change($, (s) => ({ ...s, status: event.text }));
+      refreshSoon($);
       return;
     case "error": {
-      $.ui.status(`crew-net: ${event.message}`);
       const nowMs = await $.clock.now();
       await change($, bandEntry("watcher", "error", event.message, nowMs));
       return;
     }
     case "item":
       await onItem($, r, event);
+      refreshSoon($);
       return;
     default:
       log($, `unexpected ${event.type} event from the watcher`);
@@ -841,9 +1051,51 @@ async function supervise($, r) {
       return;
     failures = nextFailures(failures, await $.clock.now() - startedAt);
     const waitMs = backoffMs(failures - 1);
-    $.ui.status(`crew-net: watcher stopped; restarting in ${Math.round(waitMs / 1000)}s`);
+    const down = restartStatus(waitMs, failures);
+    $.ui.status(down);
+    await change($, (s) => ({ ...s, status: down })).catch(ignore);
     await $.clock.sleep(waitMs);
   }
+}
+async function refresh($, sync = false) {
+  const r = run;
+  if (r === undefined || paneRefreshing)
+    return;
+  paneRefreshing = true;
+  try {
+    const opts = { cwd: r.root, timeoutMs: SEND_TIMEOUT_MS };
+    if (sync)
+      await $.process.run([NODE, r.cli, "sync", "--once"], {
+        ...opts,
+        timeoutMs: SYNC_TIMEOUT_MS
+      });
+    const repo = r.repo === "" ? [] : ["--repo", r.repo];
+    const [digest, inbox] = await Promise.all([
+      $.process.run([NODE, r.cli, "digest", "--json"], opts),
+      $.process.run([NODE, r.cli, "inbox", "--json", ...repo], opts)
+    ]);
+    const parsed = parseDigest(digest.stdout);
+    if (parsed !== undefined)
+      paneData = {
+        ...parsed,
+        requests: parseRequests(inbox.stdout),
+        atMs: await $.clock.now()
+      };
+    else
+      log($, `digest --json exited ${digest.exitCode}: unreadable`);
+  } catch (error) {
+    log($, `pane refresh failed: ${String(error)}`);
+  } finally {
+    paneRefreshing = false;
+  }
+  $.ui.invalidate("ui.render");
+}
+async function otherOwnsCrew($) {
+  const commands = await $.command.list();
+  return commands.some((c) => c.name === "crew" && c.plugin !== "crew-net");
+}
+function refreshSoon($) {
+  $.ui.panes().then((panes) => panes.some((p) => p.id === PANE_ID) ? refresh($) : undefined).catch(ignore);
 }
 function stopWatcher() {
   generation += 1;
@@ -868,7 +1120,7 @@ async function connect($, options) {
   const repo = repoFromRemote((await $.session.repo())?.remote ?? null);
   const pid = await claudePid($);
   if (pid === undefined) {
-    $.ui.status("crew-net: cannot read the session pid; watcher not started");
+    $.ui.status("watcher not started: cannot read the session pid");
     return;
   }
   const role = await $.env.get("CREW_NET_ROLE") === "worker" ? "worker" : "lead";
@@ -885,7 +1137,6 @@ async function connect($, options) {
     hello.repo = repo;
   await change($, (s) => ({ ...s, sessionId: session }));
   lastTypingMs ??= await $.clock.now();
-  $.ui.status("crew-net: starting");
   startWatcher($, {
     gen: 0,
     cli: `${$.plugin.root}/${CLI}`,
@@ -924,6 +1175,7 @@ async function tick($) {
   await followSession($);
   if (run)
     await recheck($, run);
+  refreshSoon($);
 }
 function register(on, options) {
   on("session.start", async ($, e, next) => {
@@ -966,7 +1218,8 @@ function register(on, options) {
       const ids = new Set(queued.map((p) => p.id));
       await change($, (s) => ({
         ...s,
-        pending: s.pending.filter((p) => !ids.has(p.id))
+        pending: s.pending.filter((p) => !ids.has(p.id)),
+        band: s.band.filter((b) => !(b.kind === "item" && ids.has(b.id)))
       }));
     }
     return result;
@@ -1030,31 +1283,147 @@ function register(on, options) {
   on("ui.render", { component: "AbovePrompt" }, async ($, e, next) => {
     if (e.props.hasSurvey)
       return next(e);
-    const s = await readSession($);
-    if (s.band.length === 0)
+    const line = ticker((await readSession($)).band);
+    if (line === undefined)
       return next(e);
     const { Box, Button, Text } = $.ui.resolve(e);
-    const shown = s.band.slice(-BAND_SHOWN);
-    const hidden = s.band.length - shown.length;
+    const fixed = { flexShrink: 0 };
     return Box({
-      flexDirection: "column",
+      gap: 1,
       children: [
-        ...shown.map((b) => Text({
-          wrap: "truncate-end",
-          ...b.kind === "error" ? { color: "error" } : {},
-          children: `crew-net · ${b.text}`
-        })),
         Box({
+          flexShrink: 1,
+          children: [
+            Text({
+              wrap: "truncate-end",
+              ...line.error ? { color: "error" } : {},
+              children: `crew-net · ${line.text}`
+            })
+          ]
+        }),
+        Box({
+          ...fixed,
           children: [
             Text({
               dimColor: true,
-              children: hidden > 0 ? `${hidden} older · ` : ""
-            }),
+              children: line.more > 0 ? `+${line.more} more · /crew` : "/crew"
+            })
+          ]
+        }),
+        Box({
+          ...fixed,
+          children: [
             Button({
               key: "dismiss",
               label: "Dismiss",
               onPress: () => change($, (x) => ({ ...x, band: [] })).then(ignore)
             })
+          ]
+        })
+      ]
+    });
+  });
+  for (const command of ["crew", "crew-net:crew"]) {
+    on("command.run", { command }, async ($, e, next) => {
+      if (e.args.trim() !== "" || run === undefined)
+        return next(e);
+      if (command === "crew" && await otherOwnsCrew($))
+        return next(e);
+      if ((await $.ui.panes()).some((p) => p.id === PANE_ID)) {
+        await $.ui.close({ id: PANE_ID });
+        return {};
+      }
+      const opened = await $.ui.open({
+        id: PANE_ID,
+        title: "crew-net",
+        focus: true,
+        closeOnEscape: true,
+        columns: PANE_COLUMNS
+      });
+      if (!opened.isPlaced)
+        return next(e);
+      await change($, (s) => ({ ...s, band: [] }));
+      refresh($);
+      return {};
+    });
+  }
+  on("ui.render", { component: "Pane" }, async ($, e, next) => {
+    if (e.requestId !== PANE_ID)
+      return next(e);
+    if (paneData === undefined)
+      refresh($);
+    const view = paneView(paneData, (await readSession($)).status);
+    const { Box, Button, Text } = $.ui.resolve(e);
+    const tone = (t) => t === "dim" ? { dimColor: true } : t === "warn" ? { color: "warning" } : t === "error" ? { color: "error" } : t === "good" ? { color: "success" } : {};
+    const requests = new Map((paneData?.requests ?? []).map((q) => [q.id, q]));
+    return Box({
+      flexDirection: "column",
+      paddingX: 1,
+      children: [
+        Text({ bold: true, children: view.heading }),
+        Text({
+          ...tone(view.sync.tone),
+          children: view.sync.text
+        }),
+        ...view.sections.length === 0 ? [
+          Text({
+            dimColor: true,
+            children: paneData ? "Nothing to report." : ""
+          })
+        ] : [],
+        ...view.sections.map((section) => Box({
+          key: `section:${section.title}`,
+          flexDirection: "column",
+          marginTop: 1,
+          children: [
+            Text({ bold: true, children: section.title }),
+            ...section.lines.map((l, i) => {
+              const q = l.answer ? requests.get(l.answer.id) : undefined;
+              const text = Text({
+                ...tone(l.tone),
+                children: l.text
+              });
+              return Box({
+                key: `line:${section.title}:${i}`,
+                flexDirection: "column",
+                children: [
+                  text,
+                  ...l.quote ? [
+                    Text({
+                      dimColor: true,
+                      wrap: "truncate-end",
+                      children: `  "${l.quote}"`
+                    })
+                  ] : [],
+                  ...l.answer && q ? [
+                    Button({
+                      key: `answer:${l.answer.key}`,
+                      label: "answer with Claude",
+                      hotkey: l.answer.key,
+                      plain: true,
+                      onPress: async () => {
+                        await $.prompt.fill({ text: answerPrompt(q) });
+                        await $.ui.close({ id: PANE_ID });
+                      }
+                    })
+                  ] : []
+                ]
+              });
+            })
+          ]
+        })),
+        Box({
+          marginTop: 1,
+          gap: 2,
+          children: [
+            Button({
+              key: "refresh",
+              label: "refresh",
+              hotkey: "r",
+              plain: true,
+              onPress: () => refresh($, true)
+            }),
+            Text({ dimColor: true, children: "esc closes" })
           ]
         })
       ]

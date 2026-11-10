@@ -55,7 +55,7 @@ export type CrewNetSession = {
   turnId: string | null;
   /** The running main turn when it is the developer's own prompt; null otherwise. */
   ownTurnId: string | null;
-  /** Last watcher status line. */
+  /** What is wrong with sync, as the status line shows it; empty when sync is healthy. */
   status: string;
 };
 

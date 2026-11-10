@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="924" height="576" viewBox="0 0 924 576" role="img" aria-label="claude · acme/app · feat/users-tier">
+<style>text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px;white-space:pre}</style>
+<rect width="924" height="576" rx="10" fill="#1b1d1f"/>
+<circle cx="18" cy="16" r="5" fill="#ff5f56"/><circle cx="36" cy="16" r="5" fill="#ffbd2e"/><circle cx="54" cy="16" r="5" fill="#27c93f"/>
+<text x="462.0" y="20" text-anchor="middle" fill="#8b9096">claude · acme/app · feat/users-tier</text>
+<line x1="430.0" y1="34" x2="430.0" y2="562" stroke="#3a3f44"/>
+<text x="14" y="52" xml:space="preserve"><tspan fill="#d8dadc">&gt; add the tier column to the users API response</tspan></text>
+<text x="14" y="90" xml:space="preserve"><tspan fill="#d97757">⏺ </tspan><tspan fill="#d8dadc">Updated api/openapi/users.yaml, api/server.ts</tspan></text>
+<text x="14" y="109" xml:space="preserve"><tspan fill="#8b9096">  ⎿ </tspan><tspan fill="#8b9096">+42 −3</tspan></text>
+<text x="14" y="128" xml:space="preserve"><tspan fill="#d97757">⏺ </tspan><tspan fill="#d8dadc">Ran make test-fast: 18 passed</tspan></text>
+<rect x="14" y="509" width="402.0" height="27" rx="4" fill="none" stroke="#3a3f44"/>
+<text x="24" y="524" xml:space="preserve"><tspan fill="#8b9096">&gt; </tspan><tspan fill="#d8dadc">/crew</tspan></text>
+<text x="438.0" y="52" xml:space="preserve"><tspan fill="#d8dadc"> </tspan><tspan fill="#d8dadc" font-weight="700">acme/app · feat/users-tier</tspan></text>
+<text x="438.0" y="71" xml:space="preserve"><tspan fill="#d8dadc"> </tspan><tspan fill="#8b9096">up to date · checked 14:21</tspan></text>
+<text x="438.0" y="90" xml:space="preserve"><tspan fill="#d8dadc"> </tspan></text>
+<text x="438.0" y="109" xml:space="preserve"><tspan fill="#d8dadc"> </tspan><tspan fill="#d8dadc" font-weight="700">Needs your answer</tspan></text>
+<text x="438.0" y="128" xml:space="preserve"><tspan fill="#d8dadc"> </tspan><tspan fill="#d8dadc">maria asks on acme/app#2310 · 12 min</tspan></text>
+<text x="438.0" y="147" xml:space="preserve"><tspan fill="#d8dadc"> </tspan><tspan fill="#8b9096">  &quot;Does #2310 need the new users.tier column first, or …</tspan></text>
+<text x="438.0" y="166" xml:space="preserve"><tspan fill="#d8dadc"> </tspan><tspan fill="#79c0ff">1</tspan><tspan fill="#8b9096">: </tspan><tspan fill="#d8dadc">answer with Claude</tspan></text>
+<text x="438.0" y="185" xml:space="preserve"><tspan fill="#d8dadc"> </tspan></text>
+<text x="438.0" y="204" xml:space="preserve"><tspan fill="#d8dadc"> </tspan><tspan fill="#d8dadc" font-weight="700">New</tspan></text>
+<text x="438.0" y="223" xml:space="preserve"><tspan fill="#d8dadc"> </tspan><tspan fill="#d8dadc">dmitri replies on acme/app#2301 · 3 min</tspan></text>
+<text x="438.0" y="242" xml:space="preserve"><tspan fill="#d8dadc"> </tspan></text>
+<text x="438.0" y="261" xml:space="preserve"><tspan fill="#d8dadc"> </tspan><tspan fill="#d8dadc" font-weight="700">Radar</tspan></text>
+<text x="438.0" y="280" xml:space="preserve"><tspan fill="#d8dadc"> </tspan><tspan fill="#ff7b72">maria #2318 · conflicts with #2310: users.yaml</tspan></text>
+<text x="438.0" y="299" xml:space="preserve"><tspan fill="#d8dadc"> </tspan></text>
+<text x="438.0" y="318" xml:space="preserve"><tspan fill="#d8dadc"> </tspan><tspan fill="#d8dadc" font-weight="700">You</tspan></text>
+<text x="438.0" y="337" xml:space="preserve"><tspan fill="#d8dadc"> </tspan><tspan fill="#d8dadc">#2310 building · api/openapi/ (2 files) · depends on</tspan></text>
+<text x="438.0" y="356" xml:space="preserve"><tspan fill="#d8dadc"> </tspan><tspan fill="#d8dadc">#2301 (open)</tspan></text>
+<text x="438.0" y="375" xml:space="preserve"><tspan fill="#d8dadc"> </tspan></text>
+<text x="438.0" y="394" xml:space="preserve"><tspan fill="#d8dadc"> </tspan><tspan fill="#d8dadc" font-weight="700">Others</tspan></text>
+<text x="438.0" y="413" xml:space="preserve"><tspan fill="#d8dadc"> </tspan><tspan fill="#8b9096">dmitri #2301 · review · db/migrations/</tspan></text>
+<text x="438.0" y="432" xml:space="preserve"><tspan fill="#d8dadc"> </tspan></text>
+<text x="438.0" y="451" xml:space="preserve"><tspan fill="#d8dadc"> </tspan><tspan fill="#d8dadc" font-weight="700">Waiting on others</tspan></text>
+<text x="438.0" y="470" xml:space="preserve"><tspan fill="#d8dadc"> </tspan><tspan fill="#8b9096">maria on acme/app#2318 · review sent 40 min ago</tspan></text>
+<text x="438.0" y="489" xml:space="preserve"><tspan fill="#d8dadc"> </tspan></text>
+<text x="438.0" y="508" xml:space="preserve"><tspan fill="#d8dadc"> </tspan><tspan fill="#79c0ff">r</tspan><tspan fill="#8b9096">: </tspan><tspan fill="#d8dadc">refresh</tspan><tspan fill="#d8dadc">  </tspan><tspan fill="#8b9096">esc closes</tspan></text>
+<text x="900" y="52" fill="#8b9096" text-anchor="end">✕</text>
+</svg>

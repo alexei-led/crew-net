@@ -29,6 +29,21 @@ export const BAND = {
   },
 } as const;
 
+/** The pane, as a surface mounts it. */
+export const PANE = {
+  plugin: "crew-net",
+  component: "Pane",
+  requestId: "crew",
+  props: {
+    title: "crew-net",
+    isFocused: true,
+    bodyColumns: 60,
+    placement: "dock",
+    scroll: { offset: 0, bodyRows: 40 },
+    view: {},
+  },
+} as const;
+
 export const SURFACES = ["terminal", "desktop"] as const;
 
 /** One watcher NDJSON line. */
@@ -75,6 +90,19 @@ export interface World {
   /** Tool calls that ran (the mod did not refuse them), with their input. */
   ran: Record<string, unknown>[];
   statuses: (string | undefined)[];
+  /** Ids of the panes the mod has open. */
+  panes: string[];
+  /** The surface refuses to place the pane (no surface attached). */
+  paneRefused: boolean;
+  /** Slash commands other plugins define, as `$.command.list()` answers. */
+  otherCommands: string[];
+  /** Drafts the mod put in the prompt box. */
+  fills: string[];
+  /** argv of each `crew-net` call the mod made to read or refresh the pane. */
+  reads: (readonly string[])[];
+  /** What `crew-net digest --json` and `inbox --json` print. */
+  digestJson: string;
+  inboxJson: string;
   draft: string;
   sessionId: string;
   /** What `$.session.root()` answers: `/cd` or a worktree move changes it. */
@@ -122,6 +150,13 @@ export function world(on: On, mock: Mock): World {
     submits: [],
     ran: [],
     statuses: [],
+    panes: [],
+    paneRefused: false,
+    otherCommands: [],
+    fills: [],
+    reads: [],
+    digestJson: digestJson(),
+    inboxJson: JSON.stringify({ unread: [], toMe: [], fromMe: [] }),
     draft: "",
     sessionId: "session-1",
     root: ROOT,
@@ -170,6 +205,48 @@ export function world(on: On, mock: Mock): World {
     w.statuses.push(e.text);
     return { value: undefined };
   });
+  on("ui.open", (_$, e) => {
+    if (w.paneRefused)
+      return { value: { isPlaced: false, reason: "no-surface" } } as never;
+    if (!w.panes.includes(e.id)) w.panes.push(e.id);
+    return { value: { isPlaced: true } };
+  });
+  on("ui.close", (_$, e) => {
+    w.panes = w.panes.filter((id) => id !== e.id);
+    return { value: undefined };
+  });
+  on("ui.panes", () => ({
+    value: w.panes.map((id) => ({
+      id,
+      title: id,
+      isShown: true,
+      isFocused: true,
+      isPlaced: true,
+    })),
+  }));
+  on("ui.invalidate", () => ({ value: undefined }));
+  on("command.list", () => ({
+    value: [
+      {
+        name: "crew-net:crew",
+        description: "",
+        source: "plugin",
+        plugin: "crew-net",
+      },
+      ...w.otherCommands.map((name) => ({
+        name,
+        description: "",
+        source: "plugin" as const,
+        plugin: "pi-crew",
+      })),
+    ],
+  }));
+  // What runs when the mod lets `/crew` through: the plugin's markdown command.
+  on("command.run", () => ({ text: "DIGEST" }));
+  on("prompt.fill", (_$, e) => {
+    w.fills.push(e.text);
+    return { isFilled: true } as never;
+  });
   on("ui.log", () => ({ value: undefined }));
   on("ui.render", ($, e) => {
     const { Box } = $.ui.resolve(e);
@@ -203,6 +280,12 @@ export function world(on: On, mock: Mock): World {
       for (const l of (e.init?.stdin ?? "").split("\n").filter(Boolean))
         w.sent.push(JSON.parse(l));
       return ran("");
+    }
+    if (sub === "digest" || sub === "inbox" || sub === "sync") {
+      w.reads.push(e.argv);
+      return ran(
+        sub === "digest" ? w.digestJson : sub === "inbox" ? w.inboxJson : "",
+      );
     }
     throw new Error(`unexpected process.run ${e.argv.join(" ")}`);
   });
@@ -289,4 +372,76 @@ export function denied(result: ToolCallResult): string | undefined {
   return (
     result.deny ?? (result.isError === true ? (result.text ?? "") : undefined)
   );
+}
+
+const section = (shown: unknown[] = []) => ({ shown, hidden: 0 });
+
+/** What `crew-net digest --json` prints: one PR of mine, one of maria's that conflicts. */
+export function digestJson(extra: Record<string, unknown> = {}): string {
+  return JSON.stringify({
+    digest: {
+      repo: "doiteng/reflex",
+      branch: "feat/users-tier",
+      mine: section([
+        { pr: 2310, state: "building", scope: "api/openapi/", dependsOn: [] },
+      ]),
+      waitsOnMe: section(),
+      others: section([
+        {
+          owner: "maria",
+          ref: "#2318",
+          state: "review",
+          scope: "users.yaml",
+          marks: ["conflicts with #2310: users.yaml"],
+        },
+      ]),
+      merged: section(),
+      inbox: section(),
+      waiting: section(),
+      ...extra,
+    },
+    text: "",
+    stale: false,
+    refreshing: false,
+  });
+}
+
+/** `crew-net inbox --json` with one open ask from maria. */
+export function inboxJson(extra: Record<string, unknown> = {}): string {
+  return JSON.stringify({
+    unread: [],
+    toMe: [
+      {
+        id: "comment:github.com/doiteng/reflex#2318:1",
+        event: "ask",
+        from: "maria",
+        repo: "doiteng/reflex",
+        thread: 2318,
+        text: "Does #2310 need the new users.tier column first?",
+        ageMs: 12 * 60_000,
+        ...extra,
+      },
+    ],
+    fromMe: [],
+  });
+}
+
+/** Mounts the pane; the watcher exits first, as for the band. */
+export async function mountPane(
+  $: Engine,
+  w: World,
+  surface: (typeof SURFACES)[number],
+) {
+  await w.exit();
+  return $.ui.mount({ ...PANE, surface });
+}
+
+/** The person types `/crew` (with `args`). */
+export function crew($: Engine, args = "", command = "crew") {
+  return $.command.run({
+    command,
+    args,
+    origin: { kind: "composer" },
+    presentation: { isFullscreen: true, columns: 200 },
+  });
 }

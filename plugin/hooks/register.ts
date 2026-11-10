@@ -35,8 +35,19 @@ import {
   nextFailures,
   readItem,
   repoFromRemote,
+  restartStatus,
+  ticker,
   wakePrompt,
 } from "./mod";
+import {
+  answerPrompt,
+  PANE_ID,
+  type PaneData,
+  paneView,
+  parseDigest,
+  parseRequests,
+  type Tone,
+} from "./pane";
 
 type Engine = EngineInterface;
 
@@ -44,11 +55,14 @@ type Engine = EngineInterface;
 const CLI = "bin/crew-net";
 const NODE = "node";
 const BAND_KEEP = 20;
-const BAND_SHOWN = 5;
 const SEEN_KEEP = 500;
 const SEND_TIMEOUT_MS = 10_000;
 /** Re-decide held requests and check for /clear this often. */
 const TICK_MS = 30_000;
+/** Columns the pane asks for when docked beside a fullscreen transcript. */
+const PANE_COLUMNS = 60;
+/** A manual refresh waits for one sync pass. */
+const SYNC_TIMEOUT_MS = 120_000;
 /** Missed `ifVersion` writes before `change` gives up. */
 const CHANGE_ATTEMPTS = 20;
 
@@ -107,6 +121,9 @@ let lastTypingMs: number | undefined;
 let lastUserPromptMs: number | undefined;
 /** The developer's last prompt, to tell their turn from an armed wake. */
 let lastComposerText: string | undefined;
+/** What the pane shows: the last refresh. A reload loses it and the pane loads it again. */
+let paneData: PaneData | undefined;
+let paneRefreshing = false;
 
 function ignore(): void {}
 
@@ -293,22 +310,24 @@ async function onLine($: Engine, r: Run, line: string): Promise<void> {
   }
   const event = decoded.event;
   switch (event.type) {
+    // Healthy is silent: the status line shows a problem and its fix, nothing else.
     case "ready":
-      $.ui.status("crew-net: connected");
-      await change($, (s) => ({ ...s, status: "connected" }));
+      $.ui.status(undefined);
+      await change($, (s) => ({ ...s, status: "" }));
       return;
     case "status":
-      $.ui.status(`crew-net: ${event.text}`);
+      $.ui.status(event.text === "" ? undefined : event.text);
       await change($, (s) => ({ ...s, status: event.text }));
+      refreshSoon($);
       return;
     case "error": {
-      $.ui.status(`crew-net: ${event.message}`);
       const nowMs = await $.clock.now();
       await change($, bandEntry("watcher", "error", event.message, nowMs));
       return;
     }
     case "item":
       await onItem($, r, event);
+      refreshSoon($);
       return;
     default:
       log($, `unexpected ${event.type} event from the watcher`);
@@ -349,11 +368,64 @@ async function supervise($: Engine, r: Run): Promise<void> {
     if (!current()) return;
     failures = nextFailures(failures, (await $.clock.now()) - startedAt);
     const waitMs = backoffMs(failures - 1);
-    $.ui.status(
-      `crew-net: watcher stopped; restarting in ${Math.round(waitMs / 1000)}s`,
-    );
+    const down = restartStatus(waitMs, failures);
+    $.ui.status(down);
+    await change($, (s) => ({ ...s, status: down })).catch(ignore);
     await $.clock.sleep(waitMs);
   }
+}
+
+/**
+ * Reads the digest and my open requests for the pane (`crew-net digest --json`
+ * and `inbox --json`, both from the local store) and redraws it. `sync` runs
+ * one sync pass first, for the pane's refresh key.
+ */
+async function refresh($: Engine, sync = false): Promise<void> {
+  const r = run;
+  if (r === undefined || paneRefreshing) return;
+  paneRefreshing = true;
+  try {
+    const opts = { cwd: r.root, timeoutMs: SEND_TIMEOUT_MS };
+    if (sync)
+      await $.process.run([NODE, r.cli, "sync", "--once"], {
+        ...opts,
+        timeoutMs: SYNC_TIMEOUT_MS,
+      });
+    const repo = r.repo === "" ? [] : ["--repo", r.repo];
+    const [digest, inbox] = await Promise.all([
+      $.process.run([NODE, r.cli, "digest", "--json"], opts),
+      $.process.run([NODE, r.cli, "inbox", "--json", ...repo], opts),
+    ]);
+    const parsed = parseDigest(digest.stdout);
+    if (parsed !== undefined)
+      paneData = {
+        ...parsed,
+        requests: parseRequests(inbox.stdout),
+        atMs: await $.clock.now(),
+      };
+    else log($, `digest --json exited ${digest.exitCode}: unreadable`);
+  } catch (error) {
+    log($, `pane refresh failed: ${String(error)}`);
+  } finally {
+    paneRefreshing = false;
+  }
+  $.ui.invalidate("ui.render");
+}
+
+/** True when a plugin other than crew-net defines a slash command named `crew`. */
+async function otherOwnsCrew($: Engine): Promise<boolean> {
+  const commands = await $.command.list();
+  return commands.some((c) => c.name === "crew" && c.plugin !== "crew-net");
+}
+
+/** A watcher event may have changed what the pane shows; look again only while it is open. */
+function refreshSoon($: Engine): void {
+  $.ui
+    .panes()
+    .then((panes) =>
+      panes.some((p) => p.id === PANE_ID) ? refresh($) : undefined,
+    )
+    .catch(ignore);
 }
 
 function stopWatcher(): void {
@@ -385,7 +457,7 @@ async function connect($: Engine, options: PluginOptions): Promise<void> {
   const repo = repoFromRemote((await $.session.repo())?.remote ?? null);
   const pid = await claudePid($);
   if (pid === undefined) {
-    $.ui.status("crew-net: cannot read the session pid; watcher not started");
+    $.ui.status("watcher not started: cannot read the session pid");
     return;
   }
   const role =
@@ -402,7 +474,6 @@ async function connect($: Engine, options: PluginOptions): Promise<void> {
   if (repo !== undefined) hello.repo = repo;
   await change($, (s) => ({ ...s, sessionId: session }));
   lastTypingMs ??= await $.clock.now();
-  $.ui.status("crew-net: starting");
   startWatcher($, {
     gen: 0,
     cli: `${$.plugin.root}/${CLI}`,
@@ -448,6 +519,7 @@ async function followSession($: Engine): Promise<void> {
 async function tick($: Engine): Promise<void> {
   await followSession($);
   if (run) await recheck($, run);
+  refreshSoon($);
 }
 
 export function register(on: On, options: PluginOptions): void {
@@ -493,9 +565,11 @@ export function register(on: On, options: PluginOptions): void {
     });
     if (result.drop === undefined) {
       const ids = new Set(queued.map((p) => p.id));
+      // The band announced these; the prompt has now carried them to Claude.
       await change($, (s) => ({
         ...s,
         pending: s.pending.filter((p) => !ids.has(p.id)),
+        band: s.band.filter((b) => !(b.kind === "item" && ids.has(b.id))),
       }));
     }
     return result;
@@ -570,35 +644,172 @@ export function register(on: On, options: PluginOptions): void {
       : { deny: "crew-net wake turn: the tool gate failed; refused" },
   );
 
+  // The band: one line for what is new, the rest is in the pane.
   on("ui.render", { component: "AbovePrompt" }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e);
-    const s = await readSession($);
-    if (s.band.length === 0) return next(e);
+    const line = ticker((await readSession($)).band);
+    if (line === undefined) return next(e);
     const { Box, Button, Text } = $.ui.resolve(e);
-    const shown = s.band.slice(-BAND_SHOWN);
-    const hidden = s.band.length - shown.length;
+    // The text shrinks and is cut with an ellipsis; the way to the pane and
+    // the button keep their width.
+    const fixed = { flexShrink: 0 };
     return Box({
-      flexDirection: "column",
+      gap: 1,
       children: [
-        ...shown.map((b) =>
-          Text({
-            wrap: "truncate-end",
-            ...(b.kind === "error" ? { color: "error" as const } : {}),
-            children: `crew-net · ${b.text}`,
-          }),
-        ),
         Box({
+          flexShrink: 1,
+          children: [
+            Text({
+              wrap: "truncate-end",
+              ...(line.error ? { color: "error" as const } : {}),
+              children: `crew-net · ${line.text}`,
+            }),
+          ],
+        }),
+        Box({
+          ...fixed,
           children: [
             Text({
               dimColor: true,
-              children: hidden > 0 ? `${hidden} older · ` : "",
+              children: line.more > 0 ? `+${line.more} more · /crew` : "/crew",
             }),
+          ],
+        }),
+        Box({
+          ...fixed,
+          children: [
             Button({
               key: "dismiss",
               label: "Dismiss",
               onPress: () =>
                 change($, (x) => ({ ...x, band: [] })).then(ignore),
             }),
+          ],
+        }),
+      ],
+    });
+  });
+
+  // `/crew` opens the pane, and a second `/crew` closes it. Without a mod, or
+  // when no surface draws a pane, the command falls through to the digest text.
+  for (const command of ["crew", "crew-net:crew"]) {
+    on("command.run", { command }, async ($, e, next) => {
+      if (e.args.trim() !== "" || run === undefined) return next(e);
+      // Another plugin may own the bare `/crew`: leave it alone.
+      if (command === "crew" && (await otherOwnsCrew($))) return next(e);
+      if ((await $.ui.panes()).some((p) => p.id === PANE_ID)) {
+        await $.ui.close({ id: PANE_ID });
+        return {};
+      }
+      const opened = await $.ui.open({
+        id: PANE_ID,
+        title: "crew-net",
+        focus: true,
+        closeOnEscape: true,
+        columns: PANE_COLUMNS,
+      });
+      if (!opened.isPlaced) return next(e);
+      // Opening the pane is reading the band.
+      await change($, (s) => ({ ...s, band: [] }));
+      void refresh($);
+      return {};
+    });
+  }
+
+  on("ui.render", { component: "Pane" }, async ($, e, next) => {
+    if (e.requestId !== PANE_ID) return next(e);
+    if (paneData === undefined) void refresh($);
+    const view = paneView(paneData, (await readSession($)).status);
+    const { Box, Button, Text } = $.ui.resolve(e);
+    const tone = (t: Tone) =>
+      t === "dim"
+        ? { dimColor: true }
+        : t === "warn"
+          ? { color: "warning" as const }
+          : t === "error"
+            ? { color: "error" as const }
+            : t === "good"
+              ? { color: "success" as const }
+              : {};
+    const requests = new Map(
+      (paneData?.requests ?? []).map((q) => [q.id, q] as const),
+    );
+    return Box({
+      flexDirection: "column",
+      paddingX: 1,
+      children: [
+        Text({ bold: true, children: view.heading }),
+        Text({
+          ...tone(view.sync.tone),
+          children: view.sync.text,
+        }),
+        ...(view.sections.length === 0
+          ? [
+              Text({
+                dimColor: true,
+                children: paneData ? "Nothing to report." : "",
+              }),
+            ]
+          : []),
+        ...view.sections.map((section) =>
+          Box({
+            key: `section:${section.title}`,
+            flexDirection: "column",
+            marginTop: 1,
+            children: [
+              Text({ bold: true, children: section.title }),
+              ...section.lines.map((l, i) => {
+                const q = l.answer ? requests.get(l.answer.id) : undefined;
+                const text = Text({
+                  ...tone(l.tone),
+                  children: l.text,
+                });
+                return Box({
+                  key: `line:${section.title}:${i}`,
+                  flexDirection: "column",
+                  children: [
+                    text,
+                    ...(l.quote
+                      ? [
+                          Text({
+                            dimColor: true,
+                            wrap: "truncate-end",
+                            children: `  "${l.quote}"`,
+                          }),
+                        ]
+                      : []),
+                    ...(l.answer && q
+                      ? [
+                          Button({
+                            key: `answer:${l.answer.key}`,
+                            label: "answer with Claude",
+                            hotkey: l.answer.key,
+                            plain: true,
+                            onPress: async () => {
+                              await $.prompt.fill({ text: answerPrompt(q) });
+                              await $.ui.close({ id: PANE_ID });
+                            },
+                          }),
+                        ]
+                      : []),
+                  ],
+                });
+              }),
+            ],
+          }),
+        ),
+        Box({
+          marginTop: 1,
+          gap: 2,
+          children: [
+            Button({
+              key: "refresh",
+              label: "refresh",
+              hotkey: "r",
+              plain: true,
+              onPress: () => refresh($, true),
+            }),
+            Text({ dimColor: true, children: "esc closes" }),
           ],
         }),
       ],

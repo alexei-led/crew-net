@@ -34,11 +34,18 @@ test("the watcher starts with hello for this session and stays without stdin", a
   });
 });
 
+test("a healthy watcher leaves the status line empty", async ($, on) => {
+  const w = world(on, mock);
+  await start($, w);
+  await w.emit(line({ type: "ready" }));
+  expect(w.statuses.filter((s) => s !== undefined)).toEqual([]);
+});
+
 test("ready connects; a restart waits with backoff and ready does not reset it", async ($, on) => {
   const w = world(on, mock);
   await start($, w);
   await w.emit(line({ type: "ready" }));
-  expect(w.statuses.at(-1)).toBe("crew-net: connected");
+  expect(w.statuses.at(-1)).toBeUndefined();
   // Crash right after ready: 1 s, then 2 s, then 4 s.
   for (const [n, waitMs] of [
     [2, 1_000],
@@ -47,7 +54,7 @@ test("ready connects; a restart waits with backoff and ready does not reset it",
   ] as const) {
     await w.exit();
     expect(w.statuses.at(-1)).toBe(
-      `crew-net: watcher stopped; restarting in ${waitMs / 1000}s`,
+      `background sync stopped · retrying in ${waitMs / 1000}s${n >= 4 ? " · run crew-net doctor" : ""}`,
     );
     await w.clock.advance(waitMs - 1);
     expect(w.spawns).toHaveLength(n - 1);
@@ -70,7 +77,7 @@ test("a watcher that ran a while restarts after the base backoff", async ($, on)
   // Up for two minutes, then it dies: the count starts over at 1 s.
   await w.clock.advance(2 * MINUTE);
   await w.exit();
-  expect(w.statuses.at(-1)).toBe("crew-net: watcher stopped; restarting in 1s");
+  expect(w.statuses.at(-1)).toBe("background sync stopped · retrying in 1s");
   await w.clock.advance(1_000);
   await w.idle(4);
   expect(w.spawns).toHaveLength(4);
@@ -106,21 +113,30 @@ test("events are read version-agnostic: a v field and unknown fields are ignored
     "not json",
   );
   expect(acks(w)).toEqual({ "c-2": "context" });
-  expect(w.statuses.at(-1)).toBe("crew-net: 3 open PRs");
+  expect(w.statuses.at(-1)).toBe("3 open PRs");
 });
 
-test("an error event shows in the band and the status", async ($, on) => {
+test("a watcher error shows in the band, not in the status line", async ($, on) => {
   const w = world(on, mock);
   await start($, w);
-  await w.emit(line({ type: "error", message: "rate-limited until 14:32" }));
-  expect(w.statuses.at(-1)).toBe("crew-net: rate-limited until 14:32");
+  await w.emit(line({ type: "error", message: "git fetch failed" }));
+  expect(w.statuses.filter((s) => s !== undefined)).toEqual([]);
   for (const surface of SURFACES) {
     const ui = await mountBand($, w, surface);
-    expect((await ui.find({ type: "Text", text: /rate-limited/ }))?.text).toBe(
-      "crew-net · rate-limited until 14:32",
+    expect((await ui.find({ type: "Text", text: /git fetch/ }))?.text).toBe(
+      "crew-net · git fetch failed",
     );
     await ui.unmount();
   }
+});
+
+test("a sync problem from the watcher is the status line, and clears when it is gone", async ($, on) => {
+  const w = world(on, mock);
+  await start($, w);
+  await w.emit(line({ type: "status", text: "rate-limited until 14:32" }));
+  expect(w.statuses.at(-1)).toBe("rate-limited until 14:32");
+  await w.emit(line({ type: "status", text: "" }));
+  expect(w.statuses.at(-1)).toBeUndefined();
 });
 
 test("/clear: the next tick restarts the watcher for the new session id", async ($, on) => {

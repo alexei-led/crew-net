@@ -334,7 +334,7 @@ Claude Code ships first. Pi and Codex get the CLI and an `AGENTS.md` snippet
 | --------------------------- | ----------------------- | ---------------- | ------------------------------- |
 | Digest at start             | `SessionStart` hook     | extension        | hook, to verify                 |
 | Inject with prompt          | `UserPromptSubmit` hook | extension        | hook, to verify                 |
-| Band, background tick, wake | mod, watcher child      | extension, timer | none: no way into a running TUI |
+| Band, pane, tick, wake      | mod, watcher child      | extension, timer | none: no way into a running TUI |
 | Merge gate                  | `PreToolUse` hook       | tool hook        | hook, to verify                 |
 
 ```mermaid
@@ -342,7 +342,7 @@ flowchart LR
     subgraph CC["Claude Code session"]
         direction TB
         HK["hooks.json<br/>digest, inject, merge gate"]:::agent
-        MOD["mod<br/>band, wake, tool gate"]:::agent
+        MOD["mod<br/>band, pane, wake, tool gate"]:::agent
     end
     CLI["crew-net CLI"]:::proc
     WCH["crew-net watch<br/>child of the mod"]:::proc
@@ -358,6 +358,7 @@ flowchart LR
 ```
 
 - **Hooks carry what must always work**: digest, injection, merge gate. The mod adds the band, the tick and wake. If an engine change breaks the mod, the hooks still work. If MDM allows only managed hooks, neither runs. `crew-net doctor` says so and the CLI still works by hand.
+- **The screen stays quiet.** The band is one line for what is new. The status line shows only a sync problem and its fix. The `/crew` pane holds the detail and the actions. A healthy session shows nothing. The mod shows what it reads from the local store (`digest --json`, `inbox --json`); it never reads GitHub.
 - **The watcher keeps no state.** The engine closes its stdin after the first message, so acks go through a short `watch send`. Killing the watcher on a hot reload loses nothing. The pattern is copied from pi-crew, not shared: one plugin to install, separate release cycles, a different delivery policy.
 - Engine behaviours the mod relies on were checked on Claude Code 2.1.318 and each has a `claude plugin test` case: a plugin-submitted turn keeps the draft and queues behind a running turn; `/clear` gives a new session id and no `session.start`; the store survives reload, `/clear` and resume.
 
@@ -409,7 +410,7 @@ The design assumes processes die at any moment.
 
 - **Nothing in memory matters.** Sync, the watcher and sessions can be killed. State is in the store, written before it is acted on.
 - **Fail closed.** The merge gate denies when it cannot read GitHub. A missing gate is shown by `doctor`, never counted as a pass.
-- **Degrade, do not block.** Auth, SSO and rate-limit errors stop sync and show a fix in the band. Cursors stay, so nothing is lost.
+- **Degrade, do not block.** Auth, SSO and rate-limit errors stop sync and show a fix in the status line. Cursors stay, so nothing is lost.
 - **Dead sessions expire.** A heartbeat older than 3 minutes drops a session from routing.
 
 Symptoms and fixes for users: [user guide](user-guide.md#failure-modes).
