@@ -199,7 +199,7 @@ describe("paneView", () => {
             {
               from: "dmitri",
               kind: "reply",
-              thread: "o/r#7",
+              thread: "#7",
               text: "x",
               ageMs: 60_000,
             },
@@ -216,7 +216,34 @@ describe("paneView", () => {
     ]);
     expect(lines.map((l) => [l.text, l.answer !== undefined])).toEqual([
       ["maria asks on o/r#7 · 12 min", true],
-      ["dmitri replies on o/r#7 · 1 min", false],
+      ["dmitri replies on #7 · 1 min", false],
+    ]);
+  });
+});
+
+describe("paneView, other repos", () => {
+  test("unread items from other repos are counted, not listed", () => {
+    const item = (thread: string) => ({
+      from: "erez",
+      kind: "pr-review",
+      thread,
+      text: "x",
+      ageMs: 60_000,
+    });
+    const v = paneView(
+      data({
+        digest: digest({
+          inbox: section(
+            [item("acme/other#9"), item("#3"), item("acme/other#10")],
+            2,
+          ),
+        }) as never,
+      }),
+      "",
+    );
+    expect(v.sections.flatMap((x) => x.lines.map((l) => l.text))).toEqual([
+      "erez reviews on #3 · 1 min",
+      "+4 in other repos: crew-net inbox",
     ]);
   });
 });

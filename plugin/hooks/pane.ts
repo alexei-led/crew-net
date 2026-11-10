@@ -193,17 +193,29 @@ export function paneView(
         ]
       : []),
   ];
+  // The digest lists unread items from every watched repo. A thread in another
+  // repo is `owner/repo#N`; here it is `#N`. The pane shows this repo's and
+  // counts the rest, so one noisy repo cannot fill it.
+  const local = d.inbox.shown.filter((i) => i.thread.startsWith("#"));
+  const elsewhere = d.inbox.shown.length - local.length + d.inbox.hidden;
   const unread: Line[] = [
     // Unread items that are not open requests: replies, comments, reviews.
-    ...d.inbox.shown
-      .filter((i) => !asked.has(`${i.from}|${i.thread.split("#")[1] ?? ""}`))
+    ...local
+      .filter((i) => !asked.has(`${i.from}|${i.thread.slice(1)}`))
       .map(
         (i): Line => ({
           text: `${i.from} ${VERBS[i.kind] ?? i.kind} on ${i.thread} · ${formatAge(i.ageMs)}`,
           tone: "normal",
         }),
       ),
-    ...more(d.inbox.hidden),
+    ...(elsewhere > 0
+      ? [
+          {
+            text: `+${elsewhere} in other repos: crew-net inbox`,
+            tone: "dim" as const,
+          },
+        ]
+      : []),
   ];
 
   const risky = (marks: string[]): Tone =>

@@ -744,12 +744,19 @@ function paneView(data, problem) {
       }
     ] : []
   ];
+  const local = d.inbox.shown.filter((i) => i.thread.startsWith("#"));
+  const elsewhere = d.inbox.shown.length - local.length + d.inbox.hidden;
   const unread = [
-    ...d.inbox.shown.filter((i) => !asked.has(`${i.from}|${i.thread.split("#")[1] ?? ""}`)).map((i) => ({
+    ...local.filter((i) => !asked.has(`${i.from}|${i.thread.slice(1)}`)).map((i) => ({
       text: `${i.from} ${VERBS2[i.kind] ?? i.kind} on ${i.thread} · ${formatAge(i.ageMs)}`,
       tone: "normal"
     })),
-    ...more(d.inbox.hidden)
+    ...elsewhere > 0 ? [
+      {
+        text: `+${elsewhere} in other repos: crew-net inbox`,
+        tone: "dim"
+      }
+    ] : []
   ];
   const risky = (marks) => marks.some((m) => m.includes("conflict")) ? "error" : "warn";
   const marked = d.others.shown.filter((o) => o.marks.length > 0).map((o) => ({
@@ -1280,22 +1287,38 @@ function register(on, options) {
     if (line === undefined)
       return next(e);
     const { Box, Button, Text } = $.ui.resolve(e);
+    const fixed = { flexShrink: 0 };
     return Box({
       gap: 1,
       children: [
-        Text({
-          wrap: "truncate-end",
-          ...line.error ? { color: "error" } : {},
-          children: `crew-net · ${line.text}`
+        Box({
+          flexShrink: 1,
+          children: [
+            Text({
+              wrap: "truncate-end",
+              ...line.error ? { color: "error" } : {},
+              children: `crew-net · ${line.text}`
+            })
+          ]
         }),
-        Text({
-          dimColor: true,
-          children: line.more > 0 ? `+${line.more} more · /crew` : "/crew"
+        Box({
+          ...fixed,
+          children: [
+            Text({
+              dimColor: true,
+              children: line.more > 0 ? `+${line.more} more · /crew` : "/crew"
+            })
+          ]
         }),
-        Button({
-          key: "dismiss",
-          label: "Dismiss",
-          onPress: () => change($, (x) => ({ ...x, band: [] })).then(ignore)
+        Box({
+          ...fixed,
+          children: [
+            Button({
+              key: "dismiss",
+              label: "Dismiss",
+              onPress: () => change($, (x) => ({ ...x, band: [] })).then(ignore)
+            })
+          ]
         })
       ]
     });

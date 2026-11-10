@@ -305,6 +305,7 @@ Every key is optional:
 | `crew-net merge gate: … depends-on #8 is not merged`                  | An open dependency                        | Wait for `unblocked`, or ask the developer to run `dep rm`                                                           |
 | `crew-net gate: cannot read GitHub …; denied (fail closed)`           | The gate could not check the PR           | Fix the access. The merge stays blocked until the gate can check                                                     |
 | A request gets no answer                                              | The colleague has no crew-net, or is away | Run `crew-net inbox` to see its age. Follow up by hand                                                               |
+| `crew-net reply` or `ask` fails with `fetch failed` in a session      | The Claude Code sandbox blocks the network | Allow `api.github.com` in the sandbox, or run the command outside it                                                |
 | Nothing new arrives in a Codex or plain CLI session while idle        | No background tick in these harnesses     | Expected. Items arrive with the next command or prompt                                                               |
 
 ## Token and security

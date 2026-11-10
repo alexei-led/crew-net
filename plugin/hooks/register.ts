@@ -650,22 +650,41 @@ export function register(on: On, options: PluginOptions): void {
     const line = ticker((await readSession($)).band);
     if (line === undefined) return next(e);
     const { Box, Button, Text } = $.ui.resolve(e);
+    // The text shrinks and is cut with an ellipsis; the way to the pane and
+    // the button keep their width.
+    const fixed = { flexShrink: 0 };
     return Box({
       gap: 1,
       children: [
-        Text({
-          wrap: "truncate-end",
-          ...(line.error ? { color: "error" as const } : {}),
-          children: `crew-net · ${line.text}`,
+        Box({
+          flexShrink: 1,
+          children: [
+            Text({
+              wrap: "truncate-end",
+              ...(line.error ? { color: "error" as const } : {}),
+              children: `crew-net · ${line.text}`,
+            }),
+          ],
         }),
-        Text({
-          dimColor: true,
-          children: line.more > 0 ? `+${line.more} more · /crew` : "/crew",
+        Box({
+          ...fixed,
+          children: [
+            Text({
+              dimColor: true,
+              children: line.more > 0 ? `+${line.more} more · /crew` : "/crew",
+            }),
+          ],
         }),
-        Button({
-          key: "dismiss",
-          label: "Dismiss",
-          onPress: () => change($, (x) => ({ ...x, band: [] })).then(ignore),
+        Box({
+          ...fixed,
+          children: [
+            Button({
+              key: "dismiss",
+              label: "Dismiss",
+              onPress: () =>
+                change($, (x) => ({ ...x, band: [] })).then(ignore),
+            }),
+          ],
         }),
       ],
     });
