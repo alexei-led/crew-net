@@ -13,7 +13,7 @@ process runs is `busy`. A job that ran within its interval on this laptop is
 `fresh`. A failing job is
 logged (`sync-error` in `events.ndjson`) and the others still run; after a
 401 or SSO error the host's other GitHub jobs are skipped. A rate limit
-becomes the notice `crew-net: rate-limited until HH:MM` in `sync:status`.
+becomes the notice `crew-net: rate-limited until HH:MM` in `sync:status`. The watcher sends it to the mod without the `crew-net: ` prefix, and drops one that no sync refreshed for 15 minutes.
 
 | Job             | Name               | Does                                                                                                                   |
 | --------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------------- |

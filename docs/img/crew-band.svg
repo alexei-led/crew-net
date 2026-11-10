@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="972" height="424" viewBox="0 0 972 424" role="img" aria-label="claude · acme/app · feat/users-tier">
+<style>text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px;white-space:pre}</style>
+<rect width="972" height="424" rx="10" fill="#1b1d1f"/>
+<circle cx="18" cy="16" r="5" fill="#ff5f56"/><circle cx="36" cy="16" r="5" fill="#ffbd2e"/><circle cx="54" cy="16" r="5" fill="#27c93f"/>
+<text x="486.0" y="20" text-anchor="middle" fill="#8b9096">claude · acme/app · feat/users-tier</text>
+<text x="14" y="52" xml:space="preserve"><tspan fill="#8b9096">New items: one line, newest first, and the way to the pane</tspan></text>
+<text x="14" y="90" xml:space="preserve"><tspan fill="#d97757">⏺ </tspan><tspan fill="#d8dadc">Ran make test-fast: 18 passed</tspan></text>
+<text x="14" y="128" xml:space="preserve"><tspan fill="#d8dadc">crew-net · radar acme/app#2310: conflicts with maria #2318: users.yaml · next prompt</tspan><tspan fill="#d8dadc"> </tspan><tspan fill="#8b9096">+1 more · /crew</tspan><tspan fill="#d8dadc"> </tspan><tspan fill="#8b9096">[ Dismiss ]</tspan></text>
+<rect x="14" y="141" width="944" height="27" rx="4" fill="none" stroke="#3a3f44"/>
+<text x="24" y="161" xml:space="preserve"><tspan fill="#8b9096">&gt; </tspan></text>
+<line x1="14" y1="219" x2="958" y2="219" stroke="#3a3f44" stroke-dasharray="3 4"/>
+<text x="14" y="244" xml:space="preserve"><tspan fill="#8b9096">Sync problem: the status line says what is wrong and how to fix it</tspan></text>
+<text x="14" y="282" xml:space="preserve"><tspan fill="#d97757">⏺ </tspan><tspan fill="#d8dadc">Ran make test-fast: 18 passed</tspan></text>
+<text x="14" y="320" xml:space="preserve"><tspan fill="#d8dadc">crew-net · radar acme/app#2310: conflicts with maria #2318: users.yaml · next prompt</tspan><tspan fill="#d8dadc"> </tspan><tspan fill="#8b9096">+1 more · /crew</tspan><tspan fill="#d8dadc"> </tspan><tspan fill="#8b9096">[ Dismiss ]</tspan></text>
+<rect x="14" y="333" width="944" height="27" rx="4" fill="none" stroke="#3a3f44"/>
+<text x="24" y="353" xml:space="preserve"><tspan fill="#8b9096">&gt; </tspan></text>
+<text x="14" y="390" xml:space="preserve"><tspan fill="#e3b341">⚠ crew-net: </tspan><tspan fill="#d8dadc">GitHub authentication failed for github.com. Run: gh auth refresh --hostname github.com</tspan></text>
+</svg>

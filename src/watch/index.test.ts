@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { FileStoreAdapter } from "../adapters/store/index";
 import { pull } from "../app/fixtures/fakes";
 import { world as makeWorld } from "../app/fixtures/world";
-import { Watcher } from "../app/watch";
+import { NOTICE_MAX_AGE_MS, Watcher } from "../app/watch";
 import type { HelloEvent, HelperEvent, ItemEvent } from "../protocol/index";
 import { runWatch, sendToWatch } from "./index";
 
@@ -132,7 +132,7 @@ describe("watch", () => {
     expect(watch.out[0]).toEqual({ type: "ready" });
     watch.stdin.push(hello("s1", "/work/a"));
     watch.stdin.close();
-    await until(() => watch.out.some((e) => e.type === "status"));
+    await until(async () => (await w.store.sessions.live()).length === 1);
     const checksAtEof = parentChecks;
     await until(() => parentChecks >= checksAtEof + 3);
     expect(watch.finished()).toBe(false);
@@ -175,6 +175,50 @@ describe("watch", () => {
     );
     watch.signal();
     await watch.done;
+  });
+
+  describe("status", () => {
+    const statuses = (out: HelperEvent[]) =>
+      out.filter((e) => e.type === "status").map((e) => e.text);
+    const watcherOn = async (w: ReturnType<typeof world>) => {
+      const out: HelperEvent[] = [];
+      const watcher = new Watcher(w.ports, "s1", (e) => out.push(e));
+      await watcher.start(hello("s1", "/work/a"));
+      return { watcher, out };
+    };
+    const problem = (w: ReturnType<typeof world>, notice: string) =>
+      w.store.kv.set("sync:status", {
+        atMs: w.clock.now(),
+        failed: [],
+        notice,
+      });
+
+    test("a healthy watcher says nothing", async () => {
+      const w = world();
+      const { watcher, out } = await watcherOn(w);
+      await watcher.tick();
+      expect(statuses(out)).toEqual([]);
+    });
+
+    test("a sync problem is sent once, without the host prefix, and clears on recovery", async () => {
+      const w = world();
+      const { watcher, out } = await watcherOn(w);
+      await problem(w, "crew-net: rate-limited until 14:32");
+      await watcher.tick();
+      await watcher.tick();
+      await w.store.kv.set("sync:status", { atMs: w.clock.now(), failed: [] });
+      await watcher.tick();
+      expect(statuses(out)).toEqual(["rate-limited until 14:32", ""]);
+    });
+
+    test("a notice that no sync refreshed for 15 minutes is ignored", async () => {
+      const w = world();
+      const { watcher, out } = await watcherOn(w);
+      await problem(w, "crew-net: rate-limited until 14:32");
+      w.advance(NOTICE_MAX_AGE_MS + 1);
+      await watcher.tick();
+      expect(statuses(out)).toEqual([]);
+    });
   });
 
   test("an item goes to the session with its PR branch checked out, exactly once", async () => {
@@ -268,7 +312,7 @@ describe("watch", () => {
     let alive = true;
     const watch = start(w, "s1", () => alive);
     watch.stdin.push(hello("s1", "/work/a"));
-    await until(() => watch.out.some((e) => e.type === "status"));
+    await until(async () => (await w.store.sessions.live()).length === 1);
     alive = false;
     expect(await watch.done).toBe(0);
   });

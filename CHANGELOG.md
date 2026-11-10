@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.3.0 (unreleased)
+
+A quiet screen, and a pane for the detail.
+
+### Added
+
+- **`/crew` pane** in Claude Code: the live digest, your open requests, radar
+  findings, your PRs, others' work and requests you wait on. It refreshes while
+  open. Keys: `1` to `9` fill the prompt to answer a request (the prompt names
+  the request and carries none of the peer's text), `r` refreshes, `esc` closes.
+  `/crew-net:crew` opens it when another plugin also defines `/crew`. Without
+  the mod, `/crew` still prints the digest.
+- Screenshots of the band, the status line and the pane in the user guide and
+  the README.
+
+### Changed
+
+- **The band is one line**: the newest item, `+N more` and the way to the pane.
+  It no longer repeats `crew-net ·` on five lines. A prompt that carries items to
+  Claude removes their entries, and opening the pane clears the band.
+- **The status line shows only a problem and its fix.** A healthy session shows
+  nothing. Before, it always showed `⚠ crew-net: crew-net: crew-net: watching`.
+  The text of a rate limit, an auth error or a stopped watcher no longer repeats
+  the plugin name. After three watcher failures in a row it says
+  `run crew-net doctor`. Watcher errors go to the band, not the status line.
+- The watcher sends the stored sync notice as its `status` event, and an empty
+  one when sync is healthy again. It drops a notice that no sync refreshed for
+  15 minutes.
+
 ## 0.2.0 - 2026-11-09
 
 First public release. The repository is public and MIT licensed.

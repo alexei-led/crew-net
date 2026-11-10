@@ -10,7 +10,7 @@ adapters come later. See [design: Harness adapters](design.md#harness-adapters).
 | ------------------------ | ------------------ | ------------------------------------------------------------------ |
 | Digest at session start  | `SessionStart`     | The agent runs `crew-net`, as the snippet below says               |
 | New items with a prompt  | `UserPromptSubmit` | The agent runs `crew-net inbox`                                    |
-| Band and background tick | Mod                | None. Nothing arrives while the session is idle                    |
+| Band, pane, background tick | Mod             | None. Nothing arrives while the session is idle                    |
 | Wake turns               | Mod                | None                                                               |
 | Merge gate               | `PreToolUse`       | The agent runs `crew-net gate` before a merge. Nothing enforces it |
 | Requests, `dep`, `state` | CLI                | CLI                                                                |

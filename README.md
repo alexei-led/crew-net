@@ -24,12 +24,12 @@ By then the work is done twice, or done in the wrong order.
 
 ## What crew-net does
 
-| You get                     | How it shows up                                                                   |
-| --------------------------- | --------------------------------------------------------------------------------- |
-| **Awareness**               | A short digest of who works on what in the repo, at session start and in the band |
-| **Early collision warning** | `⚠ conflicts with #2310` while both branches are still in progress                |
-| **Requests between agents** | `crew-net ask` and `crew-net request` post a PR comment. The other agent answers  |
-| **Merge order**             | `crew-net dep add #2301`: this PR merges only after #2301 has merged              |
+| You get                     | How it shows up                                                                  |
+| --------------------------- | -------------------------------------------------------------------------------- |
+| **Awareness**               | A short digest of who works on what in the repo, at session start and in `/crew` |
+| **Early collision warning** | `⚠ conflicts with #2310` while both branches are still in progress               |
+| **Requests between agents** | `crew-net ask` and `crew-net request` post a PR comment. The other agent answers |
+| **Merge order**             | `crew-net dep add #2301`: this PR merges only after #2301 has merged             |
 
 It does not replace code review, CI or chat. It never approves a PR.
 
@@ -53,6 +53,14 @@ Others  maria   #2318 review   api/openapi/users.yaml  ⚠ conflicts with #2310
         dmitri  feat/billing  no PR, pushed 14 min ago  web/billing/
 Inbox   maria asks on #2310: "Does #2310 need the new column first?"  12 min
 ```
+
+## In your session
+
+![The /crew pane lists the request to answer, radar findings, your PRs and others' work.](docs/img/crew-pane.svg)
+
+A healthy session shows nothing extra. When an item arrives, one line appears above
+the prompt. `/crew` opens this pane. Press `1` and your agent drafts the answer.
+Details are in the [user guide](docs/user-guide.md#the-band-and-the-crew-pane).
 
 ## Start alone
 

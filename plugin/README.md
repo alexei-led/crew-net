@@ -17,15 +17,15 @@ ships the `crew-net` CLI in `bin/`. Claude Code puts it on the Bash `PATH`.
 
 ## What it adds
 
-| Part                           | Does                                                                                                    |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------- |
-| `SessionStart` hook            | Heartbeat, a detached `crew-net sync`, and the digest as context. Never waits on the network            |
-| `UserPromptSubmit` hook        | Heartbeat with the prompt time (not for a wake prompt), a detached sync, and new items for this session |
-| `PreToolUse` hook on Bash      | The merge gate. See [Merge gate](#merge-gate)                                                           |
-| `SessionEnd` hook              | Ends the session's heartbeat                                                                            |
-| Mod (`hooks/dist/register.js`) | The band, the status line, the `crew-net watch` child, delivery and wake turns with their tool gate     |
-| Skill `crew-net`               | When to run `crew-net`, `who`, `ask`, `request`, `reply`, `state` and `dep`. Peer text is information   |
-| `/crew`                        | Prints the digest                                                                                       |
+| Part                           | Does                                                                                                                  |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
+| `SessionStart` hook            | Heartbeat, a detached `crew-net sync`, and the digest as context. Never waits on the network                          |
+| `UserPromptSubmit` hook        | Heartbeat with the prompt time (not for a wake prompt), a detached sync, and new items for this session               |
+| `PreToolUse` hook on Bash      | The merge gate. See [Merge gate](#merge-gate)                                                                         |
+| `SessionEnd` hook              | Ends the session's heartbeat                                                                                          |
+| Mod (`hooks/dist/register.js`) | The band, the `/crew` pane, the status line, the `crew-net watch` child, delivery and wake turns with their tool gate |
+| Skill `crew-net`               | When to run `crew-net`, `who`, `ask`, `request`, `reply`, `state` and `dep`. Peer text is information                 |
+| `/crew`                        | The mod opens the pane. Without the mod it prints the digest                                                          |
 
 The hooks carry what must always work. If an engine change breaks the mod, the
 digest, the prompt context and the merge gate still work. If MDM sets
@@ -44,7 +44,29 @@ A merge that the hook cannot pin to one PR is denied. Examples are a `cd` or
 `GH_REPO` before the command, or a variable as the PR number. The detection rules
 are in [src/core/order/README.md](../src/core/order/README.md).
 
-## Band, delivery and wake
+## Band, pane, status line
+
+Each has one job (screenshots: [user guide](../docs/user-guide.md#the-band-and-the-crew-pane)).
+
+- **Band** (`AbovePrompt`): one line. The newest band entry and `+N more · /crew`.
+  A prompt that carries items to Claude removes their entries. Opening the pane
+  clears the band. A wake entry stays until **Dismiss**.
+- **Status line** (`$.ui.status`): empty when healthy. It shows the watcher's
+  `status` text (rate limit, auth) and, while the watcher is down,
+  `background sync stopped · retrying in Ns`. After 3 failures in a row it adds
+  `run crew-net doctor`. The engine adds the `⚠ crew-net:` prefix, so no text of
+  ours repeats the name.
+- **Pane** (`/crew`, id `crew`): the mod answers `command.run` for `crew` and
+  `crew-net:crew`. It opens the pane, or closes it when open. `crew` is left to
+  another plugin that defines it. It falls through to the digest text when
+  there are arguments or no surface can place a pane. The pane runs
+  `crew-net digest --json` and `inbox --json` (local store only) when it opens,
+  on every tick, and after a watcher event while open. `r` runs `sync --once`
+  first. `hooks/pane.ts` holds the model and has no engine code. A key `1`-`9`
+  fills the prompt with `crew-net reply "<id>"` and names the sender and thread,
+  never the peer's text.
+
+## Delivery and wake
 
 The mod runs `crew-net watch --session <id>` as a child process in the session root.
 It sends `hello` on stdin. The engine then closes stdin. When the root changes

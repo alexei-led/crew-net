@@ -8,12 +8,16 @@ import type {
 } from "../protocol/index";
 import { readSnapshot } from "./files";
 import type { AppPorts } from "./ports";
-import { refFromKey, refFromSlug, repoSlug } from "./repo";
+import { isRecord, refFromKey, refFromSlug, repoSlug } from "./repo";
 import { beat, end } from "./session";
-import { runSync } from "./sync";
+import { runSync, SYNC_STATUS_KEY } from "./sync";
 
 /** After a restart, items this session claimed within this window are sent again; the mod dedupes by id. */
 export const REPLAY_WINDOW_MS = 60 * 60_000;
+
+const NOTICE_PREFIX = /^crew-net: /;
+/** A notice no sync has refreshed for this long is old news: the jobs since ran fresh. */
+export const NOTICE_MAX_AGE_MS = 15 * 60_000;
 
 function liveSession(s: SessionRecord): LiveSession {
   const ref = s.repo ? refFromKey(s.repo) : undefined;
@@ -161,7 +165,6 @@ export class Watcher {
     const hello = this.hello;
     if (!hello || this.stopped) return;
     const { ports } = this;
-    let notice: string | undefined;
     try {
       const heartbeat = await beat(ports, {
         sessionId: hello.session,
@@ -171,9 +174,7 @@ export class Watcher {
         dir: hello.worktree,
       });
       const ref = heartbeat.repo ? refFromKey(heartbeat.repo) : undefined;
-      notice = (
-        await runSync(ports, ref ? { ref, dir: heartbeat.worktree } : undefined)
-      ).notice;
+      await runSync(ports, ref ? { ref, dir: heartbeat.worktree } : undefined);
     } catch (error) {
       this.emit({
         type: "error",
@@ -188,10 +189,27 @@ export class Watcher {
         message: error instanceof Error ? error.message : String(error),
       });
     }
-    const status = notice ?? "crew-net: watching";
+    const status = await this.problem();
     if (status !== this.lastStatus) {
       this.lastStatus = status;
       this.emit({ type: "status", text: status });
+    }
+  }
+
+  /**
+   * What is wrong with sync, for the status line: the notice the last sync
+   * stored (rate limit, auth), without the `crew-net: ` prefix the host adds.
+   * Empty when sync is healthy: the band says nothing then.
+   */
+  private async problem(): Promise<string> {
+    try {
+      const status = await this.ports.store.kv.get(SYNC_STATUS_KEY);
+      if (!isRecord(status) || typeof status.notice !== "string") return "";
+      const at = typeof status.atMs === "number" ? status.atMs : 0;
+      if (this.ports.clock.now() - at > NOTICE_MAX_AGE_MS) return "";
+      return status.notice.replace(NOTICE_PREFIX, "");
+    } catch {
+      return "";
     }
   }
 

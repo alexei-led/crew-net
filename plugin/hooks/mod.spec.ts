@@ -10,7 +10,9 @@ import {
   nextFailures,
   readItem,
   repoFromRemote,
+  restartStatus,
   STABLE_MS,
+  ticker,
   wakePrompt,
 } from "./mod";
 
@@ -187,4 +189,43 @@ test.each([
   ["", "git log", null],
 ])("inRoot(%p)", (root, command, expected) => {
   expect(inRoot(root, command)).toBe(expected);
+});
+
+describe("ticker", () => {
+  const entry = (text: string, kind: "item" | "wake" | "error" = "item") => ({
+    id: text,
+    kind,
+    text,
+    atMs: 0,
+  });
+
+  test("no entries, no line", () => {
+    expect(ticker([])).toBeUndefined();
+  });
+
+  test("the newest entry, and how many wait behind it", () => {
+    expect(ticker([entry("a"), entry("b"), entry("c")])).toEqual({
+      text: "c",
+      more: 2,
+      error: false,
+    });
+  });
+
+  test("an error newest is flagged", () => {
+    expect(ticker([entry("a"), entry("boom", "error")])?.error).toBe(true);
+  });
+});
+
+describe("restartStatus", () => {
+  test.each([
+    [1_000, 1, "background sync stopped · retrying in 1s"],
+    [4_000, 2, "background sync stopped · retrying in 4s"],
+    [
+      8_000,
+      3,
+      "background sync stopped · retrying in 8s · run crew-net doctor",
+    ],
+  ])("%d ms after %d failures", (waitMs, failures, text) => {
+    expect(restartStatus(waitMs, failures)).toBe(text);
+  });
 });
