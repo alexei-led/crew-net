@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.0 (unreleased)
+## 0.4.0 - 2026-11-10
 
 A team pane you can act from, on one screen with pi-crew.
 
